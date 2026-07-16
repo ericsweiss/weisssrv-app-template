@@ -1,0 +1,23 @@
+---
+description: Always follow the weisssrv tenant project-development skill.
+globs:
+alwaysApply: true
+---
+
+# Project development
+
+Before making any change in this repo, read and follow
+`.claude/skills/project-development/SKILL.md`. It is the authoritative workflow
+for developing and shipping this service onto the weisssrv k3s cluster: the
+local loop, Flux debugging, and the secret / routing / observability
+conventions.
+
+Key standing rules (the skill has the detail):
+
+- Flux owns all Kubernetes state under `kubernetes/flux/`. Never `kubectl apply`
+  or `helm upgrade` to deploy — preview with `kustomize build kubernetes/flux`
+  and deploy by merging.
+- Never push to `main`; branch → merge request, always.
+- Never commit secrets — reference them from `ExternalSecret` manifests.
+- Containers stay non-root with a read-only root filesystem; no `latest` tags.
+- Stay within your single namespace.

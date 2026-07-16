@@ -1,7 +1,10 @@
 # Cursor rules
 
-This is a weisssrv cluster tenant repo. See [CLAUDE.md](CLAUDE.md) for the full
-guidance; it is the canonical agent doc. Key rules:
+This is a weisssrv cluster tenant repo. **Before making any change, read and
+follow `.claude/skills/project-development/SKILL.md`** — the authoritative
+workflow for this repo (also enforced by `.cursor/rules/project-development.mdc`,
+`alwaysApply: true`). See [CLAUDE.md](CLAUDE.md) for the full guidance; it is the
+canonical agent doc. Key rules:
 
 - NEVER commit secrets — use `ExternalSecret` manifests referencing 1Password or
   GitLab CI/CD variables.

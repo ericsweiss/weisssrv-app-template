@@ -54,11 +54,17 @@ automatically and pushes to `registry.git.ericsweiss.com/<group>/<slug>`
 tags are **literal pins** — [Renovate](renovate.json) keeps them current
 (there's no Flux `${var}` substitution for tenant repos).
 
+The build uses **kaniko** (daemonless, unprivileged) because the shared runner
+can't run Docker-in-Docker — see [CI runner](#ci-runner). It runs jobs as a
+non-root UID, so kaniko suits Dockerfiles that don't modify root-owned base-image
+files; for anything heavier, build/push the image from a privileged environment
+(your workstation, GitHub Actions, …) and just set `image:`.
+
 ### 4. Ship
 
 ```bash
 task lint            # yamllint + kustomize build + kubeconform (same as CI)
-git switch -c my-change && git commit -am "feat: ..." && git push
+git switch -c my-change && git commit -am "feat: ..." && git push -u origin my-change
 ```
 
 Open the MR. On merge, Flux reconciles — assuming the operator has wired your
@@ -160,6 +166,10 @@ The pipeline is **tag-less**, so it runs on weisssrv's shared, non-privileged
 `k8s-deploy` runner. That runner has **internet egress only** — build, lint,
 kubeconform, and the container registry all work; there is **no LAN/tailnet
 access and no SSH**. Deploys go through Flux, never a CI `kubectl apply`.
+
+Because the runner is non-privileged (no Docker-in-Docker) and runs jobs as a
+non-root UID, the `build-image` job uses **kaniko** rather than `docker build`.
+Local `task build` still uses your workstation's Docker daemon.
 
 ---
 

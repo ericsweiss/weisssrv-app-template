@@ -1,5 +1,8 @@
 # CLAUDE.md
 
+> **Before making any change in this repo, invoke the `project-development`
+> skill** (`.claude/skills/project-development/SKILL.md`) and follow it.
+
 Guidance for Claude Code (and other agents) working in a **weisssrv cluster
 tenant** repo created from `weisssrv-project-template`.
 

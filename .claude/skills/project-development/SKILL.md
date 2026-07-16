@@ -87,11 +87,18 @@ build job activates automatically once a `Dockerfile` exists at the repo root.
 Point `deployment.yaml`'s `image:` at that path (literal tag; Renovate bumps it)
 or at any upstream image.
 
+The build uses **kaniko** (daemonless, unprivileged): the shared runner is
+non-privileged, so Docker-in-Docker is not available. The runner also runs jobs
+as a non-root UID, so kaniko suits Dockerfiles that don't modify root-owned
+base-image files. For heavier builds, build/push the image from a privileged
+environment and just set `image:` — no CI build needed.
+
 ## Runner limits
 
 CI runs on the shared, non-privileged `k8s-deploy` runner: internet egress only,
-no LAN/tailnet, no SSH. Build, lint, kubeconform, and registry push all work;
-anything needing LAN access does not.
+no LAN/tailnet, no SSH, and no Docker-in-Docker (jobs run as a non-root UID).
+Build (via kaniko), lint, kubeconform, and registry push all work; anything
+needing LAN access or privileged Docker does not.
 
 ## Canonical weisssrv docs (authoritative — read these for platform detail)
 
