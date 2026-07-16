@@ -67,14 +67,21 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
-          # Populated by external-secrets from externalsecret.yaml. `optional:
+          # Bind each secret key you need as its own env var, mirroring the
+          # rest of the cluster (see kubernetes/apps in weisssrv). This is the
+          # required shape: the ExternalSecret's keys are hyphenated (`api-key`)
+          # to match the homelab convention, and hyphens are not valid env-var
+          # names — an `envFrom: secretRef` would silently SKIP them. `optional:
           # true` lets the pod start before the operator has wired the secret
           # store. Delete this block (and externalsecret.yaml) if you need no
           # secrets.
-          envFrom:
-            - secretRef:
-                name: changeme-app-secrets
-                optional: true
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: changeme-app-secrets
+                  key: api-key
+                  optional: true
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

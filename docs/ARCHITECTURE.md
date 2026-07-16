@@ -41,7 +41,7 @@ flowchart LR
   gl --> css
   css --> es["ExternalSecret<br/>(in your namespace)"]
   es --> sec[("Kubernetes Secret")]
-  sec -->|envFrom| pod["App pod"]
+  sec -->|secretKeyRef| pod["App pod"]
 ```
 
 - Secret **values** never enter git. This repo holds only the `ExternalSecret`

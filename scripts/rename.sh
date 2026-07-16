@@ -6,11 +6,13 @@
 #
 #   ./scripts/rename.sh <app-slug> <gitlab-group>
 #
-# Example:
-#   ./scripts/rename.sh recipe-box eric
+# Examples:
+#   ./scripts/rename.sh recipe-box eric          # top-level group
+#   ./scripts/rename.sh recipe-box eric/apps     # nested subgroup
 #
 # The app slug is also your Kubernetes namespace and your Flux Kustomization
-# name, so keep it a valid DNS label (lowercase letters, digits, hyphens).
+# name, so keep it a valid DNS label (lowercase letters, digits, hyphens). The
+# group is your GitLab namespace path and may be nested (contain slashes).
 set -euo pipefail
 
 app="${1:-}"
@@ -26,6 +28,14 @@ if ! printf '%s' "$app" | grep -Eq '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'; then
     exit 2
 fi
 
+# GitLab namespace path: one or more '/'-separated segments of lowercase
+# alphanumerics plus '.', '_', '-'. Nested subgroups (slashes) are allowed and
+# flow through to the registry image path and CODEOWNERS mention.
+if ! printf '%s' "$group" | grep -Eq '^[a-z0-9]([a-z0-9._-]*[a-z0-9])?(/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*$'; then
+    echo "error: group '$group' must be a GitLab namespace path (lowercase alphanumerics, '.', '_', '-', '/'-separated)" >&2
+    exit 2
+fi
+
 cd "$(dirname "$0")/.."
 
 # Operate only on git-tracked files, skipping this script itself so it stays
@@ -34,9 +44,11 @@ git ls-files -z \
     | grep -zv '^scripts/rename\.sh$' \
     | while IFS= read -r -d '' f; do
         if grep -Iq 'changeme-app\|changeme-group' "$f"; then
-            # In-place edit that works on both GNU and BSD sed.
+            # In-place edit that works on both GNU and BSD sed. Use '|' as the
+            # delimiter so a nested group path (which contains '/') doesn't
+            # break the substitution — '|' is not valid in a namespace path.
             tmp="$(mktemp)"
-            sed -e "s/changeme-app/${app}/g" -e "s/changeme-group/${group}/g" "$f" >"$tmp"
+            sed -e "s|changeme-app|${app}|g" -e "s|changeme-group|${group}|g" "$f" >"$tmp"
             cat "$tmp" >"$f"
             rm -f "$tmp"
             echo "updated $f"

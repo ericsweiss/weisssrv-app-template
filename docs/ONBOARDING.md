@@ -28,7 +28,7 @@ Flux Kustomization name. Keep it a valid DNS label.
 5. **Wire secrets** (if any) in `externalsecret.yaml` — pick the 1Password or
    GitLab backend to match what the operator provisions (step O3). If the app
    needs none, delete `externalsecret.yaml`, its line in `kustomization.yaml`,
-   and the `envFrom` block in `deployment.yaml`.
+   and the secret `env` block in `deployment.yaml`.
 6. **Point observability** at your metrics endpoint in `servicemonitor.yaml`
    (or delete it if the app exposes none). Adjust the alert expressions in
    `prometheusrule.yaml` if you renamed the Deployment.
