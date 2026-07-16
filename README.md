@@ -9,12 +9,13 @@ homelab k3s cluster. Create from it and you get, on day one:
 - **secret wiring** via External Secrets (1Password or GitLab CI/CD variables),
 - **default-deny NetworkPolicies**, a **ServiceMonitor**, down/stale **alerts**,
   and a **VPA** — observability and autoscaling without extra work,
-- **CI** that builds/pushes your image, lints, schema-validates the manifests,
-  and scans for secrets.
+- **CI** that lints, schema-validates the manifests, and scans for secrets on
+  every merge request.
 
 Flux (GitOps) does the deploying: you edit YAML, open a merge request, and on
 merge to `main` the cluster reconciles this repo into your namespace. There is
-no `kubectl apply` in the normal flow.
+no `kubectl apply` in the normal flow. (Container images are built outside CI —
+the shared runner can't build them; see [step 3](#3-set-your-image).)
 
 > New here? The agent skill in `.claude/skills/project-development/` and
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explain how a tenant app rides
@@ -35,7 +36,7 @@ In GitLab: **New project → Create from template → (this template)**. Clone i
 ./scripts/rename.sh <app-slug> <gitlab-group>
 ```
 
-This replaces the single placeholder token `changeme-app` / `changeme-group`
+This replaces the placeholder tokens `changeme-app` / `changeme-group`
 everywhere. The three things you're really setting:
 
 1. **App slug** — also your Kubernetes namespace and Flux Kustomization name.
@@ -45,20 +46,19 @@ everywhere. The three things you're really setting:
 3. **Internal host** (optional) — `<slug>.esweiss.com`; uncomment the internal
    `IngressRoute` and `Certificate` and request the operator DNS step.
 
-### 3. Add your build logic
+### 3. Set your image
 
-Point `kubernetes/flux/deployment.yaml`'s `image:` at any image, **or** drop a
-`Dockerfile` at the repo root — the CI `build-image` job activates
-automatically and pushes to `registry.git.ericsweiss.com/<group>/<slug>`
-(tagged by commit SHA on MRs; `:latest` on `main`; `:<tag>` on git tags). Image
-tags are **literal pins** — [Renovate](renovate.json) keeps them current
-(there's no Flux `${var}` substitution for tenant repos).
+Point `kubernetes/flux/deployment.yaml`'s `image:` at any image. Tags are
+**literal pins** — [Renovate](renovate.json) keeps them current (there's no
+Flux `${var}` substitution for tenant repos).
 
-The build uses **kaniko** (daemonless, unprivileged) because the shared runner
-can't run Docker-in-Docker — see [CI runner](#ci-runner). It runs jobs as a
-non-root UID, so kaniko suits Dockerfiles that don't modify root-owned base-image
-files; for anything heavier, build/push the image from a privileged environment
-(your workstation, GitHub Actions, …) and just set `image:`.
+If you build your own image, build it **outside this pipeline**. The shared CI
+runner is non-privileged **and** runs jobs as a non-root UID, so it cannot build
+container images (no Docker-in-Docker, and kaniko/buildah can't unpack a base
+image as a non-root user) — see [CI runner](#ci-runner). Build locally with
+`task build` and push, or use an external CI with a privileged builder (e.g.
+GitHub Actions), then point `image:` at
+`registry.git.ericsweiss.com/<group>/<slug>:<tag>`.
 
 ### 4. Ship
 
@@ -163,13 +163,17 @@ issues before you push.
 ### CI runner
 
 The pipeline is **tag-less**, so it runs on weisssrv's shared, non-privileged
-`k8s-deploy` runner. That runner has **internet egress only** — build, lint,
-kubeconform, and the container registry all work; there is **no LAN/tailnet
-access and no SSH**. Deploys go through Flux, never a CI `kubectl apply`.
+`k8s-deploy` runner. That runner has **internet egress only** — lint,
+kubeconform, secret scanning, and the container registry all work; there is
+**no LAN/tailnet access and no SSH**. Deploys go through Flux, never a CI
+`kubectl apply`.
 
-Because the runner is non-privileged (no Docker-in-Docker) and runs jobs as a
-non-root UID, the `build-image` job uses **kaniko** rather than `docker build`.
-Local `task build` still uses your workstation's Docker daemon.
+The runner is non-privileged **and runs every job as a non-root UID**, so it
+**can't build container images** (no Docker-in-Docker, and kaniko/buildah can't
+unpack a base image as a non-root user). There is no CI build job — build your
+image elsewhere (`task build` locally, or an external privileged CI) and point
+`image:` at it. If you register your own privileged runner, `.gitlab-ci.yml`
+carries a commented example build job you can retag for it.
 
 ---
 

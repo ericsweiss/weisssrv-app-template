@@ -81,24 +81,24 @@ doesn't exist in the registry.
 
 ## Container registry
 
-CI builds and pushes to `registry.git.ericsweiss.com/<group>/<app>` using
-GitLab's predefined `CI_REGISTRY_*` credentials — no extra secret needed. The
-build job activates automatically once a `Dockerfile` exists at the repo root.
-Point `deployment.yaml`'s `image:` at that path (literal tag; Renovate bumps it)
-or at any upstream image.
+`registry.git.ericsweiss.com/<group>/<app>` is your image registry. Point
+`deployment.yaml`'s `image:` at a tag there (literal tag; Renovate bumps it) or
+at any upstream image.
 
-The build uses **kaniko** (daemonless, unprivileged): the shared runner is
-non-privileged, so Docker-in-Docker is not available. The runner also runs jobs
-as a non-root UID, so kaniko suits Dockerfiles that don't modify root-owned
-base-image files. For heavier builds, build/push the image from a privileged
-environment and just set `image:` — no CI build needed.
+Images are built **outside this pipeline**. The shared runner is non-privileged
+AND runs jobs as a non-root UID, so it cannot build container images (no
+Docker-in-Docker, and kaniko/buildah can't unpack a base image as a non-root
+user). Build locally with `task build` and push (log in with a project deploy
+token or a PAT), or build in an external CI with a privileged builder, then set
+`image:`.
 
 ## Runner limits
 
 CI runs on the shared, non-privileged `k8s-deploy` runner: internet egress only,
-no LAN/tailnet, no SSH, and no Docker-in-Docker (jobs run as a non-root UID).
-Build (via kaniko), lint, kubeconform, and registry push all work; anything
-needing LAN access or privileged Docker does not.
+no LAN/tailnet, no SSH, no Docker-in-Docker, and every job runs as a non-root
+UID. Lint, kubeconform, secret scanning, and registry push all work; **building
+container images does not** (build them externally), and anything needing LAN
+access or privileged Docker does not.
 
 ## Canonical weisssrv docs (authoritative — read these for platform detail)
 

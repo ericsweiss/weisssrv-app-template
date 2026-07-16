@@ -16,9 +16,10 @@ Flux Kustomization name. Keep it a valid DNS label.
 1. **Create from template** and clone your new project.
 2. **Rename**: `./scripts/rename.sh <slug> <gitlab-group>` (replaces every
    `changeme-app` / `changeme-group` token). Review `git diff`.
-3. **Set the image** in `kubernetes/flux/deployment.yaml`. Either point it at an
-   upstream image, or add a `Dockerfile` (the CI build job activates
-   automatically and pushes to `registry.git.ericsweiss.com/<group>/<slug>`).
+3. **Set the image** in `kubernetes/flux/deployment.yaml` — an upstream image,
+   or one you build outside CI and push to
+   `registry.git.ericsweiss.com/<group>/<slug>` (the shared runner can't build
+   images; see the README "CI runner" note).
 4. **Set the hostname(s)**. Public `<slug>.ericsweiss.com` is ready in
    `ingressroute.yaml`. For an internal `<slug>.esweiss.com` route, uncomment
    the internal `IngressRoute` (in `ingressroute.yaml`) and the internal

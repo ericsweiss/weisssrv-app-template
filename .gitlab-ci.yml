@@ -33,60 +33,44 @@ workflow:
     - if: '$CI_COMMIT_TAG'
 
 # ============================================================================
-# BUILD — container image (only runs if the repo has a Dockerfile)
+# BUILD — container image (built OUTSIDE this pipeline; see below)
 # ============================================================================
-# Daemonless build+push with kaniko. This pipeline is tag-less, so it lands on
-# the shared, non-privileged `k8s-deploy` runner — which CANNOT run
-# Docker-in-Docker (DinD needs a privileged runner, and weisssrv reserves its
-# only privileged runner, tags: [infrastructure], for the platform repo). kaniko
-# builds in userspace with no daemon and no privileged mode, using GitLab's
-# predefined CI_REGISTRY_* credentials against registry.git.ericsweiss.com. MR
-# pipelines tag by commit SHA; main also tags :latest; git tags add :<tag> +
-# :latest. A registry-backed layer cache speeds rebuilds.
+# There is deliberately NO in-CI image build. This pipeline is tag-less, so it
+# lands on weisssrv's shared `k8s-deploy` runner, which is BOTH non-privileged
+# (no Docker-in-Docker) AND runs every job pod as a fixed non-root UID
+# (run_as_user=1000, enforced cluster-side with no per-job override). No image
+# builder works under that combination: docker/DinD needs privilege, and
+# kaniko/buildah/buildkit all have to unpack the base image's root-owned
+# filesystem into the container — which UID 1000 cannot write. A build job here
+# would fail the moment you added a Dockerfile, breaking the green pipeline.
 #
-# The shared runner also runs job pods as a non-root UID, so registry auth is
-# written to a workspace-local DOCKER_CONFIG (the image's /kaniko dir is
-# root-owned and not writable here). This suits Dockerfiles that don't need to
-# modify root-owned base-image files; for anything heavier, build/push the image
-# from a privileged environment and just point deployment.yaml's `image:` at it
-# — no CI build required.
-build-image:
-  stage: build
-  image:
-    name: gcr.io/kaniko-project/executor:v1.24.0-debug
-    entrypoint: [""]
-  variables:
-    # Writable docker-config path (job runs non-root; /kaniko/.docker is not).
-    DOCKER_CONFIG: "$CI_PROJECT_DIR/.docker"
-  before_script:
-    # Registry auth for kaniko. CI_REGISTRY_PASSWORD is masked in job logs and
-    # the base64 is computed at runtime (written to a file, never echoed), so no
-    # credential leaks to the log.
-    - mkdir -p "$DOCKER_CONFIG"
-    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf '%s:%s' "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" > "$DOCKER_CONFIG/config.json"
-  script:
-    - |
-      set -e
-      REF="$CI_REGISTRY_IMAGE"
-      DESTS="--destination ${REF}:${CI_COMMIT_SHORT_SHA}"
-      # :<tag> destination on git tags; :latest on main and on tags.
-      if [ -n "$CI_COMMIT_TAG" ]; then
-        DESTS="$DESTS --destination ${REF}:${CI_COMMIT_TAG}"
-      fi
-      if [ "$CI_COMMIT_BRANCH" = "main" ] || [ -n "$CI_COMMIT_TAG" ]; then
-        DESTS="$DESTS --destination ${REF}:latest"
-      fi
-      # Word-splitting $DESTS is intentional (one arg per --destination token).
-      /kaniko/executor \
-        --context "$CI_PROJECT_DIR" \
-        --dockerfile "$CI_PROJECT_DIR/Dockerfile" \
-        --cache=true \
-        --cache-repo "${REF}/cache" \
-        $DESTS
-  rules:
-    # Auto-activates the moment you add a Dockerfile; inert until then.
-    - exists:
-        - Dockerfile
+# So build the image ELSEWHERE and point deployment.yaml's `image:` at it:
+#   * locally with `task build` (your workstation's Docker daemon), then
+#     `docker push registry.git.ericsweiss.com/<group>/<slug>:<tag>`
+#     (log in with a project deploy token or a personal access token), or
+#   * an external CI that has a privileged/root builder (e.g. GitHub Actions), or
+#   * any upstream image you already have — no build needed at all.
+# Image tags are literal pins in deployment.yaml; Renovate keeps them current.
+#
+# If you register your OWN privileged runner for this project, you can add a
+# kaniko/docker build job here and tag it for that runner. The shared runner
+# cannot run it, so it stays out of the template. Example (uncomment + retag):
+#
+# build-image:
+#   stage: build
+#   tags: [your-privileged-runner]
+#   image:
+#     name: gcr.io/kaniko-project/executor:v1.24.0-debug
+#     entrypoint: [""]
+#   before_script:
+#     - mkdir -p /kaniko/.docker
+#     - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf '%s:%s' "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+#   script:
+#     - /kaniko/executor --context "$CI_PROJECT_DIR" --dockerfile "$CI_PROJECT_DIR/Dockerfile"
+#         --destination "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+#   rules:
+#     - exists:
+#         - Dockerfile
 
 # ============================================================================
 # LINT
@@ -96,9 +80,12 @@ yaml-lint:
   image: python:3.13-slim
   needs: []
   before_script:
-    - pip install --quiet "yamllint==1.38.0"
+    # Jobs run as a non-root UID on the shared runner, so system site-packages
+    # is not writable. Install into the user site (HOME is a writable emptyDir)
+    # and invoke via `python -m` so no PATH surgery is needed.
+    - pip install --user --quiet "yamllint==1.38.0"
   script:
-    - yamllint -c .yamllint .
+    - python -m yamllint -c .yamllint .
 
 # Render kubernetes/flux and schema-validate it with kubeconform. No Flux
 # postBuild `${var}` substitution here — tenants pin literal image tags
@@ -109,25 +96,33 @@ flux-lint:
   image: python:3.13-slim
   needs: []
   before_script:
-    - apt-get update -qq && apt-get install -y -qq curl
+    # Non-root job: no apt-get (dpkg lock is root-only) and /usr/local/bin is
+    # not writable. Download the pinned tools with Python's stdlib (no curl/apt),
+    # verify each tarball's sha256, and extract into a workspace-local bin dir
+    # on PATH. before_script + script share one shell, so the PATH export
+    # carries into script.
     - |
       set -e
+      export TOOLS_BIN="$CI_PROJECT_DIR/.bin"
+      mkdir -p "$TOOLS_BIN"
       fetch_verified() {  # <file> <url> <sha256>
-        curl -fsSL -o "/tmp/$1" "$2"
+        python -c "import urllib.request,sys; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" "$2" "/tmp/$1"
         echo "$3  /tmp/$1" | sha256sum -c -
       }
       fetch_verified kubeconform.tar.gz \
         "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
         "$KUBECONFORM_SHA256"
-      tar xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
+      tar xzf /tmp/kubeconform.tar.gz -C "$TOOLS_BIN" kubeconform
       fetch_verified kustomize.tar.gz \
         "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
         "$KUSTOMIZE_SHA256"
-      tar xzf /tmp/kustomize.tar.gz -C /usr/local/bin kustomize
+      tar xzf /tmp/kustomize.tar.gz -C "$TOOLS_BIN" kustomize
+      export PATH="$TOOLS_BIN:$PATH"
       kubeconform -v && kustomize version
   script:
     - |
       set -eo pipefail
+      export PATH="$CI_PROJECT_DIR/.bin:$PATH"
       echo "=== kustomize build kubernetes/flux ==="
       kustomize build kubernetes/flux > /tmp/rendered.yaml
       echo "=== kubeconform (k8s ${K8S_VERSION}) ==="
@@ -153,20 +148,35 @@ secret_detection:
   variables:
     SECRET_DETECTION_HISTORIC_SCAN: "false"
     # gitleaks' binary needs POPCNT/SSE4.2; pin scans to modern-CPU nodes so it
-    # doesn't SIGILL on the cluster's older agents. (This selector override is
-    # allowlisted on the shared runner.)
+    # doesn't SIGILL on the cluster's older agents. The shared k8s-deploy runner
+    # allowlists exactly this override — its config sets
+    # node_selector_overwrite_allowed = ^esweiss\.com/cpu=(modern|legacy)$ — so
+    # the selector is honored, not rejected.
     KUBERNETES_NODE_SELECTOR_CPU: "esweiss.com/cpu=modern"
+  # The bundled GitLab Secret-Detection template gates its job on
+  # $CI_COMMIT_BRANCH, which is UNSET in merge_request_event pipelines. Without
+  # this override the scan would run ONLY post-merge on main (and never on tags,
+  # where $CI_COMMIT_BRANCH is also empty) — too late to block a leak. Override
+  # the rules so it is a real pre-merge gate: MRs, main, and scheduled scans.
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
 
 # ============================================================================
-# AI REVIEW — optional, never blocks. Runs when EITHER credential path exists:
-#   * OP_SERVICE_ACCOUNT_TOKEN  → reads the OpenAI key + GitLab token from
-#     1Password (paths overridable via AI_REVIEW_OP_* CI variables), or
-#   * AI_REVIEW_OPENAI_KEY + GITLAB_REVIEW_TOKEN → plain masked CI variables.
-# Fork MRs (no credentials) simply don't create this job — that's expected.
+# AI REVIEW — optional, never blocks. Runs only when BOTH masked CI/CD
+# variables AI_REVIEW_OPENAI_KEY and GITLAB_REVIEW_TOKEN are set on the project
+# (Settings -> CI/CD -> Variables); absent them (e.g. fork MRs) the job simply
+# isn't created. There is no in-job 1Password path: the shared runner is
+# non-root and can't install the op CLI at job time, so 1Password users source
+# those two values from their vault WHEN THEY SET the CI variables (e.g.
+# `op read "op://Homelab/OpenAI API Key/api-key"`), not at runtime.
 # ============================================================================
 pr-agent-review:
   stage: ai-review
-  image: codiumai/pr-agent:0.34
+  # Digest-pinned: this job exports a GitLab PAT and an OpenAI key into the
+  # container, so the image must not move under a mutable tag (supply-chain).
+  image: codiumai/pr-agent:0.34@sha256:1c1743e93bf6627cd14528cd4defe82465f17860e8f20e6c0ac6558971f61c61
   needs:
     - job: yaml-lint
       optional: true
@@ -177,32 +187,15 @@ pr-agent-review:
   variables:
     CONFIG__GIT_PROVIDER: "gitlab"
     GITLAB__URL: "https://git.ericsweiss.com"
-    # Override AI_REVIEW_* CI variables to change model / 1Password item paths.
-    AI_REVIEW_OP_OPENAI_PATH: "op://Homelab/OpenAI API Key/api-key"
-    AI_REVIEW_OP_GITLAB_PATH: "op://Homelab/GitLab API Token/credential"
   before_script:
-    - |
-      set -e
-      if [ -n "$OP_SERVICE_ACCOUNT_TOKEN" ]; then
-        apt-get update -qq && apt-get install -y -qq curl gnupg
-        curl -sS https://downloads.1password.com/linux/keys/1password.asc \
-          | gpg --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg
-        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/amd64 stable main" \
-          > /etc/apt/sources.list.d/1password.list
-        apt-get update -qq && apt-get install -y -qq 1password-cli
-        export OPENAI__KEY=$(op read "$AI_REVIEW_OP_OPENAI_PATH")
-        export GITLAB__PERSONAL_ACCESS_TOKEN=$(op read "$AI_REVIEW_OP_GITLAB_PATH")
-      else
-        export OPENAI__KEY="$AI_REVIEW_OPENAI_KEY"
-        export GITLAB__PERSONAL_ACCESS_TOKEN="$GITLAB_REVIEW_TOKEN"
-      fi
+    - export OPENAI__KEY="$AI_REVIEW_OPENAI_KEY"
+    - export GITLAB__PERSONAL_ACCESS_TOKEN="$GITLAB_REVIEW_TOKEN"
   script:
     - |
       python -m pr_agent.cli \
         --pr_url="${CI_MERGE_REQUEST_PROJECT_URL}/-/merge_requests/${CI_MERGE_REQUEST_IID}" \
         review
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $OP_SERVICE_ACCOUNT_TOKEN'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $AI_REVIEW_OPENAI_KEY && $GITLAB_REVIEW_TOKEN'
   allow_failure: true
   timeout: 30m
