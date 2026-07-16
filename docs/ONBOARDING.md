@@ -159,7 +159,15 @@ Flux Kustomization name. Keep it a valid DNS label.
    `scsi_slot`, `vzdump_backup: false`), run `task k3s:deploy -- --limit
    k3s-agt-nas-01`, and hand the tenant the PV/PVC + NAS-pin pattern. Children of
    `ssd/appdata` are backed up to `archive` automatically.
-7. Branch → MR → merge. Flux reconciles the new tenant on the next cycle.
+7. **Reachability probe (optional, recommended for user-facing routes)**: the
+   tenant's `PrometheusRule` only alerts on replica availability. To also alert
+   on end-to-end HTTP/TLS reachability (a broken `IngressRoute`, cert, or DNS
+   while replicas stay ready), add the public host to the static blackbox target
+   list in
+   `kubernetes/infrastructure/observability/exporters/blackbox-exporter.yaml`
+   (`values.serviceMonitor.targets`) — `module: http_2xx` for an open route or
+   `http_sso` for an SSO-gated one.
+8. Branch → MR → merge. Flux reconciles the new tenant on the next cycle.
 
 ### Removal
 

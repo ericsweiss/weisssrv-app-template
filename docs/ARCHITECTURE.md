@@ -76,6 +76,13 @@ flowchart LR
   namespace.
 - **Alerts**: a `PrometheusRule` (down/stale) is likewise discovered
   cluster-wide and routed by the platform Alertmanager.
+- **Reachability**: those alerts read kube-state metrics — they cover *replica
+  availability*, not end-to-end HTTP/TLS reachability. A broken `IngressRoute`,
+  a failed certificate, or a DNS problem would not fire them while the pod stays
+  ready. The platform's blackbox exporter uses a **static, operator-managed**
+  target list (there is no `Probe` CRD discovery), so reachability alerting for
+  a public route is an **optional operator-added blackbox target** — see
+  ONBOARDING.md.
 - **Logs**: container stdout/stderr ships to Loki via the Alloy DaemonSet
   automatically — nothing to configure.
 

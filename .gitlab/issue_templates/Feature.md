@@ -20,4 +20,9 @@ NetworkPolicy, new secrets, or storage. "None" is fine.
 
 - [ ]
 
-/label ~feature
+<!--
+Auto-label (optional): create a `feature` label first (Settings > Labels) — a
+fresh project has none — then add a line reading `/label ~feature` at the start
+of a line below to tag every request automatically.
+-->
+

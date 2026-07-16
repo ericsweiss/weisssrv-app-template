@@ -31,4 +31,10 @@ provider to set up, image-tag bumps, or rollback considerations. "None" is a
 valid answer.
 -->
 
-/label ~changeme-app
+<!--
+Auto-label (optional): a fresh project has no labels, so a `/label` quick-action
+would reference one that doesn't exist yet. Once you create a project label
+(Settings > Labels) matching your app slug, add a line reading `/label
+~changeme-app` at the start of a line below to tag every MR automatically.
+-->
+

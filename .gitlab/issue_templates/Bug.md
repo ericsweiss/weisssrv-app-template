@@ -21,4 +21,9 @@ Kustomization state, alert that fired, MR/commit where it started.
 
 <!-- e.g. down / degraded / cosmetic -->
 
-/label ~bug
+<!--
+Auto-label (optional): create a `bug` label first (Settings > Labels) — a fresh
+project has none — then add a line reading `/label ~bug` at the start of a line
+below to tag every bug report automatically.
+-->
+
