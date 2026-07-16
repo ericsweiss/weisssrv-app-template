@@ -29,7 +29,7 @@ tasks:
   yaml-lint:
     desc: Lint YAML with the shared .yamllint config.
     cmds:
-      - yamllint -d relaxed .
+      - yamllint -c .yamllint .
 
   flux-lint:
     desc: kustomize build kubernetes/flux, then kubeconform schema validation.

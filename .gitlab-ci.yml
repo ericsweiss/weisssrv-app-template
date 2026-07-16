@@ -83,7 +83,7 @@ yaml-lint:
   before_script:
     - pip install --quiet "yamllint==1.38.0"
   script:
-    - yamllint -d relaxed .
+    - yamllint -c .yamllint .
 
 # Render kubernetes/flux and schema-validate it with kubeconform. No Flux
 # postBuild `${var}` substitution here — tenants pin literal image tags
