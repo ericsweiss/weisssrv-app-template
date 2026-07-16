@@ -1,0 +1,38 @@
+# Secrets / local env — never commit these
+.env
+.env.*
+*.env
+.tmp/
+*.tfvars
+!example.tfvars
+
+# Kubeconfigs (bring your own; never commit)
+kubeconfig
+*.kubeconfig
+.kube/
+
+# Terraform state / plans
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+*.tfplan
+
+# Build output
+dist/
+build/
+node_modules/
+target/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editor / OS cruft
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
