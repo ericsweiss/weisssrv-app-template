@@ -1,0 +1,24 @@
+---
+# The platform Prometheus discovers ServiceMonitors in EVERY namespace, so this
+# is picked up automatically once your app exposes metrics. Adjust `port` (the
+# named Service port) and `path` to your app's metrics endpoint. Pair it with
+# the observability scrape allow in networkpolicy.yaml.
+#
+# If your app has NO /metrics endpoint, delete this file and its line in
+# kustomization.yaml, and drop the `allow-scrape-from-observability` policy —
+# but do keep prometheusrule.yaml (the down/stale alert relies on kube-state
+# metrics, which exist regardless).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: changeme-app
+  labels:
+    app.kubernetes.io/name: changeme-app
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: changeme-app
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

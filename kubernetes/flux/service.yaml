@@ -1,0 +1,15 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: changeme-app
+  labels:
+    app.kubernetes.io/name: changeme-app
+spec:
+  selector:
+    app.kubernetes.io/name: changeme-app
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

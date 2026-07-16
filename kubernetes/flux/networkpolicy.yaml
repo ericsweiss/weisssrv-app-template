@@ -1,0 +1,116 @@
+---
+# Fail-closed baseline: deny all ingress and egress, then open only what the
+# app needs below. This is the canonical weisssrv tenant pattern.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# Ingress: Traefik (in the `traefik` namespace) may reach the app port so
+# published routes work.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-traefik
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: changeme-app
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+# Ingress: Prometheus (in the `observability` namespace) may scrape the metrics
+# port. Point servicemonitor.yaml at whatever port/path your app exposes.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-scrape-from-observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: changeme-app
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+# Egress: cluster DNS, plus public HTTPS to the internet only (RFC1918, CGNAT
+# and link-local are excluded, so the app cannot reach LAN or tailnet hosts).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-changeme-app
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: changeme-app
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+    # SMTP relay (submission) — uncomment if the app sends mail.
+    # - to:
+    #     - ipBlock:
+    #         cidr: 192.168.0.151/32
+    #   ports:
+    #     - protocol: TCP
+    #       port: 587
+    # kube-apiserver — uncomment only if the app talks to the Kubernetes API.
+    # kube-proxy DNATs the in-cluster VIP to the real server node IPs BEFORE
+    # NetworkPolicy is evaluated, so allowlist the node IPs on 6443 (a
+    # 10.43.0.1/32 rule never matches the post-DNAT packet).
+    # - to:
+    #     - ipBlock:
+    #         cidr: 192.168.0.222/32
+    #     - ipBlock:
+    #         cidr: 192.168.0.223/32
+    #     - ipBlock:
+    #         cidr: 192.168.0.227/32
+    #   ports:
+    #     - protocol: TCP
+    #       port: 6443

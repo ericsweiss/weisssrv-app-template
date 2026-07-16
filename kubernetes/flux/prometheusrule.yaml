@@ -1,0 +1,40 @@
+---
+# Down/stale alerts. The platform Prometheus discovers PrometheusRules in every
+# namespace, so these fire without any operator action. They read kube-state
+# metrics (always present), so they work even before your app exposes /metrics.
+# Follows the weisssrv homelab.* convention: for/severity/runbook annotations.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: changeme-app
+  labels:
+    app.kubernetes.io/name: changeme-app
+spec:
+  groups:
+    - name: changeme-app.availability
+      rules:
+        # No ready replica for 10m — the app is serving nothing.
+        - alert: changeme-app-down
+          expr: kube_deployment_status_replicas_available{deployment="changeme-app"} < 1
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            runbook_url: 'https://git.ericsweiss.com/eric/weisssrv/-/blob/main/docs/29-flux-operations.md'
+            summary: 'changeme-app has no available replicas'
+            description: >-
+              Deployment changeme-app has had zero available replicas for 10m
+              in namespace {{ $labels.namespace }}.
+        # Metric absent for 15m — the Deployment was deleted, never created, or
+        # kube-state-metrics can't see it (stale/pruned by Flux unexpectedly).
+        - alert: changeme-app-absent
+          expr: absent(kube_deployment_status_replicas_available{deployment="changeme-app"})
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            runbook_url: 'https://git.ericsweiss.com/eric/weisssrv/-/blob/main/docs/29-flux-operations.md'
+            summary: 'changeme-app deployment metric is absent'
+            description: >-
+              No kube-state metric for Deployment changeme-app for 15m — it may
+              have been pruned or never reconciled.
