@@ -1,0 +1,13 @@
+# Cursor rules
+
+This is a weisssrv cluster tenant repo. See [CLAUDE.md](CLAUDE.md) for the full
+guidance; it is the canonical agent doc. Key rules:
+
+- NEVER commit secrets — use `ExternalSecret` manifests referencing 1Password or
+  GitLab CI/CD variables.
+- NEVER push to `main` — branch → merge request, always.
+- NEVER `kubectl apply` / `helm upgrade` to deploy — Flux owns Kubernetes state;
+  preview with `kustomize build kubernetes/flux`, deploy by merging.
+- Containers stay non-root with a read-only root filesystem; no `latest` tags.
+- Run `task lint` before opening a merge request.
+- Stay within your single namespace.
