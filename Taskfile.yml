@@ -1,0 +1,68 @@
+---
+version: "3"
+
+# Small task runner for local development against the weisssrv cluster.
+# `task --list` shows everything. Cluster-touching tasks need a kubeconfig on
+# KUBECONFIG (the operator provides one) — none of them mutate cluster state.
+
+vars:
+  # Your app slug. After running scripts/rename.sh these become your real name;
+  # override per-invocation with e.g. `task flux:status APP=myapp`.
+  APP: changeme-app
+  # The tenant namespace and the cluster-side Flux Kustomization are both named
+  # after the slug (see docs/ONBOARDING.md).
+  NAMESPACE: "{{.APP}}"
+  KUSTOMIZATION: "{{.APP}}"
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  lint:
+    desc: Run every local check (yamllint + rendered-manifest schema validation).
+    cmds:
+      - task: yaml-lint
+      - task: flux-lint
+
+  yaml-lint:
+    desc: Lint YAML with the shared .yamllint config.
+    cmds:
+      - yamllint -d relaxed .
+
+  flux-lint:
+    desc: kustomize build kubernetes/flux, then kubeconform schema validation.
+    cmds:
+      - kustomize build kubernetes/flux > /tmp/{{.APP}}-rendered.yaml
+      - >-
+        kubeconform -strict -ignore-missing-schemas -kubernetes-version 1.36.0
+        -schema-location default
+        -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{`{{.Group}}`}}/{{`{{.ResourceKind}}`}}_{{`{{.ResourceAPIVersion}}`}}.json'
+        -summary /tmp/{{.APP}}-rendered.yaml
+
+  render:
+    desc: Print the rendered manifests kustomize will hand to Flux.
+    cmds:
+      - kustomize build kubernetes/flux
+
+  build:
+    desc: Build the container image locally (requires a Dockerfile).
+    cmds:
+      - test -f Dockerfile || (echo "no Dockerfile — add one to build an image"; exit 1)
+      - docker build -t {{.APP}}:dev .
+
+  flux:status:
+    desc: Show the tenant Kustomization's reconcile state (read-only; needs KUBECONFIG).
+    cmds:
+      - flux get kustomization {{.KUSTOMIZATION}}
+
+  flux:reconcile:
+    desc: Force an immediate reconcile of the tenant Kustomization (needs KUBECONFIG).
+    cmds:
+      - flux reconcile kustomization {{.KUSTOMIZATION}} --with-source
+
+  secrets:check:
+    desc: Check ExternalSecret sync status in the tenant namespace (needs KUBECONFIG).
+    cmds:
+      - kubectl get externalsecret -n {{.NAMESPACE}}

@@ -1,0 +1,62 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git fetch:*)",
+      "Bash(git remote:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git ls-files:*)",
+      "Bash(kubectl get:*)",
+      "Bash(kubectl describe:*)",
+      "Bash(kubectl logs:*)",
+      "Bash(kubectl top:*)",
+      "Bash(kubectl api-resources:*)",
+      "Bash(kubectl version:*)",
+      "Bash(flux get:*)",
+      "Bash(flux check:*)",
+      "Bash(flux logs:*)",
+      "Bash(flux tree:*)",
+      "Bash(flux build:*)",
+      "Bash(kustomize build:*)",
+      "Bash(kubeconform:*)",
+      "Bash(yamllint:*)",
+      "Bash(shellcheck:*)",
+      "Bash(docker build:*)",
+      "Bash(task:*)",
+      "Bash(yq:*)",
+      "Bash(jq:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(find:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:docs.gitlab.com)",
+      "WebFetch(domain:fluxcd.io)",
+      "WebFetch(domain:external-secrets.io)",
+      "WebFetch(domain:doc.traefik.io)"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(kubectl apply:*)",
+      "Bash(kubectl delete:*)",
+      "Bash(kubectl edit:*)",
+      "Bash(kubectl patch:*)",
+      "Bash(helm upgrade:*)",
+      "Bash(helm install:*)",
+      "Bash(helm uninstall:*)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(docker push:*)"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":dependencyDashboard"
+  ],
+  "labels": ["dependencies", "renovate"],
+  "schedule": ["before 6am on monday"],
+  "timezone": "America/New_York",
+  "packageRules": [
+    {
+      "description": "Group patch/minor bumps into one PR to cut noise.",
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "non-major updates"
+    }
+  ],
+  "kubernetes": {
+    "description": "Track container images pinned in the Flux manifests.",
+    "managerFilePatterns": ["/kubernetes/flux/.+\\.ya?ml$/"]
+  },
+  "pre-commit": {
+    "enabled": true
+  }
+}
