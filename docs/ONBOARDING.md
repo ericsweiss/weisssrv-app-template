@@ -13,13 +13,19 @@ Flux Kustomization name. Keep it a valid DNS label.
 
 ## Tenant checklist
 
-1. **Create from template** and clone your new project.
-2. **Rename**: `./scripts/rename.sh <slug> <gitlab-group>` (replaces every
-   `changeme-app` / `changeme-group` token). Review `git diff`.
+1. **Fork this project** and clone your new project. (You can instead use
+   *New project → Create from template* only if the operator has registered
+   this template as a group/instance custom template — otherwise it won't
+   appear in the picker.)
+2. **Rename**: `./scripts/rename.sh <slug> <gitlab-group>` substitutes the
+   app-slug and GitLab-group placeholders across the tree. Review `git diff`,
+   then `grep -rn changeme- .` to confirm nothing was missed.
 3. **Set the image** in `kubernetes/flux/deployment.yaml` — an upstream image,
    or one you build outside CI and push to
    `registry.git.ericsweiss.com/<group>/<slug>` (the shared runner can't build
-   images; see the README "CI runner" note).
+   images; see the README "CI runner" note). The tag is a **literal pin**: no
+   Renovate runs against this GitLab, so bump it yourself (or set up
+   self-hosted Renovate) — see the README "Keeping image tags current" note.
 4. **Set the hostname(s)**. Public `<slug>.ericsweiss.com` is ready in
    `ingressroute.yaml`. For an internal `<slug>.esweiss.com` route, uncomment
    the internal `IngressRoute` (in `ingressroute.yaml`) and the internal
@@ -44,7 +50,9 @@ Flux Kustomization name. Keep it a valid DNS label.
 
 1. **Pick a secret backend** and prepare it:
    - *1Password (Option C, recommended):* create prefixed items in the Homelab
-     vault (title `"<slug>: <Item>"`), and a scoped Connect token.
+     vault (title `"<slug>: <Item>"`), and a scoped Connect token (find the
+     server ID with `op connect server list`, then `op connect token create
+     weisssrv-<slug>-eso --server <ID> --vaults Homelab`).
    - *GitLab CI/CD variables:* have the collaborator create a project access
      token (Reporter, `read_api`).
 2. **Bootstrap the namespace secret** (one-time, not Flux-managed):
@@ -104,7 +112,7 @@ Flux Kustomization name. Keep it a valid DNS label.
    ---
    # A namespace-scoped ServiceAccount so kustomize-controller does NOT apply
    # tenant manifests with its own cluster-admin. SA lives in flux-system; the
-   # RoleBinding grants admin only in the tenant namespace.
+   # RoleBindings grant admin only in the tenant namespace.
    apiVersion: v1
    kind: ServiceAccount
    metadata:
@@ -125,6 +133,27 @@ Flux Kustomization name. Keep it a valid DNS label.
      name: admin
      apiGroup: rbac.authorization.k8s.io
    ---
+   # `admin` does NOT aggregate the platform CRD groups this template uses —
+   # traefik.io (IngressRoute), monitoring.coreos.com
+   # (ServiceMonitor/PrometheusRule) and autoscaling.k8s.io (VPA). Bind the
+   # shared `tenant-crd-editor` ClusterRole (shipped in the weisssrv repo at
+   # kubernetes/clusters/weisssrv/tenants/tenant-crd-editor.yaml) too, or the
+   # tenant Kustomization goes NotReady on the first IngressRoute/ServiceMonitor/
+   # PrometheusRule/VPA. See docs/30.
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: RoleBinding
+   metadata:
+     name: <slug>-flux-crd-editor
+     namespace: <slug>
+   subjects:
+     - kind: ServiceAccount
+       name: <slug>-flux
+       namespace: flux-system
+   roleRef:
+     kind: ClusterRole
+     name: tenant-crd-editor
+     apiGroup: rbac.authorization.k8s.io
+   ---
    apiVersion: kustomize.toolkit.fluxcd.io/v1
    kind: Kustomization
    metadata:
@@ -134,6 +163,11 @@ Flux Kustomization name. Keep it a valid DNS label.
      interval: 10m
      retryInterval: 1m
      timeout: 10m
+     # Wait for the platform CRD chain (sources -> controllers -> configs) so a
+     # fresh bootstrap doesn't apply this tenant's ExternalSecret/IngressRoute/
+     # etc. before the ESO/cert-manager/Traefik CRDs exist. Mirrors apps.yaml.
+     dependsOn:
+       - name: infrastructure-configs
      serviceAccountName: <slug>-flux
      sourceRef:
        kind: GitRepository
