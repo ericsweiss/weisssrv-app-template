@@ -50,7 +50,9 @@ workflow:
 #     (log in with a project deploy token or a personal access token), or
 #   * an external CI that has a privileged/root builder (e.g. GitHub Actions), or
 #   * any upstream image you already have — no build needed at all.
-# Image tags are literal pins in deployment.yaml; Renovate keeps them current.
+# Image tags are literal pins in deployment.yaml. renovate.json is provided, but
+# NO Renovate bot runs against this self-hosted GitLab by default — bump tags
+# yourself or enable the opt-in renovate job below (see README).
 #
 # If you register your OWN privileged runner for this project, you can add a
 # kaniko/docker build job here and tag it for that runner. The shared runner
@@ -88,9 +90,9 @@ yaml-lint:
     - python -m yamllint -c .yamllint .
 
 # Render kubernetes/flux and schema-validate it with kubeconform. No Flux
-# postBuild `${var}` substitution here — tenants pin literal image tags
-# (Renovate bumps them), so unlike the weisssrv pipeline there is nothing to
-# envsubst. Tools are pinned and sha256-verified before use.
+# postBuild `${var}` substitution here — tenants pin literal image tags (bumped
+# manually or by an opt-in Renovate job), so unlike the weisssrv pipeline there
+# is nothing to envsubst. Tools are pinned and sha256-verified before use.
 flux-lint:
   stage: lint
   image: python:3.13-slim
@@ -217,6 +219,31 @@ pr-agent-review:
 #     - if: '$CI_COMMIT_BRANCH == "main" && $FLUX_WEBHOOK_URL'
 #       when: manual
 #       allow_failure: true
+
+# ============================================================================
+# RENOVATE (optional) — keep the literal image pins current. There is NO hosted
+# Renovate on git.ericsweiss.com, so renovate.json is inert until something runs
+# it. This job runs self-hosted Renovate against THIS project on a schedule.
+# To enable: uncomment, create a pipeline SCHEDULE (CI/CD -> Schedules, e.g.
+# weekly) so `$CI_PIPELINE_SOURCE == "schedule"`, and set a masked RENOVATE_TOKEN
+# CI/CD variable (a GitLab PAT with api scope for this project). Add
+# hostRules/registry credentials in renovate.json's env if you need Renovate to
+# read the PRIVATE registry tag list. Alternative: skip this and bump tags by
+# hand, mirroring weisssrv's `task maintenance:check-versions` flow.
+# ----------------------------------------------------------------------------
+# renovate:
+#   stage: validate
+#   image: renovate/renovate:41
+#   needs: []
+#   variables:
+#     RENOVATE_PLATFORM: gitlab
+#     RENOVATE_ENDPOINT: "https://git.ericsweiss.com/api/v4"
+#     RENOVATE_TOKEN: "$RENOVATE_TOKEN"
+#     RENOVATE_REPOSITORIES: "$CI_PROJECT_PATH"
+#   script:
+#     - renovate
+#   rules:
+#     - if: '$CI_PIPELINE_SOURCE == "schedule" && $RENOVATE_TOKEN'
 
 # ============================================================================
 # TERRAFORM (optional) — uncomment if this repo grows a terraform/ directory.
