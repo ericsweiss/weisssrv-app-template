@@ -1,15 +1,15 @@
-# Horizontal Pod Autoscaler + PodDisruptionBudget — OPT-IN.
+# Horizontal Pod Autoscaler — OPT-IN.
 #
-# To enable:
-#   1. Uncomment both resources below.
+# The PodDisruptionBudget is now shipped by default in pdb.yaml (it needs no
+# HPA), so this file is HPA-only. To enable the HPA:
+#   1. Uncomment the resource below.
 #   2. Add `- hpa.yaml` to the resources list in kustomization.yaml.
 #   3. DELETE the `replicas:` line from deployment.yaml so Flux server-side
 #      apply doesn't fight the HPA over the replica count.
 #   4. Make vpa.yaml memory-only (`controlledResources: [memory]`) so the VPA
 #      and HPA don't both drive CPU.
-#
-# The PDB keeps at least one pod up during voluntary disruptions (node drains
-# from kured reboots, evictions). minAvailable: 1 suits a 2+ replica app.
+#   5. Keep `minReplicas >= 2` so the default pdb.yaml (`minAvailable: 1`) stays
+#      satisfiable.
 
 # ---
 # apiVersion: autoscaling/v2
@@ -33,13 +33,3 @@
 #   behavior:
 #     scaleDown:
 #       stabilizationWindowSeconds: 300
-# ---
-# apiVersion: policy/v1
-# kind: PodDisruptionBudget
-# metadata:
-#   name: changeme-app
-# spec:
-#   minAvailable: 1
-#   selector:
-#     matchLabels:
-#       app.kubernetes.io/name: changeme-app

@@ -64,10 +64,12 @@ flowchart LR
 ## Autoscaling & resilience
 
 - **VPA** (`updateMode: Initial`) right-sizes the pod on natural restarts.
-- **HPA + PDB** are opt-in (`hpa.yaml`). Enabling the HPA means dropping the
-  static `replicas` and making the VPA memory-only so the two never fight CPU.
-- `kured` performs coordinated node reboots; a PDB keeps a replica up across
-  drains.
+- **PDB** (`pdb.yaml`, always on) holds `minAvailable: 1`, so `kured`'s
+  coordinated node-reboot drains can't evict both default replicas at once — a
+  replica stays up across drains without opting into anything.
+- **HPA** is opt-in (`hpa.yaml`). Enabling it means dropping the static
+  `replicas` and making the VPA memory-only so the two never fight CPU (keep
+  `minReplicas >= 2` so the PDB stays satisfiable).
 
 ## Observability
 
