@@ -13,13 +13,19 @@ Flux Kustomization name. Keep it a valid DNS label.
 
 ## Tenant checklist
 
-1. **Create from template** and clone your new project.
-2. **Rename**: `./scripts/rename.sh <slug> <gitlab-group>` (replaces every
-   `changeme-app` / `changeme-group` token). Review `git diff`.
+1. **Fork this project** and clone your new project. (You can instead use
+   *New project → Create from template* only if the operator has registered
+   this template as a group/instance custom template — otherwise it won't
+   appear in the picker.)
+2. **Rename**: `./scripts/rename.sh <slug> <gitlab-group>` substitutes the
+   app-slug and GitLab-group placeholders across the tree. Review `git diff`,
+   then `grep -rn changeme- .` to confirm nothing was missed.
 3. **Set the image** in `kubernetes/flux/deployment.yaml` — an upstream image,
    or one you build outside CI and push to
    `registry.git.ericsweiss.com/<group>/<slug>` (the shared runner can't build
-   images; see the README "CI runner" note).
+   images; see the README "CI runner" note). The tag is a **literal pin**: no
+   Renovate runs against this GitLab, so bump it yourself (or set up
+   self-hosted Renovate) — see the README "Keeping image tags current" note.
 4. **Set the hostname(s)**. Public `<slug>.ericsweiss.com` is ready in
    `ingressroute.yaml`. For an internal `<slug>.esweiss.com` route, uncomment
    the internal `IngressRoute` (in `ingressroute.yaml`) and the internal
@@ -42,12 +48,14 @@ Flux Kustomization name. Keep it a valid DNS label.
 
 ## Operator checklist (performed in the weisssrv repo)
 
-1. **Pick a secret backend** and prepare it:
+1. **O1 — Pick a secret backend** and prepare it:
    - *1Password (Option C, recommended):* create prefixed items in the Homelab
-     vault (title `"<slug>: <Item>"`), and a scoped Connect token.
+     vault (title `"<slug>: <Item>"`), and a scoped Connect token (find the
+     server ID with `op connect server list`, then `op connect token create
+     weisssrv-<slug>-eso --server <ID> --vaults Homelab`).
    - *GitLab CI/CD variables:* have the collaborator create a project access
      token (Reporter, `read_api`).
-2. **Bootstrap the namespace secret** (one-time, not Flux-managed):
+2. **O2 — Bootstrap the namespace secret** (one-time, not Flux-managed):
    ```bash
    kubectl create namespace <slug>
    # 1Password backend:
@@ -57,7 +65,7 @@ Flux Kustomization name. Keep it a valid DNS label.
    kubectl -n <slug> create secret generic gitlab-api-token \
      --from-literal=token=glpat-<TOKEN>
    ```
-3. **Add the wiring file** `kubernetes/clusters/weisssrv/tenants/<slug>.yaml`
+3. **O3 — Add the wiring file** `kubernetes/clusters/weisssrv/tenants/<slug>.yaml`
    (1Password variant shown; swap the `ClusterSecretStore` for the GitLab
    provider if using that backend):
    ```yaml
@@ -104,7 +112,7 @@ Flux Kustomization name. Keep it a valid DNS label.
    ---
    # A namespace-scoped ServiceAccount so kustomize-controller does NOT apply
    # tenant manifests with its own cluster-admin. SA lives in flux-system; the
-   # RoleBinding grants admin only in the tenant namespace.
+   # RoleBindings grant admin only in the tenant namespace.
    apiVersion: v1
    kind: ServiceAccount
    metadata:
@@ -125,6 +133,31 @@ Flux Kustomization name. Keep it a valid DNS label.
      name: admin
      apiGroup: rbac.authorization.k8s.io
    ---
+   # `admin` does NOT aggregate three platform CRD groups this template uses —
+   # traefik.io (IngressRoute/Middleware), monitoring.coreos.com
+   # (ServiceMonitor/PrometheusRule) and autoscaling.k8s.io (VPA). It normally
+   # DOES cover external-secrets.io (ExternalSecret) and cert-manager.io
+   # (Certificate) via its aggregated *-edit roles — but the shared
+   # `tenant-crd-editor` ClusterRole covers those two belt-and-suspenders as well
+   # (so a cluster missing the external-secrets-edit / cert-manager-edit
+   # aggregated roles still applies them). Bind it (shipped in the weisssrv repo
+   # at kubernetes/clusters/weisssrv/tenants/tenant-crd-editor.yaml) too, or the
+   # tenant Kustomization goes NotReady on the first IngressRoute/ServiceMonitor/
+   # PrometheusRule/VPA. See docs/30.
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: RoleBinding
+   metadata:
+     name: <slug>-flux-crd-editor
+     namespace: <slug>
+   subjects:
+     - kind: ServiceAccount
+       name: <slug>-flux
+       namespace: flux-system
+   roleRef:
+     kind: ClusterRole
+     name: tenant-crd-editor
+     apiGroup: rbac.authorization.k8s.io
+   ---
    apiVersion: kustomize.toolkit.fluxcd.io/v1
    kind: Kustomization
    metadata:
@@ -134,6 +167,11 @@ Flux Kustomization name. Keep it a valid DNS label.
      interval: 10m
      retryInterval: 1m
      timeout: 10m
+     # Wait for the platform CRD chain (sources -> controllers -> configs) so a
+     # fresh bootstrap doesn't apply this tenant's ExternalSecret/IngressRoute/
+     # etc. before the ESO/cert-manager/Traefik CRDs exist. Mirrors apps.yaml.
+     dependsOn:
+       - name: infrastructure-configs
      serviceAccountName: <slug>-flux
      sourceRef:
        kind: GitRepository
@@ -143,23 +181,24 @@ Flux Kustomization name. Keep it a valid DNS label.
      targetNamespace: <slug>
      wait: true
    ```
-4. **Register it** in `kubernetes/clusters/weisssrv/tenants/kustomization.yaml`
+4. **O4 — Register it** in `kubernetes/clusters/weisssrv/tenants/kustomization.yaml`
    (Kustomize does not auto-discover):
    ```yaml
    resources:
-     - <slug>.yaml   # add this line
+     - tenant-crd-editor.yaml   # shared ClusterRole (already present)
+     - <slug>.yaml              # add this line
    ```
-5. **Internal DNS (only if the tenant needs `<slug>.esweiss.com`)**: add an
+5. **O5 — Internal DNS (only if the tenant needs `<slug>.esweiss.com`)**: add an
    AdGuard rewrite in `ansible/inventories/prod/group_vars/dns.yml`
    (`{domain: "<slug>.{{ internal_domain }}", answer: "192.168.0.101"}`) and run
    the `adguard_home` role. Public `*.ericsweiss.com` needs nothing here —
    external-dns handles it.
-6. **Persistent storage (only if the tenant needs a zvol-backed DB)**: add the
+6. **O6 — Persistent storage (only if the tenant needs a zvol-backed DB)**: add the
    zvol to `hosts.yml` under `k3s-agt-nas-01` (`vm_additional_disks`, next free
    `scsi_slot`, `vzdump_backup: false`), run `task k3s:deploy -- --limit
    k3s-agt-nas-01`, and hand the tenant the PV/PVC + NAS-pin pattern. Children of
    `ssd/appdata` are backed up to `archive` automatically.
-7. **Reachability probe (optional, recommended for user-facing routes)**: the
+7. **O7 — Reachability probe (optional, recommended for user-facing routes)**: the
    tenant's `PrometheusRule` only alerts on replica availability. To also alert
    on end-to-end HTTP/TLS reachability (a broken `IngressRoute`, cert, or DNS
    while replicas stay ready), add the public host to the static blackbox target
@@ -167,7 +206,7 @@ Flux Kustomization name. Keep it a valid DNS label.
    `kubernetes/infrastructure/observability/exporters/blackbox-exporter.yaml`
    (`values.serviceMonitor.targets`) — `module: http_2xx` for an open route or
    `http_sso` for an SSO-gated one.
-8. Branch → MR → merge. Flux reconciles the new tenant on the next cycle.
+8. **O8 — Branch → MR → merge.** Flux reconciles the new tenant on the next cycle.
 
 ### Removal
 

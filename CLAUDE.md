@@ -38,13 +38,14 @@ the short standing-rules version.
 
 ## Conventions
 
-- The placeholder token is `changeme-app` / `changeme-group`. Run
-  `./scripts/rename.sh <app> <group>` once, and grep for leftovers before
-  shipping.
+- The template ships app-slug and GitLab-group placeholders. Run
+  `./scripts/rename.sh <app> <group>` once, then `grep -rn changeme- .` to catch
+  any leftovers before shipping.
 - Register every new manifest in `kubernetes/flux/kustomization.yaml`.
 - `task lint` (yamllint + kustomize build + kubeconform) mirrors CI — run it
   before opening an MR.
-- Version pins: image tags are literal (Renovate bumps them). Pinned CI tool
+- Version pins: image tags are literal — bump them manually or via the opt-in
+  Renovate job (no Renovate bot runs by default; see README). Pinned CI tool
   versions live in `.gitlab-ci.yml`; pre-commit hook revs in
   `.pre-commit-config.yaml`.
 - Follow the shipped manifests as the pattern rather than inventing new shapes.

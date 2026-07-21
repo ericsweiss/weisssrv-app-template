@@ -20,4 +20,5 @@ resources:
   - servicemonitor.yaml
   - prometheusrule.yaml
   - vpa.yaml
+  - pdb.yaml
   # - hpa.yaml   # opt-in: enable horizontal autoscaling (see hpa.yaml header).

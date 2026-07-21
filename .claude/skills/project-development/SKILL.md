@@ -26,8 +26,9 @@ namespace. There is no `kubectl apply` / `helm upgrade` in the normal flow.
 - **Stay inside your one namespace.** A tenant owns exactly one namespace; the
   Flux service account is RBAC-scoped to it. Manifests targeting another
   namespace fail to apply.
-- The placeholder token across the tree is `changeme-app` / `changeme-group`.
-  Run `./scripts/rename.sh <app> <group>` once, or grep for it before shipping.
+- The tree ships app-slug and GitLab-group placeholders. Run
+  `./scripts/rename.sh <app> <group>` once, or `grep -rn changeme- .` for
+  leftovers before shipping.
 
 ## Local loop
 
@@ -82,8 +83,9 @@ doesn't exist in the registry.
 ## Container registry
 
 `registry.git.ericsweiss.com/<group>/<app>` is your image registry. Point
-`deployment.yaml`'s `image:` at a tag there (literal tag; Renovate bumps it) or
-at any upstream image.
+`deployment.yaml`'s `image:` at a tag there (literal tag; bump it manually or
+via the opt-in Renovate job — no Renovate bot runs by default) or at any
+upstream image.
 
 Images are built **outside this pipeline**. The shared runner is non-privileged
 AND runs jobs as a non-root UID, so it cannot build container images (no

@@ -28,7 +28,9 @@ the shared runner can't build them; see [step 3](#3-set-your-image).)
 
 ### 1. Create the project
 
-In GitLab: **New project → Create from template → (this template)**. Clone it.
+In GitLab: **Fork this project** and clone it. (You can use **New project →
+Create from template** instead only if the operator registered this as a
+group/instance custom template — otherwise it won't show up in the picker.)
 
 ### 2. Rename (the 3 things you set)
 
@@ -36,8 +38,9 @@ In GitLab: **New project → Create from template → (this template)**. Clone i
 ./scripts/rename.sh <app-slug> <gitlab-group>
 ```
 
-This replaces the placeholder tokens `changeme-app` / `changeme-group`
-everywhere. The three things you're really setting:
+This substitutes the app-slug and GitLab-group placeholders across the tree
+(`grep -rn changeme- .` afterward to confirm none are left). The three things
+you're really setting:
 
 1. **App slug** — also your Kubernetes namespace and Flux Kustomization name.
    Keep it a valid DNS label (`recipe-box`, not `Recipe_Box`).
@@ -49,8 +52,9 @@ everywhere. The three things you're really setting:
 ### 3. Set your image
 
 Point `kubernetes/flux/deployment.yaml`'s `image:` at any image. Tags are
-**literal pins** — [Renovate](renovate.json) keeps them current (there's no
-Flux `${var}` substitution for tenant repos).
+**literal pins** — there's no Flux `${var}` substitution for tenant repos, and
+no Renovate bot runs for you (see [Keeping image tags
+current](#keeping-image-tags-current)).
 
 If you build your own image, build it **outside this pipeline**. The shared CI
 runner is non-privileged **and** runs jobs as a non-root UID, so it cannot build
@@ -69,6 +73,23 @@ git switch -c my-change && git commit -am "feat: ..." && git push -u origin my-c
 
 Open the MR. On merge, Flux reconciles — assuming the operator has wired your
 repo once (below).
+
+---
+
+## Keeping image tags current
+
+Image tags in `kubernetes/flux/deployment.yaml` are **literal pins**. There is
+**no hosted Renovate** on `git.ericsweiss.com` (weisssrv defers it too — see its
+`docs/16` roadmap), so the shipped `renovate.json` is inert until something runs
+it. Two ways to keep pins fresh:
+
+- **Manual** (simplest): bump the tag on a branch, open an MR, merge — mirroring
+  weisssrv's `task maintenance:check-versions` habit.
+- **Self-hosted Renovate**: enable the commented `renovate` job in
+  `.gitlab-ci.yml` (create a weekly pipeline schedule + a masked `RENOVATE_TOKEN`
+  project variable), or point the hosted Renovate GitLab app at your project.
+  `renovate.json`'s `hostRules` documents the private-registry host; the bot must
+  supply that registry's credentials in its own config.
 
 ---
 
@@ -123,12 +144,15 @@ Public is fully self-serve; internal needs one operator step.
   `for`/`severity`/`runbook` convention.
 - **Logs** ship to Loki via the Alloy DaemonSet automatically.
 
-## Autoscaling (by default)
+## Autoscaling & resilience (by default)
 
 - `vpa.yaml` — VPA `updateMode: Initial` right-sizes the pod on natural
   restarts.
-- `hpa.yaml` — opt-in HPA + PodDisruptionBudget. Enable it, drop `replicas` from
-  the Deployment, and make the VPA memory-only so the two don't fight over CPU.
+- `pdb.yaml` — a `minAvailable: 1` PodDisruptionBudget (always on) so a kured
+  node-drain can't take both default replicas down at once.
+- `hpa.yaml` — opt-in HPA. Enable it, drop `replicas` from the Deployment, and
+  make the VPA memory-only so the two don't fight over CPU (keep
+  `minReplicas >= 2` so the PDB stays satisfiable).
 
 ---
 
@@ -203,7 +227,8 @@ kubernetes/flux/     # what Flux reconciles into your namespace
   servicemonitor.yaml
   prometheusrule.yaml
   vpa.yaml
-  hpa.yaml           #   opt-in autoscaling (commented)
+  pdb.yaml           #   default PodDisruptionBudget (minAvailable: 1)
+  hpa.yaml           #   opt-in HPA (commented)
   kustomization.yaml
 .gitlab-ci.yml       # build -> lint -> validate -> security -> ai-review
 Taskfile.yml         # local dev wrappers

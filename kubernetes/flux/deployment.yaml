@@ -4,8 +4,10 @@
 # restricted). Swap the image, port, probe paths, and resources for your app.
 #
 # Image tag is a LITERAL pin (Flux postBuild `${var}` substitution is
-# weisssrv-internal and is NOT available to tenants). Renovate keeps the tag
-# current — see renovate.json. Point this at the image your CI builds
+# weisssrv-internal and is NOT available to tenants). renovate.json is provided,
+# but NO Renovate bot runs against this self-hosted GitLab by default — bump the
+# tag yourself or enable self-hosted Renovate (see README "Keeping image tags
+# current"). Point this at the image your CI builds
 # (registry.git.ericsweiss.com/<group>/<app>) or any upstream image.
 apiVersion: apps/v1
 kind: Deployment
@@ -89,6 +91,17 @@ spec:
               drop:
                 - ALL
           # Adjust paths to your app's health endpoints.
+          # A slow-booting image can be killed by the livenessProbe before it
+          # ever comes up (here: ~15s + 3*20s ≈ 75s of grace). If yours needs
+          # longer, uncomment this startupProbe — while it runs, the liveness
+          # and readiness probes are held off, and failureThreshold*periodSeconds
+          # (300s below) is the real startup budget.
+          # startupProbe:
+          #   httpGet:
+          #     path: /
+          #     port: http
+          #   periodSeconds: 10
+          #   failureThreshold: 30
           readinessProbe:
             httpGet:
               path: /
