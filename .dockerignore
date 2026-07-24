@@ -1,0 +1,37 @@
+# Keep the build context small: exclude VCS, the Kubernetes/Flux + CI surface,
+# docs, and agent/editor config. Add your build outputs (dist/, target/,
+# node_modules/, __pycache__/) as your app grows. Leave your application source
+# (this placeholder needs none — it generates its page in the Dockerfile).
+.git/
+.gitignore
+.gitattributes
+
+# Deploy + CI surface (never needed inside the image).
+kubernetes/
+.gitlab/
+.gitlab-ci.yml
+Taskfile.yml
+.yamllint
+.pre-commit-config.yaml
+.gitleaks.toml
+.editorconfig
+
+# Docs + agent/editor guidance.
+docs/
+*.md
+.claude/
+.cursor/
+.cursorrules
+LICENSE
+CODEOWNERS
+
+# Tooling scripts (the rename wrapper, the docs link checker).
+scripts/
+
+# Common local build artifacts.
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+target/
