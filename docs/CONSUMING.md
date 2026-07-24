@@ -85,9 +85,15 @@ include:
   to move them.
 
 The jobs the pipeline includes: `yaml-lint`, `flux-lint` (simple/`substitute:
-false` mode — literal image pins, no cluster-versions ConfigMap), `shellcheck`,
-`docs-link-check`, and `secret_detection`. `pr-agent-review` stays defined
-locally (the library ships no pr-agent template) as a BYO-keys job.
+false` mode — literal image pins, no cluster-versions ConfigMap; `k8s_version`
+is pinned here since it's the cluster's k8s minor, a per-consumer fact),
+`shellcheck`, `docs-link-check`, `secret_detection`, and `build-image` (the
+service image — on the privileged runner; see below). `pr-agent-review` stays
+defined locally (the library ships no pr-agent template) as a BYO-keys job.
+
+`scripts/check-doc-links.py` is a **vendored copy** of the library's stdlib-only
+link checker — the `docs-link-check` job runs it from this path. Re-vendor it
+(copy from the pinned library tag) when you bump the library `ref:`.
 
 ---
 
@@ -107,7 +113,7 @@ never half-mutates the repo.
 | **PodDisruptionBudget** (`pdb.yaml`) | on | `prune pdb`, or `prune single-replica` (also sets `replicas: 1`) |
 | **ServiceMonitor + scrape policy** | on | `prune metrics` (drops servicemonitor + the observability-scrape NetworkPolicy) |
 | **ExternalSecret** (secrets) | on (1Password backend) | `prune secrets` (drops the manifest + the deployment secret env block) |
-| **Image build** (`Dockerfile`) | on (placeholder) | `prune image-build` (deletes Dockerfile/.dockerignore) for an upstream image |
+| **Image build** (`Dockerfile` + `build-image` CI job) | on (active) | `prune image-build` deletes Dockerfile/.dockerignore; also remove the build include from `.gitlab-ci.yml` for a no-build (upstream-image) project |
 | **Any single manifest** | — | `prune manifest:<file>` (deletes it + its kustomization entry) |
 | **Plain (non-k8s) repo** | — | delete `kubernetes/flux/` entirely; keep only the lint/secret-detection CI |
 
@@ -125,27 +131,27 @@ provisions your `ClusterSecretStore` for (see [ONBOARDING.md](ONBOARDING.md));
 
 ## Building the service image
 
-The template ships a repo-root **`Dockerfile`** (a non-root placeholder serving
-`:8080`) so the build path works on day one. Three ways an image gets built:
+Building the service image is **the main use case, and it is on by default**:
+the template ships a repo-root **`Dockerfile`** (a non-root placeholder serving
+`:8080`) and an **active `build-image` CI job**. Replace the placeholder with
+your app's real build, keeping it non-root (UID 65532) and read-only-rootfs
+friendly so it satisfies the namespace's Pod Security Admission baseline.
 
-1. **Locally** — `task build` (your workstation's Docker daemon), then push to
-   `registry.git.ericsweiss.com/<group>/<app>` (log in with a project deploy
-   token or a PAT). Point `deployment.yaml`'s `image:` at that tag.
-2. **Opt-in CI build** — uncomment the `ci/build/docker-build.yml` include in
-   `.gitlab-ci.yml`. It builds the repo-root Dockerfile and pushes
+1. **CI build (default, active)** — the `ci/build/docker-build.yml` include in
+   `.gitlab-ci.yml` builds the repo-root Dockerfile on every MR/main and pushes
    `$CI_REGISTRY_IMAGE:<short-sha>` (+ `:latest` on main; `$CI_REGISTRY_*` are
-   GitLab built-ins, no key to bring). **It needs a PRIVILEGED runner** —
-   Docker-in-Docker cannot run on the shared, non-privileged tenant runner, so
-   `tags: ["infrastructure"]` (weisssrv's privileged runner, reserved for the
-   platform repo) or your **own** registered privileged runner is required.
-   Retag the include accordingly.
-3. **Upstream image / external CI** — if you don't build here at all, run
-   `weisssrv-new-project prune image-build` to drop the Dockerfile and point
+   GitLab built-ins, no key to bring). It **needs a PRIVILEGED runner** —
+   Docker-in-Docker cannot run on the shared, non-privileged tenant runner — so
+   it is tagged `tags: ["infrastructure"]` (weisssrv's privileged runner). Retag
+   it to your **own** privileged runner if you registered one. Point
+   `deployment.yaml`'s `image:` at the pushed tag.
+2. **Locally** — `task build` (your workstation's Docker daemon), then push to
+   `registry.git.ericsweiss.com/<group>/<app>` (log in with a project deploy
+   token or a PAT).
+3. **Upstream image (no build)** — for the rare project that builds nothing,
+   remove the `build-image` include from `.gitlab-ci.yml` and run
+   `weisssrv-new-project prune image-build` to drop the Dockerfile, then point
    `image:` at any existing image.
-
-The shipped `Dockerfile` is a placeholder — replace it with your app's real
-build, keeping it non-root (UID 65532) and read-only-rootfs friendly so it
-satisfies the namespace's Pod Security Admission baseline.
 
 ---
 
@@ -160,8 +166,8 @@ key just means the dependent job/component isn't active.
 |---|---|---|
 | `OP_SERVICE_ACCOUNT_TOKEN` **or** GitLab CI/CD variables | the ExternalSecret backend | Which one depends on the `ClusterSecretStore` the operator provisions (`onepassword-<slug>` vs `gitlab-<slug>`). 1Password item keys are prefixed `"<slug>: <Item>"`. |
 | `AI_REVIEW_OPENAI_KEY` + `GITLAB_REVIEW_TOKEN` | `pr-agent-review` (AI code review) | Both masked. Absent them the job isn't created (e.g. fork MRs). 1Password users source these from their vault when SETTING the variables — the shared runner can't run the op CLI at job time. |
-| `$CI_REGISTRY` / `$CI_REGISTRY_USER` / `$CI_REGISTRY_PASSWORD` | the opt-in CI image build | GitLab **built-ins** — nothing to set. Registry is `registry.git.ericsweiss.com/<group>/<app>`. |
-| A **privileged runner** | the opt-in CI image build only | The shared runner is non-privileged; DinD needs `--privileged`. Register your own and retag the build include, or omit the build job. |
+| `$CI_REGISTRY` / `$CI_REGISTRY_USER` / `$CI_REGISTRY_PASSWORD` | the (active) CI image build | GitLab **built-ins** — nothing to set. Registry is `registry.git.ericsweiss.com/<group>/<app>`. |
+| A **privileged runner** | the (active) CI image build | Tagged `infrastructure` by default. The shared runner is non-privileged; DinD needs `--privileged`. Retag to your own privileged runner, or (rare) remove the build include for a no-build project. |
 | Authentik provider/application objects | SSO (`wire sso`) | Operator-provisioned (codified in weisssrv's `terraform/authentik`); the middleware only references them. |
 | A read-only `kubeconfig` / cluster agent | local `task flux:status` / `secrets:check` | Operator-provided. Never used to deploy — Flux owns that; these are read-only checks. |
 

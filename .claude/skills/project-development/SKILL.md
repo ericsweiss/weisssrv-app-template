@@ -87,23 +87,25 @@ doesn't exist in the registry.
 `deployment.yaml`'s `image:` at a tag there (literal tag; bump it yourself in an
 MR — there is no hosted dependency bot) or at any upstream image.
 
-A placeholder `Dockerfile` ships. The shared runner is non-privileged and can't
-run Docker-in-Docker, so the CI image build is **opt-in**: uncomment the
-library's `ci/build/docker-build.yml` include in `.gitlab-ci.yml` and retag it to
-a privileged runner. By default, build locally with `task build` and push (log in
-with a project deploy token or a PAT), then set `image:`. For an upstream image,
-`weisssrv-new-project prune image-build` drops the Dockerfile. See
-`docs/CONSUMING.md`.
+A placeholder `Dockerfile` ships and the CI **builds the service image by
+default** (the `build-image` job, the library's `ci/build/docker-build.yml`).
+Docker-in-Docker can't run on the shared non-privileged runner, so that job is
+tagged `infrastructure` (a privileged runner) — retag it if you register your
+own. Replace the placeholder Dockerfile with your app's real build, and point
+`image:` at the pushed tag (`$CI_REGISTRY_IMAGE:<short-sha>`). You can also build
+locally with `task build`. For an upstream image (no build), remove the build
+include and run `weisssrv-new-project prune image-build`. See `docs/CONSUMING.md`.
 
 ## Runner limits
 
 CI runs on the shared, non-privileged `k8s-deploy` runner: internet egress only,
 no LAN/tailnet, no SSH, no Docker-in-Docker, and every job runs as a non-root
-UID. The generic jobs are included from `eric/weisssrv-lib` with `tags: []` so
-they land here. Lint, kubeconform, secret scanning, and registry push all work;
-**building container images needs a PRIVILEGED runner** (the opt-in build job —
-retag it, or build locally with `task build`), as does anything needing LAN
-access or privileged Docker.
+UID. The lint/validate/security jobs are included from `eric/weisssrv-lib` with
+`tags: []` so they land here. Lint, kubeconform, secret scanning, and registry
+push all work; **building container images needs a PRIVILEGED runner** — the
+`build-image` job is therefore tagged `infrastructure` (retag it, or build
+locally with `task build`), as is anything needing LAN access or privileged
+Docker.
 
 ## Shared library + consumption (this repo)
 

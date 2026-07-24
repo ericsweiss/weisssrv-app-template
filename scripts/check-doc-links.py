@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# VENDORED from eric/weisssrv-lib (scripts/check-doc-links.py). It is kept in
+# this repo (not an include) because the docs-link-check CI job runs it from
+# this path. Re-vendor it when you bump the library ref: copy the file from the
+# pinned library tag.
 """Offline checker for relative Markdown cross-links in the repo's docs.
 
 docs/ and the top-level READMEs are the declared source of truth (CLAUDE.md),

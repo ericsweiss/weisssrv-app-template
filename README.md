@@ -16,9 +16,8 @@ homelab k3s cluster. Create from it and you get, on day one:
 
 Flux (GitOps) does the deploying: you edit YAML, open a merge request, and on
 merge to `main` the cluster reconciles this repo into your namespace. There is
-no `kubectl apply` in the normal flow. A placeholder `Dockerfile` ships so
-`task build` (and the opt-in CI build job) work on day one; see
-[step 3](#3-set-your-image).
+no `kubectl apply` in the normal flow. A placeholder `Dockerfile` ships and the
+CI **builds your service image by default**; see [step 3](#3-set-your-image).
 
 > New here? [`docs/CONSUMING.md`](docs/CONSUMING.md) covers the two ways to
 > create a project (fork or the `weisssrv-new-project` CLI), the optional
@@ -72,17 +71,20 @@ Point `kubernetes/flux/deployment.yaml`'s `image:` at any image. Tags are
 hosted dependency bot, so bump them yourself (see [Keeping image tags
 current](#keeping-image-tags-current)).
 
-A placeholder `Dockerfile` ships so there's a real build target. Three ways to
-build (full detail in [`docs/CONSUMING.md`](docs/CONSUMING.md)):
+A placeholder `Dockerfile` ships as the buildable default — **replace it with
+your service's real build**. Three ways an image gets built (full detail in
+[`docs/CONSUMING.md`](docs/CONSUMING.md)):
 
+- **CI build (default)** — the `ci/build/docker-build.yml` include builds the
+  repo-root Dockerfile on every MR/main and pushes
+  `$CI_REGISTRY_IMAGE:<short-sha>` (+ `:latest` on main). It runs on a
+  **privileged runner** (Docker-in-Docker), tagged `infrastructure` — retag it
+  to your own privileged runner if you have one; see [CI runner](#ci-runner).
 - **Locally** — `task build`, then push to
   `registry.git.ericsweiss.com/<group>/<slug>:<tag>`.
-- **Opt-in CI build** — uncomment the `ci/build/docker-build.yml` include in
-  `.gitlab-ci.yml`. It needs a **privileged runner**: the shared tag-less runner
-  is non-privileged and can't run Docker-in-Docker, so retag the job to
-  weisssrv's `infrastructure` runner or your own — see [CI runner](#ci-runner).
-- **Upstream image** — `weisssrv-new-project prune image-build` drops the
-  Dockerfile and points `image:` at any existing image.
+- **Upstream image (no build)** — for the rare project that builds nothing,
+  remove the build include from `.gitlab-ci.yml` and run `weisssrv-new-project
+  prune image-build` to drop the Dockerfile, then point `image:` at any image.
 
 ### 4. Ship
 
@@ -207,13 +209,13 @@ kubeconform, secret scanning, and the container registry all work; there is
 **no LAN/tailnet access and no SSH**. Deploys go through Flux, never a CI
 `kubectl apply`.
 
-The runner is non-privileged **and runs every job as a non-root UID**, so it
-**can't build container images** (Docker-in-Docker needs `--privileged`). The
-image build is therefore an **opt-in** job: `.gitlab-ci.yml` carries a
-commented, ready-to-uncomment `ci/build/docker-build.yml` include that you retag
-to a privileged runner (weisssrv's `infrastructure` runner, reserved for the
-platform repo, or one you register). By default, build locally with `task build`
-and push, then point `image:` at the tag. See
+The shared runner is non-privileged **and runs every job as a non-root UID**, so
+it **can't build container images** (Docker-in-Docker needs `--privileged`). The
+`build-image` job is therefore tagged `infrastructure` so it lands on weisssrv's
+privileged runner instead — retag it if you register your own. Everything else
+(lint, kubeconform, secret scanning, registry push) runs tag-less on the shared
+runner. For a project that builds nothing, remove the build include and run
+`weisssrv-new-project prune image-build`. See
 [`docs/CONSUMING.md`](docs/CONSUMING.md).
 
 ---
