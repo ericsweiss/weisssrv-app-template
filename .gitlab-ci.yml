@@ -120,6 +120,11 @@ include:
     inputs:
       tags: ["infrastructure"]       # a PRIVILEGED runner (retag to yours)
       dockerfile: "Dockerfile"
+      # This instance's runners validate the node-selector override against
+      # ^esweiss\.com/cpu=(modern|legacy)$ — the library's default ("") is
+      # rejected, so pin the build to modern-CPU nodes. Drop/adjust if your
+      # runner has no node_selector_overwrite_allowed restriction.
+      cpu_selector: "esweiss.com/cpu=modern"
       # image_name: ""               # default: push to the $CI_REGISTRY_IMAGE base
       # context: "."
       # publish_on_main: true        # push :latest on main (always pushes :<sha>)
