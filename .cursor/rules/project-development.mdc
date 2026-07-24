@@ -21,3 +21,6 @@ Key standing rules (the skill has the detail):
 - Never commit secrets — reference them from `ExternalSecret` manifests.
 - Containers stay non-root with a read-only root filesystem; no `latest` tags.
 - Stay within your single namespace.
+- CI is included from the shared `eric/weisssrv-lib` library at a pinned tag (do
+  not re-inline it); scaffold with the `weisssrv-new-project` CLI — see
+  `docs/CONSUMING.md`.

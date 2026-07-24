@@ -10,16 +10,22 @@ homelab k3s cluster. Create from it and you get, on day one:
 - **default-deny NetworkPolicies**, a **ServiceMonitor**, down/stale **alerts**,
   and a **VPA** — observability and autoscaling without extra work,
 - **CI** that lints, schema-validates the manifests, and scans for secrets on
-  every merge request.
+  every merge request — pulled from the shared
+  [`eric/weisssrv-lib`](https://git.ericsweiss.com/eric/weisssrv-lib) library at
+  a pinned tag, not hand-rolled here.
 
 Flux (GitOps) does the deploying: you edit YAML, open a merge request, and on
 merge to `main` the cluster reconciles this repo into your namespace. There is
-no `kubectl apply` in the normal flow. (Container images are built outside CI —
-the shared runner can't build them; see [step 3](#3-set-your-image).)
+no `kubectl apply` in the normal flow. A placeholder `Dockerfile` ships so
+`task build` (and the opt-in CI build job) work on day one; see
+[step 3](#3-set-your-image).
 
-> New here? The agent skill in `.claude/skills/project-development/` and
+> New here? [`docs/CONSUMING.md`](docs/CONSUMING.md) covers the two ways to
+> create a project (fork or the `weisssrv-new-project` CLI), the optional
+> components you can toggle, the image-build story, and the keys you bring. The
+> agent skill in `.claude/skills/project-development/` and
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explain how a tenant app rides
-> the platform. Operator/tenant checklists are in
+> the platform; operator/tenant checklists are in
 > [`docs/ONBOARDING.md`](docs/ONBOARDING.md).
 
 ---
@@ -38,9 +44,19 @@ group/instance custom template — otherwise it won't show up in the picker.)
 ./scripts/rename.sh <app-slug> <gitlab-group>
 ```
 
-This substitutes the app-slug and GitLab-group placeholders across the tree
-(`grep -rn changeme- .` afterward to confirm none are left). The three things
-you're really setting:
+`scripts/rename.sh` is a thin wrapper over the library's `weisssrv-new-project`
+CLI. For choosing components (not just renaming), use the CLI directly — it can
+`prune` what you don't need and `wire` opt-ins structurally, then `verify`:
+
+```bash
+weisssrv-new-project rename <app-slug> <gitlab-group>
+weisssrv-new-project prune metrics single-replica   # optional
+weisssrv-new-project wire  hpa                       # optional
+```
+
+See [`docs/CONSUMING.md`](docs/CONSUMING.md) for install + the full toggle list.
+Either way, `grep -rn changeme- .` afterward confirms no placeholders are left.
+The three things you're really setting:
 
 1. **App slug** — also your Kubernetes namespace and Flux Kustomization name.
    Keep it a valid DNS label (`recipe-box`, not `Recipe_Box`).
@@ -56,13 +72,17 @@ Point `kubernetes/flux/deployment.yaml`'s `image:` at any image. Tags are
 hosted dependency bot, so bump them yourself (see [Keeping image tags
 current](#keeping-image-tags-current)).
 
-If you build your own image, build it **outside this pipeline**. The shared CI
-runner is non-privileged **and** runs jobs as a non-root UID, so it cannot build
-container images (no Docker-in-Docker, and kaniko/buildah can't unpack a base
-image as a non-root user) — see [CI runner](#ci-runner). Build locally with
-`task build` and push, or use an external CI with a privileged builder (e.g.
-GitHub Actions), then point `image:` at
-`registry.git.ericsweiss.com/<group>/<slug>:<tag>`.
+A placeholder `Dockerfile` ships so there's a real build target. Three ways to
+build (full detail in [`docs/CONSUMING.md`](docs/CONSUMING.md)):
+
+- **Locally** — `task build`, then push to
+  `registry.git.ericsweiss.com/<group>/<slug>:<tag>`.
+- **Opt-in CI build** — uncomment the `ci/build/docker-build.yml` include in
+  `.gitlab-ci.yml`. It needs a **privileged runner**: the shared tag-less runner
+  is non-privileged and can't run Docker-in-Docker, so retag the job to
+  weisssrv's `infrastructure` runner or your own — see [CI runner](#ci-runner).
+- **Upstream image** — `weisssrv-new-project prune image-build` drops the
+  Dockerfile and points `image:` at any existing image.
 
 ### 4. Ship
 
@@ -188,11 +208,13 @@ kubeconform, secret scanning, and the container registry all work; there is
 `kubectl apply`.
 
 The runner is non-privileged **and runs every job as a non-root UID**, so it
-**can't build container images** (no Docker-in-Docker, and kaniko/buildah can't
-unpack a base image as a non-root user). There is no CI build job — build your
-image elsewhere (`task build` locally, or an external privileged CI) and point
-`image:` at it. If you register your own privileged runner, `.gitlab-ci.yml`
-carries a commented example build job you can retag for it.
+**can't build container images** (Docker-in-Docker needs `--privileged`). The
+image build is therefore an **opt-in** job: `.gitlab-ci.yml` carries a
+commented, ready-to-uncomment `ci/build/docker-build.yml` include that you retag
+to a privileged runner (weisssrv's `infrastructure` runner, reserved for the
+platform repo, or one you register). By default, build locally with `task build`
+and push, then point `image:` at the tag. See
+[`docs/CONSUMING.md`](docs/CONSUMING.md).
 
 ---
 
@@ -225,10 +247,13 @@ kubernetes/flux/     # what Flux reconciles into your namespace
   pdb.yaml           #   default PodDisruptionBudget (minAvailable: 1)
   hpa.yaml           #   opt-in HPA (commented)
   kustomization.yaml
-.gitlab-ci.yml       # build -> lint -> validate -> security -> ai-review
+Dockerfile           # placeholder service image (task build / opt-in CI build)
+.dockerignore
+.gitlab-ci.yml       # includes eric/weisssrv-lib templates @ a pinned tag
 Taskfile.yml         # local dev wrappers
-scripts/rename.sh    # placeholder replacement
-docs/                # ARCHITECTURE.md, ONBOARDING.md
+scripts/rename.sh    # thin wrapper over the weisssrv-new-project CLI
+scripts/check-doc-links.py  # offline Markdown link checker (docs-link-check job)
+docs/                # CONSUMING.md, ARCHITECTURE.md, ONBOARDING.md
 .claude/             # agent settings + project-development skill
 ```
 

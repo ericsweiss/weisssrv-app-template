@@ -27,8 +27,9 @@ namespace. There is no `kubectl apply` / `helm upgrade` in the normal flow.
   Flux service account is RBAC-scoped to it. Manifests targeting another
   namespace fail to apply.
 - The tree ships app-slug and GitLab-group placeholders. Run
-  `./scripts/rename.sh <app> <group>` once, or `grep -rn changeme- .` for
-  leftovers before shipping.
+  `./scripts/rename.sh <app> <group>` (a wrapper over the `weisssrv-new-project`
+  CLI's `rename`; the CLI also `prune`s / `wire`s optional components — see
+  `docs/CONSUMING.md`), or `grep -rn changeme- .` for leftovers before shipping.
 
 ## Local loop
 
@@ -86,20 +87,32 @@ doesn't exist in the registry.
 `deployment.yaml`'s `image:` at a tag there (literal tag; bump it yourself in an
 MR — there is no hosted dependency bot) or at any upstream image.
 
-Images are built **outside this pipeline**. The shared runner is non-privileged
-AND runs jobs as a non-root UID, so it cannot build container images (no
-Docker-in-Docker, and kaniko/buildah can't unpack a base image as a non-root
-user). Build locally with `task build` and push (log in with a project deploy
-token or a PAT), or build in an external CI with a privileged builder, then set
-`image:`.
+A placeholder `Dockerfile` ships. The shared runner is non-privileged and can't
+run Docker-in-Docker, so the CI image build is **opt-in**: uncomment the
+library's `ci/build/docker-build.yml` include in `.gitlab-ci.yml` and retag it to
+a privileged runner. By default, build locally with `task build` and push (log in
+with a project deploy token or a PAT), then set `image:`. For an upstream image,
+`weisssrv-new-project prune image-build` drops the Dockerfile. See
+`docs/CONSUMING.md`.
 
 ## Runner limits
 
 CI runs on the shared, non-privileged `k8s-deploy` runner: internet egress only,
 no LAN/tailnet, no SSH, no Docker-in-Docker, and every job runs as a non-root
-UID. Lint, kubeconform, secret scanning, and registry push all work; **building
-container images does not** (build them externally), and anything needing LAN
-access or privileged Docker does not.
+UID. The generic jobs are included from `eric/weisssrv-lib` with `tags: []` so
+they land here. Lint, kubeconform, secret scanning, and registry push all work;
+**building container images needs a PRIVILEGED runner** (the opt-in build job —
+retag it, or build locally with `task build`), as does anything needing LAN
+access or privileged Docker.
+
+## Shared library + consumption (this repo)
+
+- `docs/CONSUMING.md` — the two instantiation paths, library consumption +
+  bumping, optional-enablement toggles, the image build, and BYO-keys.
+- Library include contract (each CI template's inputs):
+  https://git.ericsweiss.com/eric/weisssrv-lib/-/blob/main/docs/INCLUDE-CONTRACT.md
+- Library versioning / tag pinning:
+  https://git.ericsweiss.com/eric/weisssrv-lib/-/blob/main/docs/VERSIONING.md
 
 ## Canonical weisssrv docs (authoritative — read these for platform detail)
 

@@ -14,6 +14,12 @@ request, and on merge to `main` the operator-side Flux `Kustomization`
 reconciles this repo into your namespace. There is no `kubectl apply` /
 `helm upgrade` in the normal workflow.
 
+The generic CI (lint / flux-lint / shellcheck / docs-link-check /
+secret-detection) is **included from the shared `eric/weisssrv-lib` library** at
+a pinned tag in `.gitlab-ci.yml` — do not re-inline those jobs; change behavior
+by bumping the library `ref:` or adjusting the `inputs:`. See
+[`docs/CONSUMING.md`](docs/CONSUMING.md).
+
 A task-oriented walkthrough lives in the `project-development` skill
 (`.claude/skills/project-development/SKILL.md`) — read it for the local loop,
 Flux debugging, and the secret/routing/observability conventions. This file is
@@ -39,8 +45,10 @@ the short standing-rules version.
 ## Conventions
 
 - The template ships app-slug and GitLab-group placeholders. Run
-  `./scripts/rename.sh <app> <group>` once, then `grep -rn changeme- .` to catch
-  any leftovers before shipping.
+  `./scripts/rename.sh <app> <group>` (a thin wrapper over the
+  `weisssrv-new-project` CLI's `rename`) once, then `grep -rn changeme- .` to
+  catch any leftovers before shipping. The CLI also `prune`s / `wire`s optional
+  components structurally — see [`docs/CONSUMING.md`](docs/CONSUMING.md).
 - Register every new manifest in `kubernetes/flux/kustomization.yaml`.
 - `task lint` (yamllint + kustomize build + kubeconform) mirrors CI — run it
   before opening an MR.
@@ -62,5 +70,7 @@ Do not copy platform detail into this repo; link to the source:
 
 ## Repo-local docs
 
+- [`docs/CONSUMING.md`](docs/CONSUMING.md) — the two instantiation paths, library
+  consumption + bumping, optional-enablement toggles, image build, BYO-keys.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — request/secret/ingress flow.
 - [`docs/ONBOARDING.md`](docs/ONBOARDING.md) — tenant + operator checklists.

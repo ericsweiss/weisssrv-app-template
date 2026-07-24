@@ -18,8 +18,10 @@ Flux Kustomization name. Keep it a valid DNS label.
    this template as a group/instance custom template — otherwise it won't
    appear in the picker.)
 2. **Rename**: `./scripts/rename.sh <slug> <gitlab-group>` substitutes the
-   app-slug and GitLab-group placeholders across the tree. Review `git diff`,
-   then `grep -rn changeme- .` to confirm nothing was missed.
+   app-slug and GitLab-group placeholders across the tree (it wraps the
+   `weisssrv-new-project` CLI). Review `git diff`, then `grep -rn changeme- .`
+   to confirm nothing was missed. To also drop/enable optional components, use
+   the CLI's `prune` / `wire` — see [CONSUMING.md](CONSUMING.md).
 3. **Set the image** in `kubernetes/flux/deployment.yaml` — an upstream image,
    or one you build (locally with `task build`, or via the opt-in CI build-image
    job on a privileged runner) and push to
