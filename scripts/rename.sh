@@ -23,7 +23,7 @@ set -euo pipefail
 
 # Pin the library version the CLI is fetched from (override with the env var to
 # track a newer tag). Keep this in step with the ref: in .gitlab-ci.yml.
-LIB_REF="${WEISSSRV_LIB_REF:-v0.1.0}"
+LIB_REF="${WEISSSRV_LIB_REF:-v0.1.1}"
 LIB_SPEC="git+https://git.ericsweiss.com/eric/weisssrv-lib.git@${LIB_REF}#subdirectory=cli"
 
 if command -v weisssrv-new-project >/dev/null 2>&1; then

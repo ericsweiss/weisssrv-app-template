@@ -37,7 +37,7 @@ workflow:
 include:
   # -- yaml-lint: lint the whole tree against the repo-local .yamllint --------
   - project: eric/weisssrv-lib
-    ref: v0.1.0
+    ref: v0.1.1
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
@@ -57,7 +57,7 @@ include:
   # pinned here: it is the cluster's k8s minor kubeconform validates against, a
   # per-consumer fact (k3s v1.36.x today), not a library-owned tool version.
   - project: eric/weisssrv-lib
-    ref: v0.1.0
+    ref: v0.1.1
     file: /ci/validate/flux-lint.yml
     inputs:
       tags: []
@@ -68,7 +68,7 @@ include:
 
   # -- shellcheck: lint the scripts/ helpers (the rename wrapper) -------------
   - project: eric/weisssrv-lib
-    ref: v0.1.0
+    ref: v0.1.1
     file: /ci/lint/shellcheck.yml
     inputs:
       tags: []
@@ -81,7 +81,7 @@ include:
   # Runs the vendored, stdlib-only scripts/check-doc-links.py (copied from the
   # library). Scans docs/ + README.md + CLAUDE.md.
   - project: eric/weisssrv-lib
-    ref: v0.1.0
+    ref: v0.1.1
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
@@ -99,7 +99,7 @@ include:
   # To make a secret finding HARD-BLOCK the pipeline, add
   # `inputs: { allow_failure: false }`.
   - project: eric/weisssrv-lib
-    ref: v0.1.0
+    ref: v0.1.1
     file: /ci/security/secret-detection.yml
 
   # -- build-image: build THIS service's container image (the main use case) --
@@ -115,7 +115,7 @@ include:
   # `weisssrv-new-project prune image-build` to drop the Dockerfile. See
   # docs/CONSUMING.md ("Building the service image").
   - project: eric/weisssrv-lib
-    ref: v0.1.0
+    ref: v0.1.1
     file: /ci/build/docker-build.yml
     inputs:
       tags: ["infrastructure"]       # a PRIVILEGED runner (retag to yours)
@@ -136,7 +136,7 @@ include:
   # would need a remote/HTTP state backend and internet-reachable providers.
   # --------------------------------------------------------------------------
   # - project: eric/weisssrv-lib
-  #   ref: v0.1.0
+  #   ref: v0.1.1
   #   file: /ci/validate/terraform.yml
   #   inputs:
   #     tags: []

@@ -38,7 +38,7 @@ The library ships a `weisssrv-new-project` CLI that goes beyond rename: it can
 then **verify** the result. Install it once, straight from the library:
 
 ```bash
-pipx install --spec 'git+https://git.ericsweiss.com/eric/weisssrv-lib.git@v0.1.0#subdirectory=cli' weisssrv-new-project
+pipx install --spec 'git+https://git.ericsweiss.com/eric/weisssrv-lib.git@v0.1.1#subdirectory=cli' weisssrv-new-project
 # or, from a local library checkout:  pip install ./cli
 
 weisssrv-new-project rename recipe-box eric/apps
@@ -60,7 +60,7 @@ Every generic lint/validate/security job is pulled in `.gitlab-ci.yml` via
 ```yaml
 include:
   - project: eric/weisssrv-lib
-    ref: v0.1.0
+    ref: v0.1.1
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []            # the shared non-privileged tenant runner
