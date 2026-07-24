@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# One-shot rename after forking this template.
+# Thin wrapper around the weisssrv-new-project CLI's `rename` command.
 #
-# Replaces the placeholder tokens `changeme-app` and `changeme-group`
-# throughout the tracked tree with your app slug and GitLab group.
+# The placeholder-substitution logic that used to live here now ships in the
+# shared library's CLI (weisssrv-lib, cli/weisssrv_lib_cli) as `rename`, which
+# supersedes this script — one tested implementation, alongside `prune`, `wire`
+# and `verify`. This wrapper keeps `./scripts/rename.sh <app> <group>` working
+# for the plain "create from template" flow by delegating to that CLI.
 #
 #   ./scripts/rename.sh <app-slug> <gitlab-group>
 #
@@ -10,53 +13,28 @@
 #   ./scripts/rename.sh recipe-box eric          # top-level group
 #   ./scripts/rename.sh recipe-box eric/apps     # nested subgroup
 #
-# The app slug is also your Kubernetes namespace and your Flux Kustomization
-# name, so keep it a valid DNS label (lowercase letters, digits, hyphens). The
-# group is your GitLab namespace path and may be nested (contain slashes).
+# The app slug is also your Kubernetes namespace and Flux Kustomization name, so
+# keep it a valid DNS label (lowercase letters, digits, hyphens). The group is
+# your GitLab namespace path and may be nested (contain slashes). The CLI
+# validates both before touching anything.
+#
+# For prune / wire / verify, call the CLI directly — see docs/CONSUMING.md.
 set -euo pipefail
 
-app="${1:-}"
-group="${2:-}"
+# Pin the library version the CLI is fetched from (override with the env var to
+# track a newer tag). Keep this in step with the ref: in .gitlab-ci.yml.
+LIB_REF="${WEISSSRV_LIB_REF:-v0.1.0}"
+LIB_SPEC="git+https://git.ericsweiss.com/eric/weisssrv-lib.git@${LIB_REF}#subdirectory=cli"
 
-if [ -z "$app" ] || [ -z "$group" ]; then
-    echo "usage: $0 <app-slug> <gitlab-group>" >&2
-    exit 2
+if command -v weisssrv-new-project >/dev/null 2>&1; then
+    exec weisssrv-new-project rename "$@"
+elif command -v pipx >/dev/null 2>&1; then
+    exec pipx run --spec "$LIB_SPEC" weisssrv-new-project rename "$@"
+else
+    echo "error: the weisssrv-new-project CLI is required but was not found." >&2
+    echo "Install it (from a weisssrv-lib checkout, or straight from git):" >&2
+    echo "  pipx install --spec '${LIB_SPEC}' weisssrv-new-project" >&2
+    echo "  # or, from a local library checkout: pip install ./cli" >&2
+    echo "then re-run:  weisssrv-new-project rename $*" >&2
+    exit 1
 fi
-
-if ! printf '%s' "$app" | grep -Eq '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'; then
-    echo "error: app slug '$app' must be a valid DNS label (lowercase, digits, hyphens)" >&2
-    exit 2
-fi
-
-# GitLab namespace path: one or more '/'-separated segments of lowercase
-# alphanumerics plus '.', '_', '-'. Nested subgroups (slashes) are allowed and
-# flow through to the registry image path and CODEOWNERS mention.
-if ! printf '%s' "$group" | grep -Eq '^[a-z0-9]([a-z0-9._-]*[a-z0-9])?(/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*$'; then
-    echo "error: group '$group' must be a GitLab namespace path (lowercase alphanumerics, '.', '_', '-', '/'-separated)" >&2
-    exit 2
-fi
-
-cd "$(dirname "$0")/.."
-
-# Operate only on git-tracked files, skipping this script itself so it stays
-# reusable. NUL-delimited to survive any odd filenames.
-git ls-files -z \
-    | grep -zv '^scripts/rename\.sh$' \
-    | while IFS= read -r -d '' f; do
-        if grep -Iq 'changeme-app\|changeme-group' "$f"; then
-            # In-place edit that works on both GNU and BSD sed. Use '|' as the
-            # delimiter so a nested group path (which contains '/') doesn't
-            # break the substitution — '|' is not valid in a namespace path.
-            tmp="$(mktemp)"
-            sed -e "s|changeme-app|${app}|g" -e "s|changeme-group|${group}|g" "$f" >"$tmp"
-            cat "$tmp" >"$f"
-            rm -f "$tmp"
-            echo "updated $f"
-        fi
-    done
-
-echo
-echo "Done. Review the diff (git diff), then:"
-echo "  - set the container image in kubernetes/flux/deployment.yaml"
-echo "  - update README.md / CODEOWNERS for your project"
-echo "  - request operator wiring (see docs/ONBOARDING.md)"
