@@ -1,30 +1,28 @@
 ---
 # CI for a weisssrv cluster tenant repo.
 #
-# Runner: this pipeline is deliberately TAG-LESS so it lands on the shared,
-# non-privileged `k8s-deploy` runner (weisssrv's `infrastructure` runner is
-# reserved for the platform repo). That runner's egress is firewalled to the
-# internet only — build, lint, kubeconform and the container registry all work;
-# there is NO LAN/tailnet access and NO SSH. Deploys happen through Flux (git
-# is the source of truth), never a CI `kubectl apply`.
+# The generic lint / validate / security jobs are NOT defined here — they are
+# pulled from the shared library `eric/weisssrv-lib` at a pinned release tag, so
+# a tooling/version change is made once in the library and every consumer picks
+# it up by bumping the ref. See docs/CONSUMING.md for the full story and
+# https://git.ericsweiss.com/eric/weisssrv-lib/-/blob/main/docs/INCLUDE-CONTRACT.md
+# for each template's inputs.
 #
-# Keep this file small: add jobs your app actually needs, delete what it does not.
+# Runner: the lint / validate / security jobs are TAG-LESS (they pass
+# `tags: []`) so they land on weisssrv's shared, NON-privileged `k8s-deploy`
+# runner — internet egress only, NO LAN/tailnet, NO SSH, NO Docker-in-Docker.
+# The ONE exception is the image build (docker-build), which needs a privileged
+# runner for Docker-in-Docker and is therefore tagged `infrastructure`. Deploys
+# happen through Flux (git is the source of truth), never a CI `kubectl apply`.
+#
+# Bumping the library: change every `ref:` below to the new tag in one MR (there
+# is no hosted dependency bot — bumps are deliberate). See docs/CONSUMING.md.
 stages:
-  - build
+  - build       # only the OPTIONAL image build lands here (see the include below)
   - lint
-  - validate
+  - validate    # only the OPTIONAL terraform validate lands here
   - security
   - ai-review
-
-variables:
-  # Pinned lint tooling (verified by sha256 before use). Bump deliberately.
-  KUBECONFORM_VERSION: "0.8.0"
-  KUBECONFORM_SHA256: "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883"
-  KUSTOMIZE_VERSION: "5.8.1"
-  KUSTOMIZE_SHA256: "029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d"
-  # kubeconform validates against this Kubernetes minor's API schemas — keep it
-  # on the cluster's k8s version (k3s v1.36.x today).
-  K8S_VERSION: "1.36.0"
 
 workflow:
   rules:
@@ -33,146 +31,136 @@ workflow:
     - if: '$CI_COMMIT_TAG'
 
 # ============================================================================
-# BUILD — container image (built OUTSIDE this pipeline; see below)
-# ============================================================================
-# There is deliberately NO in-CI image build. This pipeline is tag-less, so it
-# lands on weisssrv's shared `k8s-deploy` runner, which is BOTH non-privileged
-# (no Docker-in-Docker) AND runs every job pod as a fixed non-root UID
-# (run_as_user=1000, enforced cluster-side with no per-job override). No image
-# builder works under that combination: docker/DinD needs privilege, and
-# kaniko/buildah/buildkit all have to unpack the base image's root-owned
-# filesystem into the container — which UID 1000 cannot write. A build job here
-# would fail the moment you added a Dockerfile, breaking the green pipeline.
-#
-# So build the image ELSEWHERE and point deployment.yaml's `image:` at it:
-#   * locally with `task build` (your workstation's Docker daemon), then
-#     `docker push registry.git.ericsweiss.com/<group>/<slug>:<tag>`
-#     (log in with a project deploy token or a personal access token), or
-#   * an external CI that has a privileged/root builder (e.g. GitHub Actions), or
-#   * any upstream image you already have — no build needed at all.
-# Image tags are literal pins in deployment.yaml. renovate.json is provided, but
-# NO Renovate bot runs against this self-hosted GitLab by default — bump tags
-# yourself or enable the opt-in renovate job below (see README).
-#
-# If you register your OWN privileged runner for this project, you can add a
-# kaniko/docker build job here and tag it for that runner. The shared runner
-# cannot run it, so it stays out of the template. Example (uncomment + retag):
-#
-# build-image:
-#   stage: build
-#   tags: [your-privileged-runner]
-#   image:
-#     name: gcr.io/kaniko-project/executor:v1.24.0-debug
-#     entrypoint: [""]
-#   before_script:
-#     - mkdir -p /kaniko/.docker
-#     - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf '%s:%s' "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
-#   script:
-#     - /kaniko/executor --context "$CI_PROJECT_DIR" --dockerfile "$CI_PROJECT_DIR/Dockerfile"
-#         --destination "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
-#   rules:
-#     - exists:
-#         - Dockerfile
-
-# ============================================================================
-# LINT
-# ============================================================================
-yaml-lint:
-  stage: lint
-  image: python:3.13-slim
-  needs: []
-  before_script:
-    # Jobs run as a non-root UID on the shared runner, so system site-packages
-    # is not writable. Install into the user site (HOME is a writable emptyDir)
-    # and invoke via `python -m` so no PATH surgery is needed.
-    - pip install --user --quiet "yamllint==1.38.0"
-  script:
-    - python -m yamllint -c .yamllint .
-
-# Render kubernetes/flux and schema-validate it with kubeconform. No Flux
-# postBuild `${var}` substitution here — tenants pin literal image tags (bumped
-# manually or by an opt-in Renovate job), so unlike the weisssrv pipeline there
-# is nothing to envsubst. Tools are pinned and sha256-verified before use.
-flux-lint:
-  stage: lint
-  image: python:3.13-slim
-  needs: []
-  before_script:
-    # Non-root job: no apt-get (dpkg lock is root-only) and /usr/local/bin is
-    # not writable. Download the pinned tools with Python's stdlib (no curl/apt),
-    # verify each tarball's sha256, and extract into a workspace-local bin dir
-    # on PATH. before_script + script share one shell, so the PATH export
-    # carries into script.
-    - |
-      set -e
-      export TOOLS_BIN="$CI_PROJECT_DIR/.bin"
-      mkdir -p "$TOOLS_BIN"
-      fetch_verified() {  # <file> <url> <sha256>
-        python -c "import urllib.request,sys; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" "$2" "/tmp/$1"
-        echo "$3  /tmp/$1" | sha256sum -c -
-      }
-      fetch_verified kubeconform.tar.gz \
-        "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
-        "$KUBECONFORM_SHA256"
-      tar xzf /tmp/kubeconform.tar.gz -C "$TOOLS_BIN" kubeconform
-      fetch_verified kustomize.tar.gz \
-        "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
-        "$KUSTOMIZE_SHA256"
-      tar xzf /tmp/kustomize.tar.gz -C "$TOOLS_BIN" kustomize
-      export PATH="$TOOLS_BIN:$PATH"
-      kubeconform -v && kustomize version
-  script:
-    - |
-      set -eo pipefail
-      export PATH="$CI_PROJECT_DIR/.bin:$PATH"
-      echo "=== kustomize build kubernetes/flux ==="
-      kustomize build kubernetes/flux > /tmp/rendered.yaml
-      echo "=== kubeconform (k8s ${K8S_VERSION}) ==="
-      # -ignore-missing-schemas lets platform CRDs (IngressRoute, Certificate,
-      # ExternalSecret, ServiceMonitor, PrometheusRule, VPA) validate against the
-      # datreeio CRD catalog; core kinds validate against the bundled schemas.
-      kubeconform -strict -ignore-missing-schemas \
-        -kubernetes-version "$K8S_VERSION" \
-        -schema-location default \
-        -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-        -summary /tmp/rendered.yaml
-
-# ============================================================================
-# SECURITY — GitLab Secret Detection (gitleaks), tuned by .gitleaks.toml via
-# the passthrough in .gitlab/secret-detection-ruleset.toml.
+# Shared library templates (include:project + inputs). Every job is the tenant
+# profile: `tags: []` (shared runner) and the non-root-safe input set.
 # ============================================================================
 include:
-  - template: Jobs/Secret-Detection.gitlab-ci.yml
+  # -- yaml-lint: lint the whole tree against the repo-local .yamllint --------
+  - project: eric/weisssrv-lib
+    ref: v0.1.1
+    file: /ci/lint/yaml-lint.yml
+    inputs:
+      tags: []
+      config: "-c .yamllint"
+      targets: "."
+      changes:
+        - "**/*.yaml"
+        - "**/*.yml"
+        - ".yamllint"
 
+  # -- flux-lint: kustomize build + kubeconform (SIMPLE mode) ----------------
+  # substitute: false — a tenant has no cluster-versions ConfigMap and pins
+  # literal image tags, so there is nothing to envsubst. The TOOL versions
+  # (kubeconform / kustomize + their sha256s) are OWNED by the library's
+  # defaults on purpose — do not re-pin them here; bump the library ref to move
+  # them (this removes the drift the template used to carry). k8s_version IS
+  # pinned here: it is the cluster's k8s minor kubeconform validates against, a
+  # per-consumer fact (k3s v1.36.x today), not a library-owned tool version.
+  - project: eric/weisssrv-lib
+    ref: v0.1.1
+    file: /ci/validate/flux-lint.yml
+    inputs:
+      tags: []
+      substitute: false
+      k8s_version: "1.36.0"
+      changes:
+        - "kubernetes/**/*"
+
+  # -- shellcheck: lint the scripts/ helpers (the rename wrapper) -------------
+  - project: eric/weisssrv-lib
+    ref: v0.1.1
+    file: /ci/lint/shellcheck.yml
+    inputs:
+      tags: []
+      direct_globs: "scripts/*.sh"
+      find_dir: ""          # no ansible role tree in a tenant repo
+      changes:
+        - "scripts/**/*"
+
+  # -- docs-link-check: relative Markdown cross-links resolve -----------------
+  # Runs the vendored, stdlib-only scripts/check-doc-links.py (copied from the
+  # library). Scans docs/ + README.md + CLAUDE.md.
+  - project: eric/weisssrv-lib
+    ref: v0.1.1
+    file: /ci/lint/docs-link-check.yml
+    inputs:
+      tags: []
+      changes:
+        - "docs/**/*"
+        - "README.md"
+        - "CLAUDE.md"
+        - "AGENTS.md"
+        - "scripts/check-doc-links.py"
+
+  # -- secret-detection: GitLab Secret Detection (gitleaks) ------------------
+  # Defaults reproduce this template's previous job: the modern-CPU node
+  # selector the shared runner allowlists, and allow_failure: true (findings
+  # WARN). Tuned by .gitleaks.toml via .gitlab/secret-detection-ruleset.toml.
+  # To make a secret finding HARD-BLOCK the pipeline, add
+  # `inputs: { allow_failure: false }`.
+  - project: eric/weisssrv-lib
+    ref: v0.1.1
+    file: /ci/security/secret-detection.yml
+
+  # -- build-image: build THIS service's container image (the main use case) --
+  # ACTIVE by default — a template-derived project builds its service image out
+  # of the box. Builds the repo-root Dockerfile (replace the placeholder with
+  # your app's real build) and pushes $CI_REGISTRY_IMAGE:<short-sha> (+ :latest
+  # on main; $CI_REGISTRY_* are GitLab built-ins). Point deployment.yaml's
+  # `image:` at that tag. This is the ONE job that needs a PRIVILEGED runner:
+  # Docker-in-Docker cannot run on the shared, non-privileged tenant runner, so
+  # it is tagged `infrastructure` (weisssrv's privileged runner) — retag to your
+  # OWN privileged runner if you registered one. For the rare project that
+  # builds nothing (upstream image), remove this include and run
+  # `weisssrv-new-project prune image-build` to drop the Dockerfile. See
+  # docs/CONSUMING.md ("Building the service image").
+  - project: eric/weisssrv-lib
+    ref: v0.1.1
+    file: /ci/build/docker-build.yml
+    inputs:
+      tags: ["infrastructure"]       # a PRIVILEGED runner (retag to yours)
+      dockerfile: "Dockerfile"
+      # This instance's runners validate the node-selector override against
+      # ^esweiss\.com/cpu=(modern|legacy)$ — the library's default ("") is
+      # rejected, so pin the build to modern-CPU nodes. Drop/adjust if your
+      # runner has no node_selector_overwrite_allowed restriction.
+      cpu_selector: "esweiss.com/cpu=modern"
+      # image_name: ""               # default: push to the $CI_REGISTRY_IMAGE base
+      # context: "."
+      # publish_on_main: true        # push :latest on main (always pushes :<sha>)
+
+  # ==========================================================================
+  # OPTIONAL — terraform fmt + validate, if this repo grows a terraform/ dir.
+  # Inert until terraform/ exists (the changes: rules never match otherwise).
+  # Runs on the shared runner (no LAN), so `plan`/`apply` (not shipped here)
+  # would need a remote/HTTP state backend and internet-reachable providers.
+  # --------------------------------------------------------------------------
+  # - project: eric/weisssrv-lib
+  #   ref: v0.1.1
+  #   file: /ci/validate/terraform.yml
+  #   inputs:
+  #     tags: []
+  #     changes: ["terraform/**/*"]
+
+# The library's secret-detection template pulls in GitLab's managed
+# Secret-Detection job through a nested include, which resolves onto the
+# `infrastructure` (privileged) runner and exposes no `tags` input. A tenant runs
+# secret scanning on the shared tag-less runner like every other lint job, so pin
+# it back here. (Only the `tags` key is overridden; the library still owns the
+# job's rules, variables, and allow_failure.)
 secret_detection:
-  stage: security
-  needs: []
-  variables:
-    SECRET_DETECTION_HISTORIC_SCAN: "false"
-    # gitleaks' binary needs POPCNT/SSE4.2; pin scans to modern-CPU nodes so it
-    # doesn't SIGILL on the cluster's older agents. The shared k8s-deploy runner
-    # allowlists exactly this override — its config sets
-    # node_selector_overwrite_allowed = ^esweiss\.com/cpu=(modern|legacy)$ — so
-    # the selector is honored, not rejected.
-    KUBERNETES_NODE_SELECTOR_CPU: "esweiss.com/cpu=modern"
-  # The bundled GitLab Secret-Detection template gates its job on
-  # $CI_COMMIT_BRANCH, which is UNSET in merge_request_event pipelines. Without
-  # this override the scan would run ONLY post-merge on main (and never on tags,
-  # where $CI_COMMIT_BRANCH is also empty) — too late to block a leak. Override
-  # the rules so it is a real pre-merge gate: MRs, main, and scheduled scans.
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+  tags: []
 
 # ============================================================================
-# AI REVIEW — optional, never blocks. Runs only when BOTH masked CI/CD
-# variables AI_REVIEW_OPENAI_KEY and GITLAB_REVIEW_TOKEN are set on the project
-# (Settings -> CI/CD -> Variables); absent them (e.g. fork MRs) the job simply
-# isn't created. There is no in-job 1Password path: the shared runner is
+# AI REVIEW — optional, never blocks. BYO-keys: runs only when BOTH masked
+# CI/CD variables AI_REVIEW_OPENAI_KEY and GITLAB_REVIEW_TOKEN are set on the
+# project (Settings -> CI/CD -> Variables); absent them (e.g. fork MRs) the job
+# simply isn't created. There is no in-job 1Password path: the shared runner is
 # non-root and can't install the op CLI at job time, so 1Password users source
 # those two values from their vault WHEN THEY SET the CI variables (e.g.
-# `op read "op://Homelab/OpenAI API Key/api-key"`), not at runtime.
+# `op read "op://Homelab/OpenAI API Key/api-key"`), not at runtime. This is the
+# ONE generic job the library does not ship (it carries no pr-agent template),
+# so it stays defined here — see docs/CONSUMING.md ("Bring your own keys").
 # ============================================================================
 pr-agent-review:
   stage: ai-review
@@ -219,53 +207,3 @@ pr-agent-review:
 #     - if: '$CI_COMMIT_BRANCH == "main" && $FLUX_WEBHOOK_URL'
 #       when: manual
 #       allow_failure: true
-
-# ============================================================================
-# RENOVATE (optional) — keep the literal image pins current. There is NO hosted
-# Renovate on git.ericsweiss.com, so renovate.json is inert until something runs
-# it. This job runs self-hosted Renovate against THIS project on a schedule.
-# To enable: uncomment, create a pipeline SCHEDULE (CI/CD -> Schedules, e.g.
-# weekly) so `$CI_PIPELINE_SOURCE == "schedule"`, and set a masked RENOVATE_TOKEN
-# CI/CD variable (a GitLab PAT with api scope for this project). Add
-# hostRules/registry credentials in renovate.json's env if you need Renovate to
-# read the PRIVATE registry tag list. Alternative: skip this and bump tags by
-# hand, mirroring weisssrv's `task maintenance:check-versions` flow.
-# ----------------------------------------------------------------------------
-# renovate:
-#   stage: validate
-#   image: renovate/renovate:41
-#   needs: []
-#   variables:
-#     RENOVATE_PLATFORM: gitlab
-#     RENOVATE_ENDPOINT: "https://git.ericsweiss.com/api/v4"
-#     RENOVATE_TOKEN: "$RENOVATE_TOKEN"
-#     RENOVATE_REPOSITORIES: "$CI_PROJECT_PATH"
-#   script:
-#     - renovate
-#   rules:
-#     - if: '$CI_PIPELINE_SOURCE == "schedule" && $RENOVATE_TOKEN'
-
-# ============================================================================
-# TERRAFORM (optional) — uncomment if this repo grows a terraform/ directory.
-# Path-gated so it stays inert otherwise. Runs on the shared runner (no LAN),
-# so `plan` needs a remote/HTTP state backend and internet-reachable providers.
-# ----------------------------------------------------------------------------
-# terraform-fmt:
-#   stage: lint
-#   image: hashicorp/terraform:1.15
-#   needs: []
-#   script:
-#     - terraform -chdir=terraform fmt -check -recursive
-#   rules:
-#     - exists:
-#         - terraform/**/*.tf
-# terraform-validate:
-#   stage: validate
-#   image: hashicorp/terraform:1.15
-#   needs: []
-#   script:
-#     - terraform -chdir=terraform init -backend=false
-#     - terraform -chdir=terraform validate
-#   rules:
-#     - exists:
-#         - terraform/**/*.tf

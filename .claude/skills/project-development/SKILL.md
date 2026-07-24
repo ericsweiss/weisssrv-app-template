@@ -27,8 +27,9 @@ namespace. There is no `kubectl apply` / `helm upgrade` in the normal flow.
   Flux service account is RBAC-scoped to it. Manifests targeting another
   namespace fail to apply.
 - The tree ships app-slug and GitLab-group placeholders. Run
-  `./scripts/rename.sh <app> <group>` once, or `grep -rn changeme- .` for
-  leftovers before shipping.
+  `./scripts/rename.sh <app> <group>` (a wrapper over the `weisssrv-new-project`
+  CLI's `rename`; the CLI also `prune`s / `wire`s optional components — see
+  `docs/CONSUMING.md`), or `grep -rn changeme- .` for leftovers before shipping.
 
 ## Local loop
 
@@ -83,24 +84,37 @@ doesn't exist in the registry.
 ## Container registry
 
 `registry.git.ericsweiss.com/<group>/<app>` is your image registry. Point
-`deployment.yaml`'s `image:` at a tag there (literal tag; bump it manually or
-via the opt-in Renovate job — no Renovate bot runs by default) or at any
-upstream image.
+`deployment.yaml`'s `image:` at a tag there (literal tag; bump it yourself in an
+MR — there is no hosted dependency bot) or at any upstream image.
 
-Images are built **outside this pipeline**. The shared runner is non-privileged
-AND runs jobs as a non-root UID, so it cannot build container images (no
-Docker-in-Docker, and kaniko/buildah can't unpack a base image as a non-root
-user). Build locally with `task build` and push (log in with a project deploy
-token or a PAT), or build in an external CI with a privileged builder, then set
-`image:`.
+A placeholder `Dockerfile` ships and the CI **builds the service image by
+default** (the `build-image` job, the library's `ci/build/docker-build.yml`).
+Docker-in-Docker can't run on the shared non-privileged runner, so that job is
+tagged `infrastructure` (a privileged runner) — retag it if you register your
+own. Replace the placeholder Dockerfile with your app's real build, and point
+`image:` at the pushed tag (`$CI_REGISTRY_IMAGE:<short-sha>`). You can also build
+locally with `task build`. For an upstream image (no build), remove the build
+include and run `weisssrv-new-project prune image-build`. See `docs/CONSUMING.md`.
 
 ## Runner limits
 
 CI runs on the shared, non-privileged `k8s-deploy` runner: internet egress only,
 no LAN/tailnet, no SSH, no Docker-in-Docker, and every job runs as a non-root
-UID. Lint, kubeconform, secret scanning, and registry push all work; **building
-container images does not** (build them externally), and anything needing LAN
-access or privileged Docker does not.
+UID. The lint/validate/security jobs are included from `eric/weisssrv-lib` with
+`tags: []` so they land here. Lint, kubeconform, secret scanning, and registry
+push all work; **building container images needs a PRIVILEGED runner** — the
+`build-image` job is therefore tagged `infrastructure` (retag it, or build
+locally with `task build`), as is anything needing LAN access or privileged
+Docker.
+
+## Shared library + consumption (this repo)
+
+- `docs/CONSUMING.md` — the two instantiation paths, library consumption +
+  bumping, optional-enablement toggles, the image build, and BYO-keys.
+- Library include contract (each CI template's inputs):
+  https://git.ericsweiss.com/eric/weisssrv-lib/-/blob/main/docs/INCLUDE-CONTRACT.md
+- Library versioning / tag pinning:
+  https://git.ericsweiss.com/eric/weisssrv-lib/-/blob/main/docs/VERSIONING.md
 
 ## Canonical weisssrv docs (authoritative — read these for platform detail)
 

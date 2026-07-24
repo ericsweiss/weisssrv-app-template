@@ -4,11 +4,11 @@
 # restricted). Swap the image, port, probe paths, and resources for your app.
 #
 # Image tag is a LITERAL pin (Flux postBuild `${var}` substitution is
-# weisssrv-internal and is NOT available to tenants). renovate.json is provided,
-# but NO Renovate bot runs against this self-hosted GitLab by default — bump the
-# tag yourself or enable self-hosted Renovate (see README "Keeping image tags
-# current"). Point this at the image your CI builds
-# (registry.git.ericsweiss.com/<group>/<app>) or any upstream image.
+# weisssrv-internal and is NOT available to tenants). There is no hosted
+# dependency bot — bump the tag yourself in an MR (see README "Keeping image
+# tags current"). Point this at the image you build here (the opt-in CI
+# build-image job pushes registry.git.ericsweiss.com/<group>/<app>) or any
+# upstream image.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

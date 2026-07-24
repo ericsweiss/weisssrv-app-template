@@ -23,7 +23,9 @@ flowchart LR
   creates the proxied Cloudflare CNAME automatically. No operator action.
 - **Internal** `*.esweiss.com` (opt-in): reached only on the LAN/tailnet via the
   `.101` VIP and the `lan-tailscale-only` middleware. The internal DNS name is
-  **not** auto-provisioned — the operator adds an AdGuard rewrite.
+  **not** auto-provisioned — the operator adds an AdGuard rewrite. Activate the
+  manifests with `weisssrv-new-project wire internal-ingress` (see
+  [CONSUMING.md](CONSUMING.md)).
 - **TLS**: a per-host `Certificate` (ClusterIssuer `letsencrypt-prod`, DNS-01
   over Cloudflare) issues a secret into your namespace; Traefik terminates TLS
   from that secret. Per-host, not wildcard, to stay under Let's Encrypt's
@@ -69,7 +71,8 @@ flowchart LR
   replica stays up across drains without opting into anything.
 - **HPA** is opt-in (`hpa.yaml`). Enabling it means dropping the static
   `replicas` and making the VPA memory-only so the two never fight CPU (keep
-  `minReplicas >= 2` so the PDB stays satisfiable).
+  `minReplicas >= 2` so the PDB stays satisfiable). `weisssrv-new-project wire
+  hpa` makes all three edits — see [CONSUMING.md](CONSUMING.md).
 
 ## Observability
 
