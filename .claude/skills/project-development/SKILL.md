@@ -83,9 +83,8 @@ doesn't exist in the registry.
 ## Container registry
 
 `registry.git.ericsweiss.com/<group>/<app>` is your image registry. Point
-`deployment.yaml`'s `image:` at a tag there (literal tag; bump it manually or
-via the opt-in Renovate job — no Renovate bot runs by default) or at any
-upstream image.
+`deployment.yaml`'s `image:` at a tag there (literal tag; bump it yourself in an
+MR — there is no hosted dependency bot) or at any upstream image.
 
 Images are built **outside this pipeline**. The shared runner is non-privileged
 AND runs jobs as a non-root UID, so it cannot build container images (no

@@ -21,11 +21,10 @@ Flux Kustomization name. Keep it a valid DNS label.
    app-slug and GitLab-group placeholders across the tree. Review `git diff`,
    then `grep -rn changeme- .` to confirm nothing was missed.
 3. **Set the image** in `kubernetes/flux/deployment.yaml` — an upstream image,
-   or one you build outside CI and push to
-   `registry.git.ericsweiss.com/<group>/<slug>` (the shared runner can't build
-   images; see the README "CI runner" note). The tag is a **literal pin**: no
-   Renovate runs against this GitLab, so bump it yourself (or set up
-   self-hosted Renovate) — see the README "Keeping image tags current" note.
+   or one you build (locally with `task build`, or via the opt-in CI build-image
+   job on a privileged runner) and push to
+   `registry.git.ericsweiss.com/<group>/<slug>`. The tag is a **literal pin** —
+   bump it yourself in an MR (see the README "Keeping image tags current" note).
 4. **Set the hostname(s)**. Public `<slug>.ericsweiss.com` is ready in
    `ingressroute.yaml`. For an internal `<slug>.esweiss.com` route, uncomment
    the internal `IngressRoute` (in `ingressroute.yaml`) and the internal

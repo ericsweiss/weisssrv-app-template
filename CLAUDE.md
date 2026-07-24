@@ -44,9 +44,10 @@ the short standing-rules version.
 - Register every new manifest in `kubernetes/flux/kustomization.yaml`.
 - `task lint` (yamllint + kustomize build + kubeconform) mirrors CI — run it
   before opening an MR.
-- Version pins: image tags are literal — bump them manually or via the opt-in
-  Renovate job (no Renovate bot runs by default; see README). Pinned CI tool
-  versions live in `.gitlab-ci.yml`; pre-commit hook revs in
+- Version pins: image tags are literal — bump them yourself in an MR (there is
+  no hosted dependency bot). The shared CI tool versions (kubeconform, kustomize)
+  are owned by the `eric/weisssrv-lib` templates the pipeline includes — bump the
+  library `ref:` in `.gitlab-ci.yml` to move them; pre-commit hook revs live in
   `.pre-commit-config.yaml`.
 - Follow the shipped manifests as the pattern rather than inventing new shapes.
 

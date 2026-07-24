@@ -52,8 +52,8 @@ you're really setting:
 ### 3. Set your image
 
 Point `kubernetes/flux/deployment.yaml`'s `image:` at any image. Tags are
-**literal pins** — there's no Flux `${var}` substitution for tenant repos, and
-no Renovate bot runs for you (see [Keeping image tags
+**literal pins** — there's no Flux `${var}` substitution for tenant repos and no
+hosted dependency bot, so bump them yourself (see [Keeping image tags
 current](#keeping-image-tags-current)).
 
 If you build your own image, build it **outside this pipeline**. The shared CI
@@ -78,18 +78,13 @@ repo once (below).
 
 ## Keeping image tags current
 
-Image tags in `kubernetes/flux/deployment.yaml` are **literal pins**. There is
-**no hosted Renovate** on `git.ericsweiss.com` (weisssrv defers it too — see its
-`docs/16` roadmap), so the shipped `renovate.json` is inert until something runs
-it. Two ways to keep pins fresh:
-
-- **Manual** (simplest): bump the tag on a branch, open an MR, merge — mirroring
-  weisssrv's `task maintenance:check-versions` habit.
-- **Self-hosted Renovate**: enable the commented `renovate` job in
-  `.gitlab-ci.yml` (create a weekly pipeline schedule + a masked `RENOVATE_TOKEN`
-  project variable), or point the hosted Renovate GitLab app at your project.
-  `renovate.json`'s `hostRules` documents the private-registry host; the bot must
-  supply that registry's credentials in its own config.
+Image tags in `kubernetes/flux/deployment.yaml` are **literal pins**, and there
+is **no hosted dependency bot** on `git.ericsweiss.com`. Bump a tag by editing it
+on a branch, opening an MR, and merging — mirroring weisssrv's `task
+maintenance:check-versions` habit. The shared CI tool versions live in the
+`eric/weisssrv-lib` templates the pipeline includes: bump the library `ref:` in
+`.gitlab-ci.yml` (and the pre-commit hook revs in `.pre-commit-config.yaml`) the
+same deliberate, reviewed way.
 
 ---
 

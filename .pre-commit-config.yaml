@@ -1,8 +1,7 @@
 ---
 # Local guardrails: run `pre-commit install` once, then these run on every
 # commit. They mirror what CI enforces (secret scan + yamllint), so problems
-# surface before you push. Revs are pinned; bump them manually (or via the
-# opt-in Renovate job — no Renovate bot runs by default; see README).
+# surface before you push. Revs are pinned; bump them deliberately in an MR.
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1

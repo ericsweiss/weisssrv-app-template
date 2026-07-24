@@ -16,7 +16,7 @@
 # Flux (git is the source of truth), never a CI `kubectl apply`.
 #
 # Bumping the library: change every `ref:` below to the new tag in one MR (there
-# is no hosted Renovate — bumps are deliberate). See docs/CONSUMING.md.
+# is no hosted dependency bot — bumps are deliberate). See docs/CONSUMING.md.
 stages:
   - build       # only the OPTIONAL image build lands here (see the include below)
   - lint
