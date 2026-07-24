@@ -8,12 +8,12 @@
 # https://git.ericsweiss.com/eric/weisssrv-lib/-/blob/main/docs/INCLUDE-CONTRACT.md
 # for each template's inputs.
 #
-# Runner: this pipeline is deliberately TAG-LESS (every include passes
-# `tags: []`) so it lands on weisssrv's shared, NON-privileged `k8s-deploy`
-# runner. That runner's egress is firewalled to the internet only — lint,
-# kubeconform, secret scanning and the container registry all work; there is NO
-# LAN/tailnet access, NO SSH, and NO Docker-in-Docker. Deploys happen through
-# Flux (git is the source of truth), never a CI `kubectl apply`.
+# Runner: the lint / validate / security jobs are TAG-LESS (they pass
+# `tags: []`) so they land on weisssrv's shared, NON-privileged `k8s-deploy`
+# runner — internet egress only, NO LAN/tailnet, NO SSH, NO Docker-in-Docker.
+# The ONE exception is the image build (docker-build), which needs a privileged
+# runner for Docker-in-Docker and is therefore tagged `infrastructure`. Deploys
+# happen through Flux (git is the source of truth), never a CI `kubectl apply`.
 #
 # Bumping the library: change every `ref:` below to the new tag in one MR (there
 # is no hosted dependency bot — bumps are deliberate). See docs/CONSUMING.md.
@@ -50,16 +50,19 @@ include:
 
   # -- flux-lint: kustomize build + kubeconform (SIMPLE mode) ----------------
   # substitute: false — a tenant has no cluster-versions ConfigMap and pins
-  # literal image tags, so there is nothing to envsubst. The tool versions
-  # (kubeconform / kustomize) and the kubeconform target k8s version are OWNED
-  # by the library's defaults on purpose — do not re-pin them here; bump the
-  # library ref to move them (removes the drift this template used to carry).
+  # literal image tags, so there is nothing to envsubst. The TOOL versions
+  # (kubeconform / kustomize + their sha256s) are OWNED by the library's
+  # defaults on purpose — do not re-pin them here; bump the library ref to move
+  # them (this removes the drift the template used to carry). k8s_version IS
+  # pinned here: it is the cluster's k8s minor kubeconform validates against, a
+  # per-consumer fact (k3s v1.36.x today), not a library-owned tool version.
   - project: eric/weisssrv-lib
     ref: v0.1.0
     file: /ci/validate/flux-lint.yml
     inputs:
       tags: []
       substitute: false
+      k8s_version: "1.36.0"
       changes:
         - "kubernetes/**/*"
 
@@ -99,27 +102,27 @@ include:
     ref: v0.1.0
     file: /ci/security/secret-detection.yml
 
-  # ==========================================================================
-  # OPTIONAL — build THIS service's container image (the common single-image
-  # case). Uncomment to enable. This is the ONLY job that needs a PRIVILEGED
-  # runner: the shared tag-less tenant runner is non-privileged and CANNOT run
-  # Docker-in-Docker. `tags: ["infrastructure"]` targets weisssrv's privileged
-  # runner — retag to your OWN privileged runner if you registered one (the
-  # shared `infrastructure` runner is reserved for the platform repo). Builds
-  # the repo-root Dockerfile and pushes $CI_REGISTRY_IMAGE:<short-sha>
-  # (+ :latest on main); point deployment.yaml's `image:` at that tag. Delete
-  # the Dockerfile (`weisssrv-new-project prune image-build`) for an
-  # upstream-image app. See docs/CONSUMING.md ("Building the service image").
-  # --------------------------------------------------------------------------
-  # - project: eric/weisssrv-lib
-  #   ref: v0.1.0
-  #   file: /ci/build/docker-build.yml
-  #   inputs:
-  #     tags: ["infrastructure"]     # a PRIVILEGED runner (retag to yours)
-  #     dockerfile: "Dockerfile"
-  #     # image_name: ""             # default: push to the $CI_REGISTRY_IMAGE base
-  #     # context: "."
-  #     # publish_on_main: true      # push :latest on main (always pushes :<sha>)
+  # -- build-image: build THIS service's container image (the main use case) --
+  # ACTIVE by default — a template-derived project builds its service image out
+  # of the box. Builds the repo-root Dockerfile (replace the placeholder with
+  # your app's real build) and pushes $CI_REGISTRY_IMAGE:<short-sha> (+ :latest
+  # on main; $CI_REGISTRY_* are GitLab built-ins). Point deployment.yaml's
+  # `image:` at that tag. This is the ONE job that needs a PRIVILEGED runner:
+  # Docker-in-Docker cannot run on the shared, non-privileged tenant runner, so
+  # it is tagged `infrastructure` (weisssrv's privileged runner) — retag to your
+  # OWN privileged runner if you registered one. For the rare project that
+  # builds nothing (upstream image), remove this include and run
+  # `weisssrv-new-project prune image-build` to drop the Dockerfile. See
+  # docs/CONSUMING.md ("Building the service image").
+  - project: eric/weisssrv-lib
+    ref: v0.1.0
+    file: /ci/build/docker-build.yml
+    inputs:
+      tags: ["infrastructure"]       # a PRIVILEGED runner (retag to yours)
+      dockerfile: "Dockerfile"
+      # image_name: ""               # default: push to the $CI_REGISTRY_IMAGE base
+      # context: "."
+      # publish_on_main: true        # push :latest on main (always pushes :<sha>)
 
   # ==========================================================================
   # OPTIONAL — terraform fmt + validate, if this repo grows a terraform/ dir.
@@ -133,6 +136,15 @@ include:
   #   inputs:
   #     tags: []
   #     changes: ["terraform/**/*"]
+
+# The library's secret-detection template pulls in GitLab's managed
+# Secret-Detection job through a nested include, which resolves onto the
+# `infrastructure` (privileged) runner and exposes no `tags` input. A tenant runs
+# secret scanning on the shared tag-less runner like every other lint job, so pin
+# it back here. (Only the `tags` key is overridden; the library still owns the
+# job's rules, variables, and allow_failure.)
+secret_detection:
+  tags: []
 
 # ============================================================================
 # AI REVIEW — optional, never blocks. BYO-keys: runs only when BOTH masked
