@@ -89,6 +89,7 @@ so both shapes gate on byte-identical tools.
 | `build-image` | `build-image` | **Different registry + push policy** — see below. |
 | `pr-agent-review` | — | **Not ported.** |
 | `semantic-release` | — | **Not ported** — GitLab-API-only, see below. |
+| `python-tests` | — | **Not ported** — it gates the TEMPLATE (`tests/`), not your app, and skips itself once you have renamed. Delete `tests/`. |
 
 **Secret detection.** GitLab runs its managed Secret-Detection analyzer, which
 is gitleaks underneath, loading `.gitleaks.toml` through

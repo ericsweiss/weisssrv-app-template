@@ -33,6 +33,7 @@ stages:
   - build       # only the OPTIONAL image build lands here (see the include below)
   - lint
   - validate    # only the OPTIONAL terraform validate lands here
+  - test        # the TEMPLATE's own gate (tests/) — see python-tests below
   - security
   - ai-review
   - release
@@ -108,6 +109,43 @@ include:
         - "CLAUDE.md"
         - "AGENTS.md"
         - "scripts/check-doc-links.py"
+
+  # -- python-tests: the TEMPLATE's own gate (tests/) -------------------------
+  # Renders this template into a scratch directory and runs the two setup
+  # commands a new project runs — `scripts/rename.sh` then
+  # `scripts/select-ci.sh` — asserting that no placeholder survives, that each
+  # CI shape keeps exactly what docs/CI-SHAPES.md says it keeps, and that
+  # kubernetes/ is byte-identical across the three. Without it a regression in
+  # either wrapper ships silently into every project created from here.
+  #
+  # This gate is TEMPLATE-ONLY: in a generated project the placeholders are
+  # already substituted and the suite skips itself (delete tests/ to be rid of
+  # the skip). It is not ported to the `github` shape — see docs/CI-SHAPES.md.
+  #
+  # PINNED AT v0.2.0 like the release include, and for the same reason: the
+  # `setup_command` / `pip_packages` inputs the CLI install needs do not exist
+  # in this template at v0.1.1. `changes: ["**/*"]` because the suite reads the
+  # whole tree (token scan, YAML parse, per-shape diff).
+  - project: eric/weisssrv-lib
+    ref: v0.2.0
+    file: /ci/test/python-tests.yml
+    inputs:
+      tags: []
+      # The FULL python image, not -slim: it ships git, which the fixture copy
+      # and the library clone both need, and apt-get is not available to the
+      # non-root shared runner (hence apt_packages: "").
+      image: python:3.13
+      apt_packages: ""
+      test_dir: "tests"
+      # Clone the library with the job token rather than fetching the CLI from
+      # an anonymous git+https URL — the library is internal-visibility.
+      setup_command: >-
+        git clone --depth 1 --branch "$LIB_REF"
+        "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${LIB_PROJECT}.git"
+        .tmp/lib
+      pip_packages: ".tmp/lib/cli"
+      changes:
+        - "**/*"
 
   # -- secret-detection: GitLab Secret Detection (gitleaks) ------------------
   # Defaults reproduce this template's previous job: the modern-CPU node
@@ -190,6 +228,21 @@ include:
 secret_detection:
   tags: []
 
+# The template's gate exercises the same `weisssrv-new-project` CLI a project
+# gets, so the ref cloned here is the one scripts/select-ci.sh pins — the suite
+# asserts the two are equal. WEISSSRV_REQUIRE_CLI makes an unresolvable CLI a
+# job FAILURE: locally the suite skips when it is absent, and a skip that reads
+# as green in CI would be a gate that cannot fail.
+#
+# v0.3.0 is the first library tag whose CLI has `prune ci:<shape>` at all, and
+# it is NOT CUT YET — this job's clone (and select-ci.sh's own pipx path) both
+# fail until the library releases it.
+python-tests:
+  variables:
+    LIB_PROJECT: "eric/weisssrv-lib"
+    LIB_REF: "v0.3.0"
+    WEISSSRV_REQUIRE_CLI: "1"
+
 # ============================================================================
 # AI REVIEW — optional, never blocks. BYO-keys: runs only when BOTH masked
 # CI/CD variables AI_REVIEW_OPENAI_KEY and GITLAB_REVIEW_TOKEN are set on the
@@ -210,6 +263,8 @@ pr-agent-review:
     - job: yaml-lint
       optional: true
     - job: flux-lint
+      optional: true
+    - job: python-tests
       optional: true
     - job: secret_detection
       optional: true

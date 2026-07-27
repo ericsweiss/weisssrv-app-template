@@ -296,6 +296,8 @@ scripts/check-doc-links.py  # offline Markdown link checker (docs-link-check job
 scripts/semantic-release.py # vendored release script (the `release` stage, shape A)
 docs/                # CI-SHAPES.md, CONSUMING.md, ARCHITECTURE.md, ONBOARDING.md,
                      #   VERSIONING.md
+tests/               # the TEMPLATE's own gate (rename + CI-shape selection);
+                     #   skips itself once renamed — delete it in your project
 .claude/             # agent settings + project-development skill
 ```
 
