@@ -37,13 +37,18 @@ GitLab repo that runs no pipeline. `rm -rf .gitlab` by hand if this project has
 no GitLab side at all; GitHub's equivalents would be `.github/ISSUE_TEMPLATE/`
 and `.github/pull_request_template.md`, which this template does not ship.
 
-> **Why a repo-local script and not the CLI?** The component toggles (`prune
-> metrics`, `wire hpa`, …) live in the shared library's `weisssrv-new-project`
-> CLI, which models only the `kubernetes/flux/` tree. CI-shape selection isn't
-> in it yet. When it lands as `weisssrv-new-project prune ci:<shape>`,
-> `scripts/select-ci.sh` becomes a thin wrapper over that command — the same
-> thing that happened to `scripts/rename.sh` — and the interface above does not
-> change.
+> **What the script does.** `scripts/select-ci.sh` is a thin wrapper over the
+> shared library's `weisssrv-new-project prune ci:<shape>`, the same way
+> `scripts/rename.sh` wraps `rename`. Call the CLI directly if you prefer, or
+> combine both steps in one call:
+>
+> ```bash
+> weisssrv-new-project rename <app> <group> --ci <shape>
+> ```
+>
+> The shape is never joined onto a filesystem path — it is only ever a key into
+> a fixed table of the paths each shape owns — so a crafted value deletes
+> nothing.
 
 ---
 
