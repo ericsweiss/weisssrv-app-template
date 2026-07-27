@@ -59,6 +59,10 @@ lint/validate/security jobs come from `eric/weisssrv-lib` at a pinned `ref:`,
 they run tag-less on the operator's shared non-privileged `k8s-deploy` runner,
 and `build-image` runs tagged `infrastructure` on the privileged runner.
 
+Shape A is also the only shape that **releases**: `.gitlab-ci.yml` carries a
+final `release` stage that tags the repository from its conventional commits and
+publishes a GitLab Release. See [VERSIONING.md](VERSIONING.md).
+
 Nothing about shape A changed when B and C were added. If you are on the
 operator's GitLab, stop reading here and follow [CONSUMING.md](CONSUMING.md).
 
@@ -84,6 +88,7 @@ so both shapes gate on byte-identical tools.
 | `secret_detection` | `secret-detection` | **Same detector, different wrapper** — see below. |
 | `build-image` | `build-image` | **Different registry + push policy** — see below. |
 | `pr-agent-review` | — | **Not ported.** |
+| `semantic-release` | — | **Not ported** — GitLab-API-only, see below. |
 
 **Secret detection.** GitLab runs its managed Secret-Detection analyzer, which
 is gitleaks underneath, loading `.gitleaks.toml` through
@@ -136,19 +141,30 @@ authenticated with the built-in `GITHUB_TOKEN`, the way shape A uses the
 4. **`pr-agent-review`.** Not ported. `pr-agent` supports GitHub; add it as a
    workflow with your own `OPENAI_API_KEY` if you want it. It never blocked
    anything in shape A either.
-5. **The in-cluster runner.** The tenant `k8s-deploy` runner has internet egress
+5. **`semantic-release`.** Not ported, and not portable as it stands. The
+   vendored `scripts/semantic-release.py` creates the tag and the Release in one
+   call to the **GitLab** Releases API (`$CI_API_V4_URL/projects/:id/releases`,
+   `JOB-TOKEN`); it has no GitHub mode. A workflow here would mean either
+   forking that script — losing the byte-identical-to-the-library property that
+   is the only reason to trust a vendored copy — or depending on a marketplace
+   action, which nothing else in this template does. So shape B tags by hand
+   (`git tag -a vX.Y.Z && git push --tags`, then a GitHub Release), or waits for
+   the library's script to grow a GitHub backend. The commit-parsing half
+   (`plan_release`) is platform-neutral, so that is a small library change if it
+   is ever wanted. See [VERSIONING.md](VERSIONING.md).
+6. **The in-cluster runner.** The tenant `k8s-deploy` runner has internet egress
    only — no LAN, no tailnet, no SSH — so shape A gives up most of that too, and
    parity is closer than it sounds. What you do lose is the *option*: on GitLab
    the operator can hand you a tagged in-cluster runner for a job that must
    reach the cluster. GitHub-hosted runners cannot, ever; you would have to
    register a self-hosted GitHub runner inside the cluster.
-6. **Pulling the image.** Shape A pushes to `registry.git.ericsweiss.com`, which
+7. **Pulling the image.** Shape A pushes to `registry.git.ericsweiss.com`, which
    sits on the LAN behind the cluster's registry cache and is already trusted.
    GHCR is on the internet: a **private** package needs an `imagePullSecret` in
    your namespace (an `ExternalSecret` of type `kubernetes.io/dockerconfigjson`,
    plus `imagePullSecrets:` on the Deployment). Making the GHCR package public
    avoids that entirely and is the simpler choice for a homelab app.
-7. **`CODEOWNERS`.** The shipped file uses `@changeme-group`. On GitHub that
+8. **`CODEOWNERS`.** The shipped file uses `@changeme-group`. On GitHub that
    must be a username or `@org/team`, and it is only enforced if branch
    protection turns on "Require review from Code Owners".
 

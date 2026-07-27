@@ -32,6 +32,8 @@ see [step 3](#3-set-your-image).
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explain how a tenant app rides
 > the platform; operator/tenant checklists are in
 > [`docs/ONBOARDING.md`](docs/ONBOARDING.md).
+> [`docs/VERSIONING.md`](docs/VERSIONING.md) covers the release tags this
+> pipeline cuts — for the scaffold, and then for your own service.
 
 ---
 
@@ -291,7 +293,9 @@ Taskfile.yml         # local dev wrappers
 scripts/rename.sh    # thin wrapper over the weisssrv-new-project CLI
 scripts/select-ci.sh # keep one CI shape, drop the other two (run once at setup)
 scripts/check-doc-links.py  # offline Markdown link checker (docs-link-check job)
-docs/                # CI-SHAPES.md, CONSUMING.md, ARCHITECTURE.md, ONBOARDING.md
+scripts/semantic-release.py # vendored release script (the `release` stage, shape A)
+docs/                # CI-SHAPES.md, CONSUMING.md, ARCHITECTURE.md, ONBOARDING.md,
+                     #   VERSIONING.md
 .claude/             # agent settings + project-development skill
 ```
 

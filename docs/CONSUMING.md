@@ -99,13 +99,20 @@ include:
 The jobs the pipeline includes: `yaml-lint`, `flux-lint` (simple/`substitute:
 false` mode — literal image pins, no cluster-versions ConfigMap; `k8s_version`
 is pinned here since it's the cluster's k8s minor, a per-consumer fact),
-`shellcheck`, `docs-link-check`, `secret_detection`, and `build-image` (the
-service image — on the privileged runner; see below). `pr-agent-review` stays
-defined locally (the library ships no pr-agent template) as a BYO-keys job.
+`shellcheck`, `docs-link-check`, `secret_detection`, `build-image` (the
+service image — on the privileged runner; see below), and `semantic-release`
+(the last stage — tags `main` from its conventional commits; see
+[VERSIONING.md](VERSIONING.md)). `pr-agent-review` stays defined locally (the
+library ships no pr-agent template) as a BYO-keys job.
 
-`scripts/check-doc-links.py` is a **vendored copy** of the library's stdlib-only
-link checker — the `docs-link-check` job runs it from this path. Re-vendor it
-(copy from the pinned library tag) when you bump the library `ref:`.
+The refs are **not uniform**: the release include pins `v0.2.0` because
+`ci/release/semantic-release.yml` does not exist at `v0.1.1`. Bringing the
+generic jobs up to `v0.2.0` is the next bump, in its own MR.
+
+`scripts/check-doc-links.py` and `scripts/semantic-release.py` are **vendored
+copies** of the library's stdlib-only tools — their jobs run them from these
+paths. Re-vendor them (copy from the pinned library tag) when you bump the
+library `ref:`. Nothing checks that automatically here, so do it in the same MR.
 
 ---
 
