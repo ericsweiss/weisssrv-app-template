@@ -36,9 +36,9 @@ as a custom template), then rename:
 
 `scripts/rename.sh` is a thin wrapper that delegates to the library CLI's
 `rename` command (installing it on demand via `pipx` if needed), so there is one
-tested substitution implementation. `scripts/select-ci.sh` keeps one CI shape
-and deletes the other two's files; it is repo-local because the library CLI does
-not model CI shapes yet (see [CI-SHAPES.md](CI-SHAPES.md)). Nothing else is
+tested substitution implementation. `scripts/select-ci.sh` is the same kind of
+wrapper over `prune ci:<shape>`, which keeps one CI shape and deletes the other
+two's files (see [CI-SHAPES.md](CI-SHAPES.md)). Nothing else is
 required — edit the manifests by hand and delete the components you don't need.
 
 ### 2. The `weisssrv-new-project` CLI (recommended for component choice)
@@ -56,7 +56,7 @@ weisssrv-new-project rename recipe-box eric/apps
 weisssrv-new-project prune  metrics single-replica   # drop what you don't use
 weisssrv-new-project wire   hpa                       # enable an opt-in
 weisssrv-new-project verify                           # no placeholders, kustomize builds
-./scripts/select-ci.sh gitlab                         # CI shape (not yet a CLI command)
+weisssrv-new-project prune  ci:gitlab                 # CI shape (./scripts/select-ci.sh wraps this)
 ```
 
 Run each from the project root (or pass `--root <dir>`). Full command reference:
@@ -125,7 +125,7 @@ never half-mutates the repo.
 
 | Component | Default | Turn off / on |
 |---|---|---|
-| **CI shape** (`.gitlab-ci.yml` / `.github/workflows/`) | `gitlab` | `./scripts/select-ci.sh <gitlab\|github\|none>` — not a CLI feature yet; see [CI-SHAPES.md](CI-SHAPES.md) |
+| **CI shape** (`.gitlab-ci.yml` / `.github/workflows/`) | `gitlab` | `prune ci:<gitlab\|github\|none>`, or the `./scripts/select-ci.sh` wrapper; see [CI-SHAPES.md](CI-SHAPES.md) |
 | **Public IngressRoute** (`*.ericsweiss.com`) | on | `prune external-ingress` (wire the internal route first) |
 | **Internal IngressRoute** (`*.esweiss.com`) | off (commented) | `wire internal-ingress` + operator AdGuard rewrite |
 | **Authentik SSO** forward-auth middleware | off (commented) | `wire sso` + operator provisions the Authentik objects |

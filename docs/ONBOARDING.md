@@ -19,8 +19,9 @@ Flux Kustomization name. Keep it a valid DNS label.
    appear in the picker.)
 2. **Rename**: `./scripts/rename.sh <slug> <gitlab-group>` substitutes the
    app-slug and GitLab-group placeholders across the tree (it wraps the
-   `weisssrv-new-project` CLI). Review `git diff`, then `grep -rn changeme- .`
-   to confirm nothing was missed. To also drop/enable optional components, use
+   `weisssrv-new-project` CLI). Review `git diff`, then `grep -rn 'changeme[-]' .`
+   to confirm nothing was missed — the bracket keeps the pattern from matching
+   this line, so a clean project gets zero hits. To also drop/enable optional components, use
    the CLI's `prune` / `wire` — see [CONSUMING.md](CONSUMING.md).
    Then **pick a CI shape**: `./scripts/select-ci.sh <gitlab|github|none>`
    (default `gitlab`). That decides only what *checks* your changes and where

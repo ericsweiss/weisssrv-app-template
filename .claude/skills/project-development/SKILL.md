@@ -30,7 +30,8 @@ namespace. There is no `kubectl apply` / `helm upgrade` in the normal flow.
   `./scripts/rename.sh <app> <group>` (a wrapper over the `weisssrv-new-project`
   CLI's `rename`; the CLI also `prune`s / `wire`s optional components — see
   `docs/CONSUMING.md`) and `./scripts/select-ci.sh <shape>`, or
-  `grep -rn changeme- .` for leftovers before shipping.
+  `grep -rn 'changeme[-]' .` for leftovers before shipping (the bracket keeps
+  the pattern from matching this line).
 
 ## Local loop
 

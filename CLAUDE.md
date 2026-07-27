@@ -57,8 +57,9 @@ the short standing-rules version.
 
 - The template ships app-slug and GitLab-group placeholders. Run
   `./scripts/rename.sh <app> <group>` (a thin wrapper over the
-  `weisssrv-new-project` CLI's `rename`) once, then `grep -rn changeme- .` to
-  catch any leftovers before shipping. The CLI also `prune`s / `wire`s optional
+  `weisssrv-new-project` CLI's `rename`) once, then `grep -rn 'changeme[-]' .`
+  to catch any leftovers before shipping (the bracket stops the pattern matching
+  this line, so a clean project gets zero hits). The CLI also `prune`s / `wire`s optional
   components structurally — see [`docs/CONSUMING.md`](docs/CONSUMING.md). CI
   shape selection is `./scripts/select-ci.sh <shape>` (repo-local — the CLI
   does not model it yet).

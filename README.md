@@ -63,7 +63,10 @@ weisssrv-new-project wire  hpa                       # optional
 ```
 
 See [`docs/CONSUMING.md`](docs/CONSUMING.md) for install + the full toggle list.
-Either way, `grep -rn changeme- .` afterward confirms no placeholders are left.
+Either way, `grep -rn 'changeme[-]' .` afterward confirms no placeholders are
+left. The bracket is deliberate: the pattern matches a real placeholder but not
+this line, so a clean project gets zero hits instead of hits on the very docs
+telling you to run the check.
 
 `scripts/select-ci.sh` keeps one CI shape and deletes the other two's files —
 **`gitlab` is the default**, and running it even for `gitlab` matters (it drops
