@@ -1,0 +1,192 @@
+---
+# CI for a weisssrv cluster tenant repo hosted on GITHUB (CI shape B).
+#
+# This reproduces the GATES of the GitLab pipeline in `.gitlab-ci.yml` — the
+# checks that make sense off-cluster: YAML lint, `kustomize build` +
+# kubeconform of the tenant manifests, shellcheck, the docs link check, and a
+# secret scan. The image build lives in its own workflow (build-image.yml).
+#
+# One repo runs ONE shape. Pick yours with `./scripts/select-ci.sh <shape>`;
+# the shapes, the job-for-job parity table, and what a github.com repo genuinely
+# gives up versus self-hosted GitLab are in docs/CI-SHAPES.md.
+#
+# Deploys are NOT here, by design. Flux pulls this repo and reconciles it; a
+# workflow that ran `kubectl apply` would fight the reconciler. See
+# docs/ONBOARDING.md.
+#
+# Tool versions are pinned, and every downloaded binary is sha256-verified
+# against the value the GitLab library template uses, so both shapes gate on
+# byte-identical tools. Bump them deliberately in a PR (there is no dependency
+# bot), keeping them in step with the `ref:` in `.gitlab-ci.yml`.
+name: ci
+
+# Quoted: unquoted `on` is a YAML 1.1 boolean, which yamllint's truthy rule
+# flags. GitHub reads the quoted key identically.
+"on":
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Read-only by default. The image build asks for `packages: write` separately.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Matches the weisssrv-lib yaml-lint template default.
+  YAMLLINT_VERSION: "1.38.0"
+  # Matches the weisssrv-lib flux-lint template defaults (version + sha256).
+  KUSTOMIZE_VERSION: "5.4.3"
+  KUSTOMIZE_SHA256: "3669470b454d865c8184d6bce78df05e977c9aea31c30df3c669317d43bcc7a7"
+  KUBECONFORM_VERSION: "0.6.7"
+  KUBECONFORM_SHA256: "95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73"
+  # Matches the weisssrv-lib shellcheck template's image tag.
+  SHELLCHECK_VERSION: "0.10.0"
+  SHELLCHECK_SHA256: "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87"
+  # Matches the gitleaks rev pinned in .pre-commit-config.yaml.
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+  # The cluster's Kubernetes minor — a per-consumer fact, same value as the
+  # `k8s_version` input in .gitlab-ci.yml. Keep the two in step.
+  K8S_VERSION: "1.36.0"
+
+jobs:
+  # --- yaml-lint: lint the whole tree against the repo-local .yamllint -------
+  yaml-lint:
+    name: yaml-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - name: Install yamllint
+        # pipx ships in the GitHub-hosted runner image and puts the console
+        # script on PATH. (Ubuntu's system Python is externally managed, so a
+        # plain `pip install --user` would refuse.)
+        run: pipx install "yamllint==${YAMLLINT_VERSION}"
+      - name: Lint
+        run: yamllint -c .yamllint .
+
+  # --- flux-lint: kustomize build + kubeconform of the tenant manifests -----
+  # The same two commands the GitLab flux-lint job runs in SIMPLE mode
+  # (`substitute: false`): a tenant pins literal image tags, so there is no
+  # cluster-versions ConfigMap and nothing to envsubst.
+  flux-lint:
+    name: flux-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - name: Install kustomize + kubeconform (sha256-verified)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          fetch() {  # <url> <sha256> <member>
+            curl -fsSL -o "$RUNNER_TEMP/tool.tar.gz" "$1"
+            echo "$2  $RUNNER_TEMP/tool.tar.gz" | sha256sum -c -
+            tar xzf "$RUNNER_TEMP/tool.tar.gz" -C "$RUNNER_TEMP/bin" "$3"
+          }
+          fetch \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
+            "$KUSTOMIZE_SHA256" kustomize
+          fetch \
+            "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            "$KUBECONFORM_SHA256" kubeconform
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Render + validate
+        run: |
+          set -euo pipefail
+          # Platform CRDs (IngressRoute, ServiceMonitor, VPA, ExternalSecret,
+          # Certificate) validate against the datreeio catalog; core kinds use
+          # kubeconform's bundled schemas. -ignore-missing-schemas keeps a CRD
+          # with no published schema from failing the gate.
+          CATALOG='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          kustomize build kubernetes/flux > "$RUNNER_TEMP/rendered.yaml"
+          kubeconform -strict -ignore-missing-schemas \
+            -kubernetes-version "$K8S_VERSION" \
+            -schema-location default \
+            -schema-location "$CATALOG" \
+            -summary "$RUNNER_TEMP/rendered.yaml"
+
+  # --- shellcheck: lint the scripts/ helpers --------------------------------
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - name: Install shellcheck (sha256-verified)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/sc.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "$SHELLCHECK_SHA256  $RUNNER_TEMP/sc.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar xJf "$RUNNER_TEMP/sc.tar.xz" -C "$RUNNER_TEMP/bin" \
+            --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Lint scripts/
+        run: |
+          set -euo pipefail
+          # Same severity/exclusions as the GitLab job. An unmatched glob stays
+          # literal in POSIX sh, so `[ -e ]` tells a real file from a pattern
+          # that matched nothing — a repo with no scripts/ is skipped, not
+          # failed.
+          rc=0
+          for f in scripts/*.sh; do
+            if [ -e "$f" ]; then
+              shellcheck --severity=warning --exclude=SC1091,SC2034 "$f" || rc=1
+            else
+              echo "no files match '$f' — skipping"
+            fi
+          done
+          exit "$rc"
+
+  # --- docs-link-check: relative Markdown cross-links resolve ---------------
+  docs-link-check:
+    name: docs-link-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - name: Check relative doc links
+        # The vendored, stdlib-only checker — no network, no dependencies.
+        run: python3 scripts/check-doc-links.py
+
+  # --- secret-detection: gitleaks, tuned by .gitleaks.toml ------------------
+  # GitLab's managed Secret-Detection analyzer runs gitleaks under the hood and
+  # loads .gitleaks.toml through .gitlab/secret-detection-ruleset.toml. On
+  # GitHub there is no analyzer wrapper, so gitleaks is invoked directly with
+  # the same config file — findings FAIL the job (see docs/CI-SHAPES.md for the
+  # difference from the `allow_failure` default of the GitLab include).
+  secret-detection:
+    name: secret-detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          # Full history so the commit-range scan below can see every commit a
+          # pull request adds.
+          fetch-depth: 0
+      - name: Install gitleaks (sha256-verified)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Scan the working tree
+        run: gitleaks dir . --config .gitleaks.toml --redact --no-banner
+      - name: Scan the commits this pull request adds
+        if: github.event_name == 'pull_request'
+        # SHAs come in as environment variables rather than being interpolated
+        # into the shell line — the repo's standing rule for any `${{ }}` value
+        # that reaches a command.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          gitleaks git . --config .gitleaks.toml --redact --no-banner \
+            --platform github --log-opts="${BASE_SHA}..${HEAD_SHA}"

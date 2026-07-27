@@ -22,6 +22,11 @@ Flux Kustomization name. Keep it a valid DNS label.
    `weisssrv-new-project` CLI). Review `git diff`, then `grep -rn changeme- .`
    to confirm nothing was missed. To also drop/enable optional components, use
    the CLI's `prune` / `wire` — see [CONSUMING.md](CONSUMING.md).
+   Then **pick a CI shape**: `./scripts/select-ci.sh <gitlab|github|none>`
+   (default `gitlab`). That decides only what *checks* your changes and where
+   the image is built — Flux deploys the repo in all three shapes. Tell the
+   operator which you picked: it changes the `GitRepository` in their wiring
+   file (step O3). See [CI-SHAPES.md](CI-SHAPES.md).
 3. **Set the image** in `kubernetes/flux/deployment.yaml` — an upstream image,
    or one you build (locally with `task build`, or via the opt-in CI build-image
    job on a privileged runner) and push to
@@ -39,15 +44,24 @@ Flux Kustomization name. Keep it a valid DNS label.
 6. **Point observability** at your metrics endpoint in `servicemonitor.yaml`
    (or delete it if the app exposes none). Adjust the alert expressions in
    `prometheusrule.yaml` if you renamed the Deployment.
-7. `task lint`, commit on a branch, open an MR. CI must be green.
+7. `task lint`, commit on a branch, open an MR/PR. CI must be green. (In shape
+   `none` there is no pipeline — `task lint` and the pre-commit hooks are the
+   whole gate.)
 8. **Request wiring** from the operator (hand them your slug, group, chosen
-   secret backend, and whether you need an internal hostname).
+   secret backend, your **repo URL and CI shape**, and whether you need an
+   internal hostname).
 9. After the operator merges the wiring, merge your `main`. Verify with
    `task flux:status` / `kubectl get pods -n <slug>` (kubeconfig from operator).
 
 ---
 
 ## Operator checklist (performed in the weisssrv repo)
+
+The tenant's CI shape (`gitlab` / `github` / `none`) changes exactly one thing
+here: the `GitRepository` in step O3 — its URL, and whether it needs a
+`secretRef` for a deploy key or PAT. Everything else is identical, because Flux
+is the deployer in all three shapes and no CI ever applies to the cluster. The
+GitHub commands are in [CI-SHAPES.md](CI-SHAPES.md).
 
 1. **O1 — Pick a secret backend** and prepare it:
    - *1Password (Option C, recommended):* create prefixed items in the Homelab
@@ -107,6 +121,11 @@ Flux Kustomization name. Keep it a valid DNS label.
      namespace: flux-system
    spec:
      interval: 1m
+     # A tenant repo may live anywhere Flux can clone from — this is the only
+     # part of the wiring the tenant's CI shape changes. For a GitHub-hosted
+     # repo use https://github.com/<owner>/<repo> (public), or the ssh:// form
+     # plus `secretRef:` for a private one; exact commands in CI-SHAPES.md
+     # ("Operator wiring for a GitHub-hosted tenant").
      url: https://git.ericsweiss.com/<group>/<slug>
      ref:
        branch: main

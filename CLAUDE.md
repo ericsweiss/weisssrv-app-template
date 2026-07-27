@@ -14,11 +14,22 @@ request, and on merge to `main` the operator-side Flux `Kustomization`
 reconciles this repo into your namespace. There is no `kubectl apply` /
 `helm upgrade` in the normal workflow.
 
-The generic CI (lint / flux-lint / shellcheck / docs-link-check /
-secret-detection) is **included from the shared `eric/weisssrv-lib` library** at
-a pinned tag in `.gitlab-ci.yml` — do not re-inline those jobs; change behavior
-by bumping the library `ref:` or adjusting the `inputs:`. See
-[`docs/CONSUMING.md`](docs/CONSUMING.md).
+**CI comes in three shapes and a repo keeps exactly one** — `gitlab` (default),
+`github`, or `none` (Flux-only, no pipeline). Check which one this repo is on
+before touching CI: `.gitlab-ci.yml` present → shape `gitlab`;
+`.github/workflows/` present → shape `github`; neither → shape `none`. Selection
+is `./scripts/select-ci.sh <shape>`, run once at setup. Deployment is Flux in
+all three. See [`docs/CI-SHAPES.md`](docs/CI-SHAPES.md).
+
+- Shape `gitlab`: the generic CI (lint / flux-lint / shellcheck /
+  docs-link-check / secret-detection) is **included from the shared
+  `eric/weisssrv-lib` library** at a pinned tag in `.gitlab-ci.yml` — do not
+  re-inline those jobs; change behavior by bumping the library `ref:` or
+  adjusting the `inputs:`. See [`docs/CONSUMING.md`](docs/CONSUMING.md).
+- Shape `github`: `.github/workflows/` is a **vendored** equivalent (the library
+  ships no reusable Actions workflows), pinned to the same tool versions and
+  sha256s. A library bump is a manual re-vendor here — keep the two in step and
+  say so in the PR.
 
 A task-oriented walkthrough lives in the `project-development` skill
 (`.claude/skills/project-development/SKILL.md`) — read it for the local loop,
@@ -48,15 +59,18 @@ the short standing-rules version.
   `./scripts/rename.sh <app> <group>` (a thin wrapper over the
   `weisssrv-new-project` CLI's `rename`) once, then `grep -rn changeme- .` to
   catch any leftovers before shipping. The CLI also `prune`s / `wire`s optional
-  components structurally — see [`docs/CONSUMING.md`](docs/CONSUMING.md).
+  components structurally — see [`docs/CONSUMING.md`](docs/CONSUMING.md). CI
+  shape selection is `./scripts/select-ci.sh <shape>` (repo-local — the CLI
+  does not model it yet).
 - Register every new manifest in `kubernetes/flux/kustomization.yaml`.
 - `task lint` (yamllint + kustomize build + kubeconform) mirrors CI — run it
   before opening an MR.
 - Version pins: image tags are literal — bump them yourself in an MR (there is
   no hosted dependency bot). The shared CI tool versions (kubeconform, kustomize)
   are owned by the `eric/weisssrv-lib` templates the pipeline includes — bump the
-  library `ref:` in `.gitlab-ci.yml` to move them; pre-commit hook revs live in
-  `.pre-commit-config.yaml`.
+  library `ref:` in `.gitlab-ci.yml` to move them; in shape `github` the same
+  versions (and their sha256s) are literals in `.github/workflows/ci.yml`, bumped
+  by hand. Pre-commit hook revs live in `.pre-commit-config.yaml`.
 - Follow the shipped manifests as the pattern rather than inventing new shapes.
 
 ## Canonical platform docs (authoritative — on git.ericsweiss.com)
@@ -70,6 +84,8 @@ Do not copy platform detail into this repo; link to the source:
 
 ## Repo-local docs
 
+- [`docs/CI-SHAPES.md`](docs/CI-SHAPES.md) — the three CI shapes, the one-command
+  selector, GitLab↔GitHub job parity, and the Flux-only (no-CI) wiring.
 - [`docs/CONSUMING.md`](docs/CONSUMING.md) — the two instantiation paths, library
   consumption + bumping, optional-enablement toggles, image build, BYO-keys.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — request/secret/ingress flow.

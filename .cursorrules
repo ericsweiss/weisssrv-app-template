@@ -14,6 +14,10 @@ canonical agent doc. Key rules:
 - Containers stay non-root with a read-only root filesystem; no `latest` tags.
 - Run `task lint` before opening a merge request.
 - Stay within your single namespace.
-- CI is included from the shared `eric/weisssrv-lib` library at a pinned tag (do
-  not re-inline it); scaffold with the `weisssrv-new-project` CLI — see
-  `docs/CONSUMING.md`.
+- CI comes in three shapes and this repo keeps one: `.gitlab-ci.yml` (shape
+  `gitlab`, includes the shared `eric/weisssrv-lib` library at a pinned tag — do
+  not re-inline it), `.github/workflows/` (shape `github`, a vendored
+  equivalent), or neither (shape `none`, Flux-only). Check which is present
+  before editing CI — see `docs/CI-SHAPES.md`.
+- Scaffold with the `weisssrv-new-project` CLI; pick the CI shape with
+  `./scripts/select-ci.sh` — see `docs/CONSUMING.md`.

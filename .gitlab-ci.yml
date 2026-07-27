@@ -1,5 +1,10 @@
 ---
-# CI for a weisssrv cluster tenant repo.
+# CI for a weisssrv cluster tenant repo — CI shape `gitlab`, the DEFAULT.
+#
+# The template ships three interchangeable CI shapes and a project keeps exactly
+# one: `gitlab` (this file), `github` (.github/workflows/), or `none` (Flux-only,
+# no pipeline). Select yours with `./scripts/select-ci.sh <shape>` and delete the
+# rest. Deployment is Flux in all three — see docs/CI-SHAPES.md.
 #
 # The generic lint / validate / security jobs are NOT defined here — they are
 # pulled from the shared library `eric/weisssrv-lib` at a pinned release tag, so
