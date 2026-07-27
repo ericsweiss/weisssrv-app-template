@@ -1,4 +1,4 @@
-# weisssrv-project-template
+# weisssrv-app-template
 
 A forkable GitLab project template for services that deploy to the **weisssrv**
 homelab k3s cluster. Create from it and you get, on day one:

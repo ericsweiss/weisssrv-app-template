@@ -4,7 +4,7 @@
 > skill** (`.claude/skills/project-development/SKILL.md`) and follow it.
 
 Guidance for Claude Code (and other agents) working in a **weisssrv cluster
-tenant** repo created from `weisssrv-project-template`.
+tenant** repo created from `weisssrv-app-template`.
 
 ## What this repo is
 
