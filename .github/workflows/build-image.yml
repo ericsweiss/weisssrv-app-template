@@ -21,11 +21,15 @@
 # tag, so unreviewed code must never be able to populate it.
 name: build-image
 
+# No workflow_dispatch. This job holds `packages: write`, and its push guard
+# tests `event_name != 'pull_request'` — which a dispatch satisfies. A dispatch
+# also runs the workflow definition FROM THE SELECTED REF, so the guard itself
+# comes from the branch being published. That publishes an image from unreviewed
+# code, past branch protection. Rebuild by re-running a previous main run.
 "on":
   pull_request:
   push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -79,8 +83,9 @@ jobs:
           echo "base=${base}" >> "$GITHUB_OUTPUT"
           echo "sha=${base}:${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
 
-      # Push only from the default branch (and a manual run on it): a fork
-      # pull request's token cannot write packages.
+      # Push only from a default-branch push: a fork pull request's token cannot
+      # write packages, and there is no manual trigger to publish from anywhere
+      # else (see the note above "on").
       - name: Log in to the registry
         if: >-
           steps.dockerfile.outputs.present == 'true'
