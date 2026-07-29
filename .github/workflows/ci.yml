@@ -178,18 +178,28 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Scan the working tree
         run: gitleaks dir . --config .gitleaks.toml --redact --no-banner
-      - name: Scan the commits this pull request adds
-        if: github.event_name == 'pull_request'
+      # Pushes are scanned too, not just pull requests: the working-tree scan
+      # above cannot see a secret that a multi-commit push adds and then deletes,
+      # and a tenant without branch protection can push straight to main.
+      - name: Scan the commits this event adds
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
         # SHAs come in as environment variables rather than being interpolated
         # into the shell line — the repo's standing rule for any `${{ }}` value
         # that reaches a command.
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after }}
         run: |
           set -euo pipefail
+          # A branch's first push reports an all-zero `before`; there is no range
+          # to diff against, so scan everything reachable from the new tip.
+          if [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            LOG_OPTS="$HEAD_SHA"
+          else
+            LOG_OPTS="${BASE_SHA}..${HEAD_SHA}"
+          fi
           gitleaks git . --config .gitleaks.toml --redact --no-banner \
-            --platform github --log-opts="${BASE_SHA}..${HEAD_SHA}"
+            --platform github --log-opts="$LOG_OPTS"
 
   # The Dockerfile gate for pull requests. It lives HERE, not in
   # build-image.yml, because that workflow holds `packages: write` and a
