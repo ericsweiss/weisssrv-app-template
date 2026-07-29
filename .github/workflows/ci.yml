@@ -201,13 +201,19 @@ jobs:
           gitleaks git . --config .gitleaks.toml --redact --no-banner \
             --platform github --log-opts="$LOG_OPTS"
 
-  # The Dockerfile gate for pull requests. It lives HERE, not in
-  # build-image.yml, because that workflow holds `packages: write` and a
-  # pull_request run executes the workflow file FROM THE PR — so a same-repo PR
-  # could edit away its step-level push guard and publish before review.
-  # build-image.yml is therefore push-only, and this job keeps a broken
-  # Dockerfile from reaching main under `contents: read` alone. It builds and
-  # throws the image away; nothing here can push.
+  # The Dockerfile gate. It lives HERE, not in build-image.yml, because that
+  # workflow holds `packages: write` and a pull_request run executes the workflow
+  # file FROM THE PR — so a same-repo PR could edit away its step-level push
+  # guard and publish before review. build-image.yml is therefore push-only, and
+  # this job keeps a broken Dockerfile from reaching main under `contents: read`
+  # alone. It builds and throws the image away; nothing here can push.
+  #
+  # It deliberately runs on push as well as pull_request, which does mean main
+  # builds the image twice (here, and in build-image.yml). That is the price of
+  # gating the release: the release workflow triggers on `ci` completing, so
+  # without this job on push, a tag could be cut for a commit whose image never
+  # built. The second build is warm — both pull the same registry layer cache.
+  # Drop the `push` half only if you also stop gating releases on `ci`.
   docker-build:
     name: docker-build
     runs-on: ubuntu-latest
