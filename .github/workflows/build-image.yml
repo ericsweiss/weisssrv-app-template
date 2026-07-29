@@ -10,10 +10,11 @@
 # and set REGISTRY/IMAGE_NAME below.
 #
 # Differences from the GitLab job, on purpose:
-#   * A pull request BUILDS but does not PUSH. A fork's GITHUB_TOKEN is
-#     read-only, so a push would fail there; a PR build is still a real gate on
-#     the Dockerfile. The GitLab job pushes `:<short-sha>` on merge requests
-#     too, because a merge request there always runs with project credentials.
+#   * Pull requests do not run this workflow at all — see the note above `on`.
+#     Their Dockerfile gate is ci.yml's `docker-build`, which builds and discards
+#     under `contents: read`. The GitLab job DOES push `:<short-sha>` on merge
+#     requests, because a merge request there runs with project credentials and
+#     the job cannot be redefined by the branch under review.
 #   * No privileged-runner problem to solve: GitHub-hosted runners ship Docker,
 #     so unlike the tenant `k8s-deploy` runner this needs no special tag.
 #
@@ -21,13 +22,14 @@
 # tag, so unreviewed code must never be able to populate it.
 name: build-image
 
-# No workflow_dispatch. This job holds `packages: write`, and its push guard
-# tests `event_name != 'pull_request'` — which a dispatch satisfies. A dispatch
-# also runs the workflow definition FROM THE SELECTED REF, so the guard itself
-# comes from the branch being published. That publishes an image from unreviewed
-# code, past branch protection. Rebuild by re-running a previous main run.
+# PUSH-ONLY, and no workflow_dispatch. This workflow holds `packages: write`,
+# and both other triggers run the workflow file from code that has not been
+# reviewed: a pull_request run executes the PR's own copy, and a dispatch
+# executes the selected ref's — either can delete the step-level push guard and
+# publish. :latest is consumed by privileged jobs, so unreviewed code must never
+# be able to populate it. The pull-request Dockerfile gate lives in ci.yml
+# (`docker-build`), which builds under `contents: read` and cannot push.
 "on":
-  pull_request:
   push:
     branches: [main]
 
@@ -49,10 +51,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # persist-credentials: false — checkout otherwise writes the job's token
-      # into .git/config, and this job holds `packages: write`. It runs on
-      # pull_request, and the build context is the repo, so a Dockerfile could
-      # `COPY .git/config` and read the token out of the image. Nothing after
-      # this step does an authenticated git operation.
+      # into .git/config, and this job holds `packages: write`. The build context
+      # is the repository, so a Dockerfile could `COPY .git/config` and read the
+      # token back out of the image. Nothing after this step does an
+      # authenticated git operation.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
           persist-credentials: false
@@ -83,13 +85,8 @@ jobs:
           echo "base=${base}" >> "$GITHUB_OUTPUT"
           echo "sha=${base}:${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
 
-      # Push only from a default-branch push: a fork pull request's token cannot
-      # write packages, and there is no manual trigger to publish from anywhere
-      # else (see the note above "on").
       - name: Log in to the registry
-        if: >-
-          steps.dockerfile.outputs.present == 'true'
-          && github.event_name != 'pull_request'
+        if: steps.dockerfile.outputs.present == 'true'
         env:
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REGISTRY_USER: ${{ github.actor }}
@@ -106,7 +103,7 @@ jobs:
         run: |
           set -euo pipefail
           # Best-effort registry layer cache off the previous :latest. Missing
-          # (first build, or a PR with no registry read) is not an error.
+          # (the first build) is not an error.
           docker pull "${BASE}:latest" || true
           docker build \
             --cache-from "${BASE}:latest" \
@@ -115,9 +112,7 @@ jobs:
             --file Dockerfile .
 
       - name: Push
-        if: >-
-          steps.dockerfile.outputs.present == 'true'
-          && github.event_name != 'pull_request'
+        if: steps.dockerfile.outputs.present == 'true'
         env:
           SHA_TAG: ${{ steps.tags.outputs.sha }}
           BASE: ${{ steps.tags.outputs.base }}

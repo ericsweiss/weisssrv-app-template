@@ -190,3 +190,37 @@ jobs:
           set -euo pipefail
           gitleaks git . --config .gitleaks.toml --redact --no-banner \
             --platform github --log-opts="${BASE_SHA}..${HEAD_SHA}"
+
+  # The Dockerfile gate for pull requests. It lives HERE, not in
+  # build-image.yml, because that workflow holds `packages: write` and a
+  # pull_request run executes the workflow file FROM THE PR — so a same-repo PR
+  # could edit away its step-level push guard and publish before review.
+  # build-image.yml is therefore push-only, and this job keeps a broken
+  # Dockerfile from reaching main under `contents: read` alone. It builds and
+  # throws the image away; nothing here can push.
+  docker-build:
+    name: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+
+      # A project running an upstream image has no Dockerfile (see
+      # `weisssrv-new-project prune image-build`) — skip, do not fail.
+      - name: Check for a Dockerfile
+        id: dockerfile
+        run: |
+          set -euo pipefail
+          if [ -f Dockerfile ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "no Dockerfile — nothing to build"
+          fi
+
+      - name: Build (no push)
+        if: steps.dockerfile.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          docker build --tag ci-build-check:${GITHUB_SHA::8} --file Dockerfile .

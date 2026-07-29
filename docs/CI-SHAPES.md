@@ -86,7 +86,7 @@ so both shapes gate on byte-identical tools.
 | `shellcheck` | `shellcheck` | **Exact.** shellcheck 0.10.0, `--severity=warning --exclude=SC1091,SC2034`, over `scripts/*.sh`. |
 | `docs-link-check` | `docs-link-check` | **Exact.** the same vendored `scripts/check-doc-links.py`. |
 | `secret_detection` | `secret-detection` | **Same detector, different wrapper** — see below. |
-| `build-image` | `build-image` | **Different registry + push policy** — see below. |
+| `build-image` | `docker-build` (in `ci.yml`) + `build-image` | **Split by privilege, different registry** — see below. |
 | `pr-agent-review` | — | **Not ported.** |
 | `semantic-release` | — | **Not ported** — GitLab-API-only, see below. |
 | `python-tests` | — | **Not ported** — it gates the TEMPLATE (`tests/`), not your app, and skips itself once you have renamed. Delete `tests/`. |
@@ -109,16 +109,23 @@ request adds. Two deliberate differences:
 authenticated with the built-in `GITHUB_TOKEN`, the way shape A uses the
 `$CI_REGISTRY_*` built-ins — no key to bring either way. Two differences:
 
-- A **pull request builds but does not push**: a fork's `GITHUB_TOKEN` is
-  read-only, so a push would fail there. On merge to `main` the workflow pushes
-  `:<short-sha>` and `:latest`. The GitLab job pushes `:<short-sha>` on merge
-  requests too. (`:latest` is default-branch-only in both — privileged jobs
-  consume that tag, so unreviewed code must never populate it.)
+- **The build is split in two, by privilege.** `ci.yml`'s `docker-build` job is
+  the pull-request gate: it builds under `contents: read` and discards the
+  image. `build-image.yml` is **push-only** and is the only thing holding
+  `packages: write`; on merge to `main` it pushes `:<short-sha>` and `:latest`.
+  They are separate because a `pull_request` run executes the workflow file
+  *from the pull request* — so if the publishing workflow ran on PRs, a
+  same-repo PR could delete its own push guard and publish before review. Shape
+  A needs no such split: the GitLab job pushes `:<short-sha>` on merge requests
+  too, because a merge request there runs with project credentials and the job
+  cannot be redefined by the branch under review. (`:latest` is
+  default-branch-only in both — privileged jobs consume that tag, so unreviewed
+  code must never populate it.)
 - No privileged-runner problem to solve. GitHub-hosted runners ship Docker, so
-  unlike the tenant `k8s-deploy` runner the build needs no special tag. Delete
-  `build-image.yml` (or run `weisssrv-new-project prune image-build`) for a
-  project that runs an upstream image; the workflow already no-ops when there
-  is no `Dockerfile`.
+  unlike the tenant `k8s-deploy` runner the build needs no special tag. For a
+  project that runs an upstream image, delete `build-image.yml` AND `ci.yml`'s
+  `docker-build` job (or run `weisssrv-new-project prune image-build`); both
+  already no-op when there is no `Dockerfile`.
 
 ### What a github.com repo genuinely loses
 
