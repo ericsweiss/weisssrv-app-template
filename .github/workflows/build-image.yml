@@ -44,7 +44,14 @@ jobs:
     name: build-image
     runs-on: ubuntu-latest
     steps:
+      # persist-credentials: false — checkout otherwise writes the job's token
+      # into .git/config, and this job holds `packages: write`. It runs on
+      # pull_request, and the build context is the repo, so a Dockerfile could
+      # `COPY .git/config` and read the token out of the image. Nothing after
+      # this step does an authenticated git operation.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
 
       # A project that runs an upstream image has no Dockerfile (see
       # `weisssrv-new-project prune image-build`). Skip instead of failing, so
