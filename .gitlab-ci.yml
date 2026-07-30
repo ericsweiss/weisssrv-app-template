@@ -22,9 +22,10 @@
 #
 # Bumping the library: change every `ref:` below to the new tag in one MR (there
 # is no hosted dependency bot — bumps are deliberate). See docs/CONSUMING.md.
-# The refs are NOT uniform today: the generic jobs are on v0.1.1 and the release
-# include is on v0.2.0, the first tag that ships it. Bringing the rest up to
-# v0.2.0 is the next bump, and it is its own MR.
+# Every include pins the SAME tag. They diverged once (generic jobs on v0.1.1,
+# release on v0.2.0) and the wrappers below drifted with them, so `rename.sh` and
+# `select-ci.sh` could fetch two different builds of the same CLI. Keep them in
+# step: bump all of them, or none.
 #
 # `release` is LAST on purpose: the semantic-release job sets no `needs:`, so
 # stage ordering is what gates the tag on every job above it having passed. See
@@ -55,7 +56,7 @@ workflow:
 include:
   # -- yaml-lint: lint the whole tree against the repo-local .yamllint --------
   - project: eric/weisssrv-lib
-    ref: v0.1.1
+    ref: v0.3.0
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
@@ -75,7 +76,7 @@ include:
   # pinned here: it is the cluster's k8s minor kubeconform validates against, a
   # per-consumer fact (k3s v1.36.x today), not a library-owned tool version.
   - project: eric/weisssrv-lib
-    ref: v0.1.1
+    ref: v0.3.0
     file: /ci/validate/flux-lint.yml
     inputs:
       tags: []
@@ -86,7 +87,7 @@ include:
 
   # -- shellcheck: lint the scripts/ helpers (the rename wrapper) -------------
   - project: eric/weisssrv-lib
-    ref: v0.1.1
+    ref: v0.3.0
     file: /ci/lint/shellcheck.yml
     inputs:
       tags: []
@@ -99,7 +100,7 @@ include:
   # Runs the vendored, stdlib-only scripts/check-doc-links.py (copied from the
   # library). Scans docs/ + README.md + CLAUDE.md.
   - project: eric/weisssrv-lib
-    ref: v0.1.1
+    ref: v0.3.0
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
@@ -127,7 +128,7 @@ include:
   # in this template at v0.1.1. `changes: ["**/*"]` because the suite reads the
   # whole tree (token scan, YAML parse, per-shape diff).
   - project: eric/weisssrv-lib
-    ref: v0.2.0
+    ref: v0.3.0
     file: /ci/test/python-tests.yml
     inputs:
       tags: []
@@ -154,7 +155,7 @@ include:
   # To make a secret finding HARD-BLOCK the pipeline, add
   # `inputs: { allow_failure: false }`.
   - project: eric/weisssrv-lib
-    ref: v0.1.1
+    ref: v0.3.0
     file: /ci/security/secret-detection.yml
 
   # -- build-image: build THIS service's container image (the main use case) --
@@ -170,7 +171,7 @@ include:
   # `weisssrv-new-project prune image-build` to drop the Dockerfile. See
   # docs/CONSUMING.md ("Building the service image").
   - project: eric/weisssrv-lib
-    ref: v0.1.1
+    ref: v0.3.0
     file: /ci/build/docker-build.yml
     inputs:
       tags: ["infrastructure"]       # a PRIVILEGED runner (retag to yours)
@@ -201,7 +202,7 @@ include:
   # major_on_zero stays false: while the tag is 0.x a `feat!:` bumps MINOR, and
   # calling this 1.0.0 is a deliberate act (flip the input for that release).
   - project: eric/weisssrv-lib
-    ref: v0.2.0
+    ref: v0.3.0
     file: /ci/release/semantic-release.yml
     inputs:
       tags: []
@@ -213,7 +214,7 @@ include:
   # would need a remote/HTTP state backend and internet-reachable providers.
   # --------------------------------------------------------------------------
   # - project: eric/weisssrv-lib
-  #   ref: v0.1.1
+  #   ref: v0.3.0
   #   file: /ci/validate/terraform.yml
   #   inputs:
   #     tags: []
