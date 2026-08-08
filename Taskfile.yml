@@ -41,6 +41,14 @@ tasks:
         -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{`{{.Group}}`}}/{{`{{.ResourceKind}}`}}_{{`{{.ResourceAPIVersion}}`}}.json'
         -summary /tmp/{{.APP}}-rendered.yaml
 
+  test:
+    desc: >-
+      Run the TEMPLATE's own gate (rename + CI-shape selection on a scratch
+      copy). Needs pytest and the weisssrv-new-project CLI; skips itself once
+      this project has been renamed.
+    cmds:
+      - python3 -m pytest tests
+
   render:
     desc: Print the rendered manifests kustomize will hand to Flux.
     cmds:

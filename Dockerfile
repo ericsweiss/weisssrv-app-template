@@ -29,7 +29,7 @@ RUN printf '%s\n' \
     '<!doctype html>' \
     '<title>changeme-app</title>' \
     '<h1>changeme-app</h1>' \
-    '<p>Placeholder image from weisssrv-project-template. Replace the Dockerfile with your app build.</p>' \
+    '<p>Placeholder image from weisssrv-app-template. Replace the Dockerfile with your app build.</p>' \
     > /app/index.html
 
 # Drop to the same non-root UID the Deployment runs as.

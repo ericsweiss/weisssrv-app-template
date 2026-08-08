@@ -1,4 +1,4 @@
-# weisssrv-project-template
+# weisssrv-app-template
 
 A forkable GitLab project template for services that deploy to the **weisssrv**
 homelab k3s cluster. Create from it and you get, on day one:
@@ -10,22 +10,30 @@ homelab k3s cluster. Create from it and you get, on day one:
 - **default-deny NetworkPolicies**, a **ServiceMonitor**, down/stale **alerts**,
   and a **VPA** — observability and autoscaling without extra work,
 - **CI** that lints, schema-validates the manifests, and scans for secrets on
-  every merge request — pulled from the shared
+  every change — in **three interchangeable shapes** you pick with one command
+  at setup: self-hosted **GitLab** (the default, pulling its jobs from the shared
   [`eric/weisssrv-lib`](https://git.ericsweiss.com/eric/weisssrv-lib) library at
-  a pinned tag, not hand-rolled here.
+  a pinned tag), **GitHub Actions**, or **none at all**. See
+  [`docs/CI-SHAPES.md`](docs/CI-SHAPES.md).
 
-Flux (GitOps) does the deploying: you edit YAML, open a merge request, and on
-merge to `main` the cluster reconciles this repo into your namespace. There is
-no `kubectl apply` in the normal flow. A placeholder `Dockerfile` ships and the
-CI **builds your service image by default**; see [step 3](#3-set-your-image).
+Flux (GitOps) does the deploying **in every shape**: you edit YAML, open a merge
+request/pull request, and on merge to `main` the cluster reconciles this repo
+into your namespace. The pipeline never deploys — there is no `kubectl apply` in
+the normal flow, and `kubernetes/flux/` is identical whichever shape you pick. A
+placeholder `Dockerfile` ships and CI **builds your service image by default**;
+see [step 3](#3-set-your-image).
 
-> New here? [`docs/CONSUMING.md`](docs/CONSUMING.md) covers the two ways to
+> New here? [`docs/CI-SHAPES.md`](docs/CI-SHAPES.md) is the first fork in the
+> road — GitLab, GitHub, or no pipeline.
+> [`docs/CONSUMING.md`](docs/CONSUMING.md) covers the two ways to
 > create a project (fork or the `weisssrv-new-project` CLI), the optional
 > components you can toggle, the image-build story, and the keys you bring. The
 > agent skill in `.claude/skills/project-development/` and
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explain how a tenant app rides
 > the platform; operator/tenant checklists are in
 > [`docs/ONBOARDING.md`](docs/ONBOARDING.md).
+> [`docs/VERSIONING.md`](docs/VERSIONING.md) covers the release tags this
+> pipeline cuts — for the scaffold, and then for your own service.
 
 ---
 
@@ -37,10 +45,11 @@ In GitLab: **Fork this project** and clone it. (You can use **New project →
 Create from template** instead only if the operator registered this as a
 group/instance custom template — otherwise it won't show up in the picker.)
 
-### 2. Rename (the 3 things you set)
+### 2. Rename (the 3 things you set) and pick a CI shape
 
 ```bash
 ./scripts/rename.sh <app-slug> <gitlab-group>
+./scripts/select-ci.sh gitlab      # or: github | none
 ```
 
 `scripts/rename.sh` is a thin wrapper over the library's `weisssrv-new-project`
@@ -54,7 +63,17 @@ weisssrv-new-project wire  hpa                       # optional
 ```
 
 See [`docs/CONSUMING.md`](docs/CONSUMING.md) for install + the full toggle list.
-Either way, `grep -rn changeme- .` afterward confirms no placeholders are left.
+Either way, `grep -rn 'changeme[-]' .` afterward confirms no placeholders are
+left. The bracket is deliberate: the pattern matches a real placeholder but not
+this line, so a clean project gets zero hits instead of hits on the very docs
+telling you to run the check.
+
+`scripts/select-ci.sh` keeps one CI shape and deletes the other two's files —
+**`gitlab` is the default**, and running it even for `gitlab` matters (it drops
+`.github/workflows/`, which a GitHub mirror with Actions enabled would otherwise
+run as a duplicate set of gates). The shapes, the job-for-job parity table, and
+what a github.com repo gives up are in [`docs/CI-SHAPES.md`](docs/CI-SHAPES.md).
+
 The three things you're really setting:
 
 1. **App slug** — also your Kubernetes namespace and Flux Kustomization name.
@@ -75,16 +94,20 @@ A placeholder `Dockerfile` ships as the buildable default — **replace it with
 your service's real build**. Three ways an image gets built (full detail in
 [`docs/CONSUMING.md`](docs/CONSUMING.md)):
 
-- **CI build (default)** — the `ci/build/docker-build.yml` include builds the
-  repo-root Dockerfile on every MR/main and pushes
+- **CI build (default)** — shape `gitlab`: the `ci/build/docker-build.yml`
+  include builds the repo-root Dockerfile on every MR/main and pushes
   `$CI_REGISTRY_IMAGE:<short-sha>` (+ `:latest` on main). It runs on a
   **privileged runner** (Docker-in-Docker), tagged `infrastructure` — retag it
   to your own privileged runner if you have one; see [CI runner](#ci-runner).
+  Shape `github`: `.github/workflows/build-image.yml` does the same to
+  `ghcr.io/<owner>/<repo>`, building on pull requests and pushing on merge
+  ([`docs/CI-SHAPES.md`](docs/CI-SHAPES.md)). Shape `none` builds nothing.
 - **Locally** — `task build`, then push to
-  `registry.git.ericsweiss.com/<group>/<slug>:<tag>`.
+  `registry.git.ericsweiss.com/<group>/<slug>:<tag>` (or your own registry).
 - **Upstream image (no build)** — for the rare project that builds nothing,
-  remove the build include from `.gitlab-ci.yml` and run `weisssrv-new-project
-  prune image-build` to drop the Dockerfile, then point `image:` at any image.
+  remove the build include from `.gitlab-ci.yml` (or delete
+  `.github/workflows/build-image.yml`) and run `weisssrv-new-project prune
+  image-build` to drop the Dockerfile, then point `image:` at any image.
 
 ### 4. Ship
 
@@ -93,8 +116,9 @@ task lint            # yamllint + kustomize build + kubeconform (same as CI)
 git switch -c my-change && git commit -am "feat: ..." && git push -u origin my-change
 ```
 
-Open the MR. On merge, Flux reconciles — assuming the operator has wired your
-repo once (below).
+Open the MR (or PR). On merge, Flux reconciles — assuming the operator has wired
+your repo once (below). In shape `none` there is no pipeline, so `task lint` and
+the pre-commit hooks are the only gate: run them.
 
 ---
 
@@ -182,6 +206,11 @@ namespace, secret store, Flux `GitRepository`, and a namespace-scoped
 [`docs/ONBOARDING.md`](docs/ONBOARDING.md); the canonical reference is weisssrv
 [`docs/30-multi-repo-onboarding.md`](https://git.ericsweiss.com/eric/weisssrv/-/blob/main/docs/30-multi-repo-onboarding.md).
 
+This step is the same in all three CI shapes — Flux is the deployer regardless.
+Only the `GitRepository` differs when the repo lives on GitHub (a deploy key or
+PAT plus a `secretRef`, if it is private):
+[`docs/CI-SHAPES.md`](docs/CI-SHAPES.md#operator-wiring-for-a-github-hosted-tenant).
+
 ---
 
 ## Local development
@@ -201,7 +230,11 @@ task secrets:check   # ExternalSecret sync state
 Install the pre-commit hooks (`pre-commit install`) to catch secrets and YAML
 issues before you push.
 
-### CI runner
+### CI runner (shape `gitlab`)
+
+Shape `github` runs on GitHub-hosted runners (no tags, Docker included, no LAN
+access ever); shape `none` runs nothing. The rest of this section is shape
+`gitlab` — see [`docs/CI-SHAPES.md`](docs/CI-SHAPES.md) for the comparison.
 
 The pipeline is **tag-less**, so it runs on weisssrv's shared, non-privileged
 `k8s-deploy` runner. That runner has **internet egress only** — lint,
@@ -221,6 +254,10 @@ runner. For a project that builds nothing, remove the build include and run
 ---
 
 ## GitHub mirror (optional)
+
+This is **not** CI shape `github` — a mirror is a read-only copy of a repo whose
+CI still runs on GitLab (shape `gitlab`). If your repo *lives* on GitHub, pick
+shape `github` instead ([`docs/CI-SHAPES.md`](docs/CI-SHAPES.md)).
 
 weisssrv keeps a read-only GitHub mirror; you can do the same. It's a **GitLab
 push-mirror**, configured in the UI (nothing in this repo):
@@ -251,13 +288,25 @@ kubernetes/flux/     # what Flux reconciles into your namespace
   kustomization.yaml
 Dockerfile           # placeholder service image (task build / opt-in CI build)
 .dockerignore
-.gitlab-ci.yml       # includes eric/weisssrv-lib templates @ a pinned tag
+.gitlab-ci.yml       # CI shape A: includes eric/weisssrv-lib templates @ a pinned tag
+.github/workflows/   # CI shape B: the same gates as GitHub Actions
+  ci.yml             #   yaml-lint, flux-lint, shellcheck, docs-link-check, secrets
+  build-image.yml    #   docker build -> ghcr.io/<owner>/<repo>
+  release.yml        #   semantic-release via scripts/semantic-release.py --platform github
 Taskfile.yml         # local dev wrappers
 scripts/rename.sh    # thin wrapper over the weisssrv-new-project CLI
+scripts/select-ci.sh # keep one CI shape, drop the other two (run once at setup)
 scripts/check-doc-links.py  # offline Markdown link checker (docs-link-check job)
-docs/                # CONSUMING.md, ARCHITECTURE.md, ONBOARDING.md
+scripts/semantic-release.py # vendored release script (both CI shapes; --platform github for B)
+docs/                # CI-SHAPES.md, CONSUMING.md, ARCHITECTURE.md, ONBOARDING.md,
+                     #   VERSIONING.md
+tests/               # the TEMPLATE's own gate (rename + CI-shape selection);
+                     #   skips itself once renamed — delete it in your project
 .claude/             # agent settings + project-development skill
 ```
+
+Shape A keeps `.gitlab-ci.yml`, shape B keeps `.github/workflows/`, shape C
+keeps neither — `./scripts/select-ci.sh <shape>` does the pruning.
 
 ## License
 

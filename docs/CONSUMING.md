@@ -6,6 +6,14 @@ rather than being hand-rolled per project. This page covers the two ways to
 create a project, how the library is consumed and bumped, the optional
 components you can toggle on/off, the image-build story, and the keys you bring.
 
+> **This page describes CI shape `gitlab`** — the default, and the only shape
+> that consumes the shared library. The template also ships a GitHub Actions
+> shape and a no-pipeline shape; pick one with `./scripts/select-ci.sh
+> <gitlab|github|none>` and read [CI-SHAPES.md](CI-SHAPES.md) for the parity
+> table and the trade-offs. Everything *below the CI line* — the toggles, the
+> secret backends, the manifests — is identical in all three shapes, because
+> Flux is the deployer in all three.
+
 For how the running app rides the platform, see [ARCHITECTURE.md](ARCHITECTURE.md);
 for the operator/tenant wiring checklists, see [ONBOARDING.md](ONBOARDING.md).
 
@@ -23,12 +31,15 @@ as a custom template), then rename:
 
 ```bash
 ./scripts/rename.sh <app-slug> <gitlab-group>
+./scripts/select-ci.sh gitlab        # or: github | none — see CI-SHAPES.md
 ```
 
 `scripts/rename.sh` is a thin wrapper that delegates to the library CLI's
 `rename` command (installing it on demand via `pipx` if needed), so there is one
-tested substitution implementation. Nothing else is required — edit the
-manifests by hand and delete the components you don't need.
+tested substitution implementation. `scripts/select-ci.sh` is the same kind of
+wrapper over `prune ci:<shape>`, which keeps one CI shape and deletes the other
+two's files (see [CI-SHAPES.md](CI-SHAPES.md)). Nothing else is
+required — edit the manifests by hand and delete the components you don't need.
 
 ### 2. The `weisssrv-new-project` CLI (recommended for component choice)
 
@@ -45,6 +56,7 @@ weisssrv-new-project rename recipe-box eric/apps
 weisssrv-new-project prune  metrics single-replica   # drop what you don't use
 weisssrv-new-project wire   hpa                       # enable an opt-in
 weisssrv-new-project verify                           # no placeholders, kustomize builds
+weisssrv-new-project prune  ci:gitlab                 # CI shape (./scripts/select-ci.sh wraps this)
 ```
 
 Run each from the project root (or pass `--root <dir>`). Full command reference:
@@ -87,13 +99,20 @@ include:
 The jobs the pipeline includes: `yaml-lint`, `flux-lint` (simple/`substitute:
 false` mode — literal image pins, no cluster-versions ConfigMap; `k8s_version`
 is pinned here since it's the cluster's k8s minor, a per-consumer fact),
-`shellcheck`, `docs-link-check`, `secret_detection`, and `build-image` (the
-service image — on the privileged runner; see below). `pr-agent-review` stays
-defined locally (the library ships no pr-agent template) as a BYO-keys job.
+`shellcheck`, `docs-link-check`, `secret_detection`, `build-image` (the
+service image — on the privileged runner; see below), and `semantic-release`
+(the last stage — tags `main` from its conventional commits; see
+[VERSIONING.md](VERSIONING.md)). `pr-agent-review` stays defined locally (the
+library ships no pr-agent template) as a BYO-keys job.
 
-`scripts/check-doc-links.py` is a **vendored copy** of the library's stdlib-only
-link checker — the `docs-link-check` job runs it from this path. Re-vendor it
-(copy from the pinned library tag) when you bump the library `ref:`.
+The refs are **not uniform**: the release include pins `v0.2.0` because
+`ci/release/semantic-release.yml` does not exist at `v0.1.1`. Bringing the
+generic jobs up to `v0.2.0` is the next bump, in its own MR.
+
+`scripts/check-doc-links.py` and `scripts/semantic-release.py` are **vendored
+copies** of the library's stdlib-only tools — their jobs run them from these
+paths. Re-vendor them (copy from the pinned library tag) when you bump the
+library `ref:`. Nothing checks that automatically here, so do it in the same MR.
 
 ---
 
@@ -106,6 +125,7 @@ never half-mutates the repo.
 
 | Component | Default | Turn off / on |
 |---|---|---|
+| **CI shape** (`.gitlab-ci.yml` / `.github/workflows/`) | `gitlab` | `prune ci:<gitlab\|github\|none>`, or the `./scripts/select-ci.sh` wrapper; see [CI-SHAPES.md](CI-SHAPES.md) |
 | **Public IngressRoute** (`*.ericsweiss.com`) | on | `prune external-ingress` (wire the internal route first) |
 | **Internal IngressRoute** (`*.esweiss.com`) | off (commented) | `wire internal-ingress` + operator AdGuard rewrite |
 | **Authentik SSO** forward-auth middleware | off (commented) | `wire sso` + operator provisions the Authentik objects |
@@ -113,7 +133,7 @@ never half-mutates the repo.
 | **PodDisruptionBudget** (`pdb.yaml`) | on | `prune pdb`, or `prune single-replica` (also sets `replicas: 1`) |
 | **ServiceMonitor + scrape policy** | on | `prune metrics` (drops servicemonitor + the observability-scrape NetworkPolicy) |
 | **ExternalSecret** (secrets) | on (1Password backend) | `prune secrets` (drops the manifest + the deployment secret env block) |
-| **Image build** (`Dockerfile` + `build-image` CI job) | on (active) | `prune image-build` deletes Dockerfile/.dockerignore; also remove the build include from `.gitlab-ci.yml` for a no-build (upstream-image) project |
+| **Image build** (`Dockerfile` + `build-image` CI job) | on (active) | `prune image-build` deletes Dockerfile/.dockerignore; for a no-build (upstream-image) project also remove the build include from `.gitlab-ci.yml`, or delete `.github/workflows/build-image.yml` in the `github` shape (it already no-ops without a Dockerfile) |
 | **Any single manifest** | — | `prune manifest:<file>` (deletes it + its kustomization entry) |
 | **Plain (non-k8s) repo** | — | delete `kubernetes/flux/` entirely; keep only the lint/secret-detection CI |
 
@@ -144,7 +164,10 @@ friendly so it satisfies the namespace's Pod Security Admission baseline.
    Docker-in-Docker cannot run on the shared, non-privileged tenant runner — so
    it is tagged `tags: ["infrastructure"]` (weisssrv's privileged runner). Retag
    it to your **own** privileged runner if you registered one. Point
-   `deployment.yaml`'s `image:` at the pushed tag.
+   `deployment.yaml`'s `image:` at the pushed tag. *(Shape `github`:
+   `.github/workflows/build-image.yml` does the equivalent to
+   `ghcr.io/<owner>/<repo>` — no privileged runner needed, and a pull request
+   builds without pushing. See [CI-SHAPES.md](CI-SHAPES.md).)*
 2. **Locally** — `task build` (your workstation's Docker daemon), then push to
    `registry.git.ericsweiss.com/<group>/<app>` (log in with a project deploy
    token or a PAT).
@@ -165,9 +188,10 @@ key just means the dependent job/component isn't active.
 | Key / credential | Needed for | Notes |
 |---|---|---|
 | `OP_SERVICE_ACCOUNT_TOKEN` **or** GitLab CI/CD variables | the ExternalSecret backend | Which one depends on the `ClusterSecretStore` the operator provisions (`onepassword-<slug>` vs `gitlab-<slug>`). 1Password item keys are prefixed `"<slug>: <Item>"`. |
-| `AI_REVIEW_OPENAI_KEY` + `GITLAB_REVIEW_TOKEN` | `pr-agent-review` (AI code review) | Both masked. Absent them the job isn't created (e.g. fork MRs). 1Password users source these from their vault when SETTING the variables — the shared runner can't run the op CLI at job time. |
-| `$CI_REGISTRY` / `$CI_REGISTRY_USER` / `$CI_REGISTRY_PASSWORD` | the (active) CI image build | GitLab **built-ins** — nothing to set. Registry is `registry.git.ericsweiss.com/<group>/<app>`. |
-| A **privileged runner** | the (active) CI image build | Tagged `infrastructure` by default. The shared runner is non-privileged; DinD needs `--privileged`. Retag to your own privileged runner, or (rare) remove the build include for a no-build project. |
+| `OPENAI__KEY` + `GITLAB__PERSONAL_ACCESS_TOKEN` | `pr-agent-review` (AI code review) | Both masked. Absent them the job isn't created (e.g. fork MRs). 1Password users source these from their vault when SETTING the variables — the shared runner can't run the op CLI at job time. |
+| `$CI_REGISTRY` / `$CI_REGISTRY_USER` / `$CI_REGISTRY_PASSWORD` | the (active) CI image build, shape `gitlab` | GitLab **built-ins** — nothing to set. Registry is `registry.git.ericsweiss.com/<group>/<app>`. |
+| `GITHUB_TOKEN` (+ `packages: write`) | the CI image build, shape `github` | A GitHub **built-in** — nothing to set. Registry is `ghcr.io/<owner>/<repo>`. A **private** GHCR package additionally needs an `imagePullSecret` in your namespace; making the package public avoids that. |
+| A **privileged runner** | the (active) CI image build, shape `gitlab` | Tagged `infrastructure` by default. The shared runner is non-privileged; DinD needs `--privileged`. Retag to your own privileged runner, or (rare) remove the build include for a no-build project. GitHub-hosted runners ship Docker, so shape `github` needs nothing here. |
 | Authentik provider/application objects | SSO (`wire sso`) | Operator-provisioned (codified in weisssrv's `terraform/authentik`); the middleware only references them. |
 | A read-only `kubeconfig` / cluster agent | local `task flux:status` / `secrets:check` | Operator-provided. Never used to deploy — Flux owns that; these are read-only checks. |
 

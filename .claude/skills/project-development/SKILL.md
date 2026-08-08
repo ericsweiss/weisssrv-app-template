@@ -29,7 +29,9 @@ namespace. There is no `kubectl apply` / `helm upgrade` in the normal flow.
 - The tree ships app-slug and GitLab-group placeholders. Run
   `./scripts/rename.sh <app> <group>` (a wrapper over the `weisssrv-new-project`
   CLI's `rename`; the CLI also `prune`s / `wire`s optional components — see
-  `docs/CONSUMING.md`), or `grep -rn changeme- .` for leftovers before shipping.
+  `docs/CONSUMING.md`) and `./scripts/select-ci.sh <shape>`, or
+  `grep -rn 'changeme[-]' .` for leftovers before shipping (the bracket keeps
+  the pattern from matching this line).
 
 ## Local loop
 
@@ -83,7 +85,10 @@ doesn't exist in the registry.
 
 ## Container registry
 
-`registry.git.ericsweiss.com/<group>/<app>` is your image registry. Point
+`registry.git.ericsweiss.com/<group>/<app>` is your image registry in shape
+`gitlab` (in shape `github` it is `ghcr.io/<owner>/<repo>`, built by
+`.github/workflows/build-image.yml`; a **private** GHCR package additionally
+needs an `imagePullSecret` in your namespace). Point
 `deployment.yaml`'s `image:` at a tag there (literal tag; bump it yourself in an
 MR — there is no hosted dependency bot) or at any upstream image.
 
@@ -96,7 +101,24 @@ own. Replace the placeholder Dockerfile with your app's real build, and point
 locally with `task build`. For an upstream image (no build), remove the build
 include and run `weisssrv-new-project prune image-build`. See `docs/CONSUMING.md`.
 
-## Runner limits
+## CI shape (check this first)
+
+CI ships in three shapes and a project keeps exactly one. Look before you edit:
+
+| Present | Shape | What runs the gates |
+|---|---|---|
+| `.gitlab-ci.yml` | `gitlab` (default) | self-hosted GitLab, including `eric/weisssrv-lib` templates at a pinned tag |
+| `.github/workflows/` | `github` | GitHub Actions — a **vendored** copy of the same gates, same tool versions + sha256s |
+| neither | `none` | nothing: `task lint` + pre-commit are the whole gate |
+
+Flux deploys in all three, so `kubernetes/flux/` never varies by shape. Shape is
+chosen once at setup with `./scripts/select-ci.sh <shape>`. In shape `github`,
+a library bump is a manual re-vendor (there are no reusable Actions workflows in
+the library) — call that out in the PR. Full parity table, what a github.com
+repo gives up, and the Flux-only operator wiring (deploy key / PAT + `secretRef`)
+are in `docs/CI-SHAPES.md`.
+
+## Runner limits (shape `gitlab`)
 
 CI runs on the shared, non-privileged `k8s-deploy` runner: internet egress only,
 no LAN/tailnet, no SSH, no Docker-in-Docker, and every job runs as a non-root
@@ -109,6 +131,8 @@ Docker.
 
 ## Shared library + consumption (this repo)
 
+- `docs/CI-SHAPES.md` — the three CI shapes, the one-command selector, the
+  GitLab↔GitHub job-parity table, and the Flux-only (no-CI) operator wiring.
 - `docs/CONSUMING.md` — the two instantiation paths, library consumption +
   bumping, optional-enablement toggles, the image build, and BYO-keys.
 - Library include contract (each CI template's inputs):

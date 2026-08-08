@@ -1,0 +1,126 @@
+---
+# Build (and, on the default branch, push) THIS service's container image —
+# the GitHub Actions counterpart of the `build-image` job in `.gitlab-ci.yml`
+# (CI shape B). See docs/CI-SHAPES.md.
+#
+# Registry: GHCR (`ghcr.io/<owner>/<repo>`), authenticated with the built-in
+# GITHUB_TOKEN — nothing to bring, the same way `$CI_REGISTRY_*` are GitLab
+# built-ins. Point `kubernetes/flux/deployment.yaml`'s `image:` at a tag here.
+# For a different registry (Docker Hub, a private Harbor), swap the login step
+# and set REGISTRY/IMAGE_NAME below.
+#
+# Differences from the GitLab job, on purpose:
+#   * Pull requests do not run this workflow at all — see the note above `on`.
+#     Their Dockerfile gate is ci.yml's `docker-build`, which builds and discards
+#     under `contents: read`. The GitLab job DOES push `:<short-sha>` on merge
+#     requests, because a merge request there runs with project credentials and
+#     the job cannot be redefined by the branch under review.
+#   * No privileged-runner problem to solve: GitHub-hosted runners ship Docker,
+#     so unlike the tenant `k8s-deploy` runner this needs no special tag.
+#
+# `:latest` is default-branch-only, deliberately: privileged jobs consume that
+# tag, so unreviewed code must never be able to populate it.
+name: build-image
+
+# PUSH-ONLY, and no workflow_dispatch. This workflow holds `packages: write`,
+# and both other triggers run the workflow file from code that has not been
+# reviewed: a pull_request run executes the PR's own copy, and a dispatch
+# executes the selected ref's — either can delete the step-level push guard and
+# publish. :latest is consumed by privileged jobs, so unreviewed code must never
+# be able to populate it. The pull-request Dockerfile gate lives in ci.yml
+# (`docker-build`), which builds under `contents: read` and cannot push.
+"on":
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-image:
+    name: build-image
+    runs-on: ubuntu-latest
+    steps:
+      # persist-credentials: false — checkout otherwise writes the job's token
+      # into .git/config, and this job holds `packages: write`. The build context
+      # is the repository, so a Dockerfile could `COPY .git/config` and read the
+      # token back out of the image. Nothing after this step does an
+      # authenticated git operation.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+
+      # A project that runs an upstream image has no Dockerfile (see
+      # `weisssrv-new-project prune image-build`). Skip instead of failing, so
+      # a pruned project keeps a green pipeline; delete this workflow if you
+      # never intend to build one.
+      - name: Check for a Dockerfile
+        id: dockerfile
+        run: |
+          set -euo pipefail
+          if [ -f Dockerfile ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "no Dockerfile — nothing to build"
+          fi
+
+      - name: Resolve image tags
+        if: steps.dockerfile.outputs.present == 'true'
+        id: tags
+        run: |
+          set -euo pipefail
+          # Lowercase: a GitHub owner may contain uppercase, an OCI repository
+          # name may not.
+          base="${REGISTRY}/$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')"
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          echo "sha=${base}:${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to the registry
+        if: steps.dockerfile.outputs.present == 'true'
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          echo "$REGISTRY_TOKEN" | docker login "$REGISTRY" \
+            -u "$REGISTRY_USER" --password-stdin
+
+      - name: Build
+        if: steps.dockerfile.outputs.present == 'true'
+        env:
+          SHA_TAG: ${{ steps.tags.outputs.sha }}
+          BASE: ${{ steps.tags.outputs.base }}
+        run: |
+          set -euo pipefail
+          # Best-effort registry layer cache off the previous :latest. Missing
+          # (the first build) is not an error.
+          docker pull "${BASE}:latest" || true
+          docker build \
+            --cache-from "${BASE}:latest" \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --tag "$SHA_TAG" \
+            --file Dockerfile .
+
+      - name: Push
+        if: steps.dockerfile.outputs.present == 'true'
+        env:
+          SHA_TAG: ${{ steps.tags.outputs.sha }}
+          BASE: ${{ steps.tags.outputs.base }}
+        run: |
+          set -euo pipefail
+          docker push "$SHA_TAG"
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            docker tag "$SHA_TAG" "${BASE}:latest"
+            docker push "${BASE}:latest"
+          fi
+          echo "Pushed ${SHA_TAG} — point deployment.yaml's image: at it."

@@ -5,6 +5,9 @@ first. A task-oriented guide is in the `project-development` skill
 (`.claude/skills/project-development/SKILL.md`). Do not duplicate their content
 here.
 
-This repo's generic CI is included from the shared `eric/weisssrv-lib` library
-at a pinned tag, and the `weisssrv-new-project` CLI scaffolds it — see
+CI comes in three shapes and this repo keeps exactly one — self-hosted GitLab
+(`.gitlab-ci.yml`, including the shared `eric/weisssrv-lib` library at a pinned
+tag), GitHub Actions (`.github/workflows/`), or none at all (Flux-only). Check
+which files are present before touching CI: [docs/CI-SHAPES.md](docs/CI-SHAPES.md).
+The `weisssrv-new-project` CLI scaffolds the rest — see
 [docs/CONSUMING.md](docs/CONSUMING.md).

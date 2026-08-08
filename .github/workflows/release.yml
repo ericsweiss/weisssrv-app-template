@@ -1,0 +1,141 @@
+---
+# REFERENCE COPY — this file is not a GitLab CI template and is not `include:`d.
+#
+# It is the GitHub Actions counterpart of ci/release/semantic-release.yml, for a
+# repo on github.com (the app template's CI shape B). Vendor it into the
+# consumer as `.github/workflows/release.yml` alongside the vendored
+# `scripts/semantic-release.py`, which grew a `--platform github` backend for
+# exactly this: ONE script, byte-identical in every repo that copies it, two
+# forges.
+#
+# It stays here rather than in the consumer because the library has no reusable
+# Actions workflows to `uses:` — GitHub has no equivalent of `include: project:`
+# for a private GitLab library — so a GitHub consumer vendors, and re-vendors
+# deliberately when this file changes.
+#
+# What it reproduces from the GitLab job:
+#   - runs only on the release branch, never on a schedule;
+#   - runs only AFTER the gates pass (see "ordering" below — GitLab gets this
+#     from `stage: release` being last; Actions needs `workflow_run`);
+#   - serialises rapid merges (`concurrency`, GitLab's `resource_group`);
+#   - full history + tags, so `<last tag>..HEAD` resolves (GitLab's GIT_DEPTH 0);
+#   - publishes release.json unconditionally (GitLab's `artifacts: when:always`).
+#
+# Ordering — the one real difference. A second workflow on `push: main` would
+# run in PARALLEL with ci.yml and could tag a commit whose gates then fail, so
+# this triggers on ci.yml COMPLETING successfully.
+#
+# That makes `ci` the aggregate gate, and it must actually BE one: this waits for
+# `ci` and for nothing else, so any OTHER workflow you require on main — the app
+# template ships `build-image.yml` separately — can still be running, or already
+# failed, when the tag is cut. If a required workflow must gate the release, make
+# it a job inside ci.yml rather than a sibling workflow. Polling the Actions API
+# for a sibling run was considered and rejected: docs/CI-SHAPES.md documents
+# deleting build-image.yml for a project with no image, and a poller cannot tell
+# "not started yet" from "will never exist", so it would hang and then fail the
+# release for exactly those repos. The cost of `workflow_run` is
+# that its own `github.sha` is the default branch tip at trigger time, NOT the
+# commit that was tested — hence `head_sha` in both the checkout and `--ref`.
+# If you would rather not reason about that, delete this file and append the
+# same step to ci.yml as a job with `needs: [yaml-lint, flux-lint, shellcheck,
+# docs-link-check, secret-detection]` and
+# `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`.
+name: release
+
+# No workflow_dispatch. A dispatch runs the workflow definition FROM THE
+# SELECTED REF, so any `if:` guard here is guarded by a file the caller chose —
+# a branch that deletes the guard runs its own code with contents:write, past
+# branch protection. Pinning the dispatch to `github.ref == main` looked like a
+# fix and was not: main's copy of that condition never executes.
+#
+# Recovery the script's crash message asks for ("if <tag> is missing its
+# Release, re-run this job") is GitHub's "Re-run jobs" on the previous run,
+# which replays the original trusted workflow_run payload.
+#
+# Quoted: unquoted `on` is a YAML 1.1 boolean, which yamllint's truthy rule
+# flags. GitHub reads the quoted key identically.
+"on":
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+
+# Creating a tag and a Release needs write; nothing else here does.
+permissions:
+  contents: write
+
+# Never cancel a release mid-flight: two merges landing together must compute
+# and cut their tags one after the other, not race. This is the GitLab job's
+# `resource_group`, and it is why cancel-in-progress is false rather than absent.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: semantic-release
+    runs-on: ubuntu-latest
+    # Three conditions, and the last two are the security ones.
+    #
+    # `conclusion == success`: workflow_run fires for FAILED runs too, and
+    # releasing from one would defeat the ordering above.
+    #
+    # `event == push` and `head_repository == repository`: workflow_run also
+    # fires for ci.yml runs triggered by a FORK's pull_request, and its
+    # `branches: [main]` filter matches the FORK's branch name — so a fork whose
+    # head branch is called `main` reaches this job. This job then checks out
+    # that commit and executes scripts/semantic-release.py from it while holding
+    # a contents:write token, which hands the fork the token and the repository.
+    # Requiring a same-repo push means only code that already had write access
+    # can run here. Do not relax these to "fix" a release that did not fire —
+    # a release must never be cut from an untrusted checkout.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          # The commit ci.yml actually tested (see "ordering" above). No
+          # `|| github.sha` fallback: workflow_run is now the only trigger, so
+          # head_sha is always set, and falling back would quietly release the
+          # default-branch tip instead of the commit the gates passed on.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          # Full history AND tags: the plan is computed from `<last tag>..HEAD`,
+          # and the crash-recovery probe needs to see the previous tag at all.
+          fetch-depth: 0
+
+      - name: Cut the release
+        env:
+          # GITHUB_REPOSITORY / GITHUB_API_URL / GITHUB_SERVER_URL are injected
+          # already; the token is not, and the script reads $GITHUB_TOKEN by
+          # default (override the name with --token-env).
+          #
+          # The built-in token suffices. Swap in a PAT (fine-grained: Contents
+          # write) if a tag-protection rule refuses it, or if you need the new
+          # tag to trigger OTHER workflows — events raised by GITHUB_TOKEN
+          # deliberately do not start workflow runs, so an `on: release` or
+          # `on: push: tags:` workflow will not fire for this release.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        # The SHA reaches the command through the environment rather than `${{ }}`
+        # interpolation — the standing rule for any expression value that lands
+        # on a shell line. python3 and git ship in the runner image.
+        run: |
+          set -euo pipefail
+          python3 scripts/semantic-release.py \
+            --platform github \
+            --ref "$RELEASE_SHA" \
+            --output release.json
+
+      - name: Publish the outcome
+        # `when: always` — a failed run's release.json carries the reason, and
+        # that is exactly the run whose artifact someone needs.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: release-json
+          path: release.json
+          retention-days: 30
+          # A run that ended before the script wrote anything is not an error.
+          if-no-files-found: ignore

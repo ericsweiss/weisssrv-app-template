@@ -1,5 +1,10 @@
 ---
-# CI for a weisssrv cluster tenant repo.
+# CI for a weisssrv cluster tenant repo — CI shape `gitlab`, the DEFAULT.
+#
+# The template ships three interchangeable CI shapes and a project keeps exactly
+# one: `gitlab` (this file), `github` (.github/workflows/), or `none` (Flux-only,
+# no pipeline). Select yours with `./scripts/select-ci.sh <shape>` and delete the
+# rest. Deployment is Flux in all three — see docs/CI-SHAPES.md.
 #
 # The generic lint / validate / security jobs are NOT defined here — they are
 # pulled from the shared library `eric/weisssrv-lib` at a pinned release tag, so
@@ -17,18 +22,32 @@
 #
 # Bumping the library: change every `ref:` below to the new tag in one MR (there
 # is no hosted dependency bot — bumps are deliberate). See docs/CONSUMING.md.
+# Every include pins the SAME tag. They diverged once (generic jobs on v0.1.1,
+# release on v0.2.0) and the wrappers below drifted with them, so `rename.sh` and
+# `select-ci.sh` could fetch two different builds of the same CLI. Keep them in
+# step: bump all of them, or none.
+#
+# `release` is LAST on purpose: the semantic-release job sets no `needs:`, so
+# stage ordering is what gates the tag on every job above it having passed. See
+# docs/VERSIONING.md.
 stages:
   - build       # only the OPTIONAL image build lands here (see the include below)
   - lint
   - validate    # only the OPTIONAL terraform validate lands here
+  - test        # the TEMPLATE's own gate (tests/) — see python-tests below
   - security
   - ai-review
+  - release
 
 workflow:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG'
+    # No `$CI_COMMIT_TAG` clause. NO job below runs on a tag pipeline (every
+    # rule here is merge-request / main / web), so the clause could only ever
+    # ask GitLab for a pipeline with zero jobs — and now that the release stage
+    # creates a tag on every releasable merge, it would do so routinely. Add it
+    # back together with the tag-triggered job that needs it.
 
 # ============================================================================
 # Shared library templates (include:project + inputs). Every job is the tenant
@@ -37,7 +56,7 @@ workflow:
 include:
   # -- yaml-lint: lint the whole tree against the repo-local .yamllint --------
   - project: eric/weisssrv-lib
-    ref: v0.1.1
+    ref: v0.3.0
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
@@ -57,7 +76,7 @@ include:
   # pinned here: it is the cluster's k8s minor kubeconform validates against, a
   # per-consumer fact (k3s v1.36.x today), not a library-owned tool version.
   - project: eric/weisssrv-lib
-    ref: v0.1.1
+    ref: v0.3.0
     file: /ci/validate/flux-lint.yml
     inputs:
       tags: []
@@ -68,7 +87,7 @@ include:
 
   # -- shellcheck: lint the scripts/ helpers (the rename wrapper) -------------
   - project: eric/weisssrv-lib
-    ref: v0.1.1
+    ref: v0.3.0
     file: /ci/lint/shellcheck.yml
     inputs:
       tags: []
@@ -81,7 +100,7 @@ include:
   # Runs the vendored, stdlib-only scripts/check-doc-links.py (copied from the
   # library). Scans docs/ + README.md + CLAUDE.md.
   - project: eric/weisssrv-lib
-    ref: v0.1.1
+    ref: v0.3.0
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
@@ -92,6 +111,43 @@ include:
         - "AGENTS.md"
         - "scripts/check-doc-links.py"
 
+  # -- python-tests: the TEMPLATE's own gate (tests/) -------------------------
+  # Renders this template into a scratch directory and runs the two setup
+  # commands a new project runs — `scripts/rename.sh` then
+  # `scripts/select-ci.sh` — asserting that no placeholder survives, that each
+  # CI shape keeps exactly what docs/CI-SHAPES.md says it keeps, and that
+  # kubernetes/ is byte-identical across the three. Without it a regression in
+  # either wrapper ships silently into every project created from here.
+  #
+  # This gate is TEMPLATE-ONLY: in a generated project the placeholders are
+  # already substituted and the suite skips itself (delete tests/ to be rid of
+  # the skip). It is not ported to the `github` shape — see docs/CI-SHAPES.md.
+  #
+  # PINNED AT v0.2.0 like the release include, and for the same reason: the
+  # `setup_command` / `pip_packages` inputs the CLI install needs do not exist
+  # in this template at v0.1.1. `changes: ["**/*"]` because the suite reads the
+  # whole tree (token scan, YAML parse, per-shape diff).
+  - project: eric/weisssrv-lib
+    ref: v0.3.0
+    file: /ci/test/python-tests.yml
+    inputs:
+      tags: []
+      # The FULL python image, not -slim: it ships git, which the fixture copy
+      # and the library clone both need, and apt-get is not available to the
+      # non-root shared runner (hence apt_packages: "").
+      image: python:3.13
+      apt_packages: ""
+      test_dir: "tests"
+      # Clone the library with the job token rather than fetching the CLI from
+      # an anonymous git+https URL — the library is internal-visibility.
+      setup_command: >-
+        git clone --depth 1 --branch "$LIB_REF"
+        "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${LIB_PROJECT}.git"
+        .tmp/lib
+      pip_packages: ".tmp/lib/cli"
+      changes:
+        - "**/*"
+
   # -- secret-detection: GitLab Secret Detection (gitleaks) ------------------
   # Defaults reproduce this template's previous job: the modern-CPU node
   # selector the shared runner allowlists, and allow_failure: true (findings
@@ -99,7 +155,7 @@ include:
   # To make a secret finding HARD-BLOCK the pipeline, add
   # `inputs: { allow_failure: false }`.
   - project: eric/weisssrv-lib
-    ref: v0.1.1
+    ref: v0.3.0
     file: /ci/security/secret-detection.yml
 
   # -- build-image: build THIS service's container image (the main use case) --
@@ -115,7 +171,7 @@ include:
   # `weisssrv-new-project prune image-build` to drop the Dockerfile. See
   # docs/CONSUMING.md ("Building the service image").
   - project: eric/weisssrv-lib
-    ref: v0.1.1
+    ref: v0.3.0
     file: /ci/build/docker-build.yml
     inputs:
       tags: ["infrastructure"]       # a PRIVILEGED runner (retag to yours)
@@ -129,6 +185,28 @@ include:
       # context: "."
       # publish_on_main: true        # push :latest on main (always pushes :<sha>)
 
+  # -- semantic-release: tag + GitLab Release from the conventional commits ---
+  # Merging to main reads the conventional commits since the last tag, decides
+  # the bump, and creates the tag AND the Release with generated notes in one
+  # Releases-API call ($CI_JOB_TOKEN is enough). Nothing releasable means no tag
+  # and a green pipeline. Runs the vendored, stdlib-only
+  # scripts/semantic-release.py — re-copy it from the library when you bump the
+  # ref, exactly like scripts/check-doc-links.py. See docs/VERSIONING.md.
+  #
+  # PINNED AT v0.2.0, ahead of every include above. This is not a partial
+  # library bump: `ci/release/semantic-release.yml` and its script do not exist
+  # at v0.1.1, so v0.2.0 is the earliest ref that can serve this include at all.
+  # Move the rest to v0.2.0 in its own MR — that bump changes tool pins and the
+  # secret-detection default, and wants its own verification.
+  #
+  # major_on_zero stays false: while the tag is 0.x a `feat!:` bumps MINOR, and
+  # calling this 1.0.0 is a deliberate act (flip the input for that release).
+  - project: eric/weisssrv-lib
+    ref: v0.3.0
+    file: /ci/release/semantic-release.yml
+    inputs:
+      tags: []
+
   # ==========================================================================
   # OPTIONAL — terraform fmt + validate, if this repo grows a terraform/ dir.
   # Inert until terraform/ exists (the changes: rules never match otherwise).
@@ -136,11 +214,40 @@ include:
   # would need a remote/HTTP state backend and internet-reachable providers.
   # --------------------------------------------------------------------------
   # - project: eric/weisssrv-lib
-  #   ref: v0.1.1
+  #   ref: v0.3.0
   #   file: /ci/validate/terraform.yml
   #   inputs:
   #     tags: []
   #     changes: ["terraform/**/*"]
+
+  # -- pr-agent AI review: optional, never blocks, BYO keys -------------------
+  # tags: [] for the tenant's tag-less shared runner. The two *_key inputs take
+  # CI variable REFERENCES, not values, and `gate` is the expression that must be
+  # non-empty for the job to exist at all — absent the variables there is no job.
+  - project: eric/weisssrv-lib
+    ref: v0.3.0
+    file: /ci/review/pr-agent.yml
+    inputs:
+      tags: []
+      gitlab_url: "https://git.ericsweiss.com"
+      # openai_key/gitlab_token are NOT overridden: the library already defaults
+      # them to $OPENAI__KEY and $GITLAB__PERSONAL_ACCESS_TOKEN, which is what a
+      # project actually sets. Overriding them with different names is how the
+      # first attempt shipped a reviewer that never ran — the gate referenced
+      # variables nobody had created, so the job was never CREATED and the
+      # pipeline went green with no review attached and nothing to notice.
+      # gate requires BOTH: with only one set, the job would be created and then
+      # fail on the missing credential instead of quietly not existing.
+      gate: "$OPENAI__KEY && $GITLAB__PERSONAL_ACCESS_TOKEN"
+      needs:
+        - job: yaml-lint
+          optional: true
+        - job: flux-lint
+          optional: true
+        - job: python-tests
+          optional: true
+        - job: secret_detection
+          optional: true
 
 # The library's secret-detection template pulls in GitLab's managed
 # Secret-Detection job through a nested include, which resolves onto the
@@ -151,44 +258,36 @@ include:
 secret_detection:
   tags: []
 
-# ============================================================================
-# AI REVIEW — optional, never blocks. BYO-keys: runs only when BOTH masked
-# CI/CD variables AI_REVIEW_OPENAI_KEY and GITLAB_REVIEW_TOKEN are set on the
-# project (Settings -> CI/CD -> Variables); absent them (e.g. fork MRs) the job
-# simply isn't created. There is no in-job 1Password path: the shared runner is
-# non-root and can't install the op CLI at job time, so 1Password users source
-# those two values from their vault WHEN THEY SET the CI variables (e.g.
-# `op read "op://Homelab/OpenAI API Key/api-key"`), not at runtime. This is the
-# ONE generic job the library does not ship (it carries no pr-agent template),
-# so it stays defined here — see docs/CONSUMING.md ("Bring your own keys").
-# ============================================================================
-pr-agent-review:
-  stage: ai-review
-  # Digest-pinned: this job exports a GitLab PAT and an OpenAI key into the
-  # container, so the image must not move under a mutable tag (supply-chain).
-  image: codiumai/pr-agent:0.34@sha256:1c1743e93bf6627cd14528cd4defe82465f17860e8f20e6c0ac6558971f61c61
-  needs:
-    - job: yaml-lint
-      optional: true
-    - job: flux-lint
-      optional: true
-    - job: secret_detection
-      optional: true
+# The template's gate exercises the same `weisssrv-new-project` CLI a project
+# gets, so the ref cloned here is the one scripts/select-ci.sh pins — the suite
+# asserts the two are equal. WEISSSRV_REQUIRE_CLI makes an unresolvable CLI a
+# job FAILURE: locally the suite skips when it is absent, and a skip that reads
+# as green in CI would be a gate that cannot fail.
+#
+# v0.3.0 is the first library tag whose CLI has `prune ci:<shape>` at all, and
+# it is NOT CUT YET — this job's clone (and select-ci.sh's own pipx path) both
+# fail until the library releases it.
+python-tests:
   variables:
-    CONFIG__GIT_PROVIDER: "gitlab"
-    GITLAB__URL: "https://git.ericsweiss.com"
-  before_script:
-    - export OPENAI__KEY="$AI_REVIEW_OPENAI_KEY"
-    - export GITLAB__PERSONAL_ACCESS_TOKEN="$GITLAB_REVIEW_TOKEN"
-  script:
-    - |
-      python -m pr_agent.cli \
-        --pr_url="${CI_MERGE_REQUEST_PROJECT_URL}/-/merge_requests/${CI_MERGE_REQUEST_IID}" \
-        review
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $AI_REVIEW_OPENAI_KEY && $GITLAB_REVIEW_TOKEN'
-  allow_failure: true
-  timeout: 30m
+    LIB_PROJECT: "eric/weisssrv-lib"
+    LIB_REF: "v0.3.0"
+    WEISSSRV_REQUIRE_CLI: "1"
+
+# ============================================================================
+# AI REVIEW — now the library's shared template (see the include: block above),
+# not a job defined here. It used to be inline because the library shipped no
+# pr-agent template; that stopped being true at v0.2.0, and the divergence had
+# already cost something real: the inline copy pinned codiumai/pr-agent:0.34, a
+# namespace FROZEN when the project moved to the community org, and ran only
+# `review` — no `improve` pass, so no code suggestions at all.
+#
+# BYO-keys is unchanged: the job is CREATED only when both masked CI/CD
+# variables are set (Settings -> CI/CD -> Variables), so a fork MR simply has no
+# AI review, which is expected rather than a failure. There is still no in-job
+# 1Password path — the shared runner is non-root and cannot install `op` at job
+# time, so 1Password users read those values into the CI variables when they SET
+# them. See docs/CONSUMING.md ("Bring your own keys").
+# ============================================================================
 
 # ============================================================================
 # OPTIONAL manual reconcile poke. Flux owns deploys: on merge to main it pulls
