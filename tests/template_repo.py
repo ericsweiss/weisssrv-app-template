@@ -44,6 +44,9 @@ CI_PATHS = frozenset(
         ".gitlab/secret-detection-ruleset.toml",
         ".github/workflows/ci.yml",
         ".github/workflows/build-image.yml",
+        # Shape B's release path (vendored semantic-release.py --platform
+        # github), added when library v0.3.0 made a GitHub release possible.
+        ".github/workflows/release.yml",
     }
 )
 
@@ -51,7 +54,13 @@ CI_PATHS = frozenset(
 # usage). The doc-derived claims are checked separately; this is the full
 # inventory those prose claims summarise.
 SHAPE_DROPS = {
-    "gitlab": frozenset({".github/workflows/ci.yml", ".github/workflows/build-image.yml"}),
+    "gitlab": frozenset(
+        {
+            ".github/workflows/ci.yml",
+            ".github/workflows/build-image.yml",
+            ".github/workflows/release.yml",
+        }
+    ),
     "github": frozenset({".gitlab-ci.yml", ".gitlab/secret-detection-ruleset.toml"}),
     "none": CI_PATHS,
 }
