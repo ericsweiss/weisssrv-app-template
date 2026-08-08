@@ -64,13 +64,6 @@ name: release
 permissions:
   contents: write
 
-# Never cancel a release mid-flight: two merges landing together must compute
-# and cut their tags one after the other, not race. This is the GitLab job's
-# `resource_group`, and it is why cancel-in-progress is false rather than absent.
-concurrency:
-  group: release
-  cancel-in-progress: false
-
 jobs:
   release:
     name: semantic-release
@@ -93,6 +86,21 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_repository.full_name == github.repository
+    # Never cancel a release mid-flight: two merges landing together must compute
+    # and cut their tags one after the other, not race. This is the GitLab job's
+    # `resource_group`, and it is why cancel-in-progress is false rather than
+    # absent.
+    #
+    # Scoped to the JOB, not the workflow, and the difference is load-bearing.
+    # At workflow scope every triggered run joins the group — including the runs
+    # whose `if` above will skip them. GitHub keeps only the most recent PENDING
+    # run per group, so a later FAILED-ci run evicts a queued SUCCESSFUL-ci run
+    # and then skips its own job, and the good commit is never released. Nothing
+    # reports that: both runs end green-or-skipped. At job scope the `if` is
+    # evaluated first, so ineligible runs never occupy the queue at all.
+    concurrency:
+      group: release
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
@@ -118,11 +126,43 @@ jobs:
           # `on: push: tags:` workflow will not fire for this release.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+          # The branch ci.yml actually ran on. NOT $GITHUB_REF_NAME: on a
+          # workflow_run event that is the DEFAULT branch at trigger time, which
+          # is only accidentally the same thing whenever the release branch and
+          # the default branch differ.
+          RELEASE_BRANCH: ${{ github.event.workflow_run.head_branch }}
         # The SHA reaches the command through the environment rather than `${{ }}`
         # interpolation — the standing rule for any expression value that lands
         # on a shell line. python3 and git ship in the runner image.
         run: |
           set -euo pipefail
+
+          # Skip a run that a later release has already overtaken.
+          #
+          # The concurrency group serialises these, but it does not ORDER them:
+          # a run queued behind another can still execute after a newer commit
+          # has been released. semantic-release.py selects the newest tag
+          # REACHABLE FROM HEAD, so from this stale checkout the newer tag is
+          # invisible — it is a descendant, not an ancestor — and the run would
+          # compute a version that already exists and fail creating it, or worse
+          # re-cut an older line.
+          #
+          # A tag on the release branch that this commit cannot reach is exactly
+          # that condition, so ask git for one.
+          git fetch --quiet origin \
+            "refs/heads/${RELEASE_BRANCH}:refs/remotes/origin/${RELEASE_BRANCH}" \
+            "refs/tags/*:refs/tags/*"
+          newer="$(
+            git tag --list --merged "refs/remotes/origin/${RELEASE_BRANCH}" \
+                            --no-merged HEAD |
+              grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true
+          )"
+          if [ -n "$newer" ]; then
+            echo "Superseded: $newer is already released and is not reachable"
+            echo "from this run's commit. Nothing to do."
+            exit 0
+          fi
+
           python3 scripts/semantic-release.py \
             --platform github \
             --ref "$RELEASE_SHA" \
