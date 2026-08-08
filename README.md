@@ -292,11 +292,12 @@ Dockerfile           # placeholder service image (task build / opt-in CI build)
 .github/workflows/   # CI shape B: the same gates as GitHub Actions
   ci.yml             #   yaml-lint, flux-lint, shellcheck, docs-link-check, secrets
   build-image.yml    #   docker build -> ghcr.io/<owner>/<repo>
+  release.yml        #   semantic-release via scripts/semantic-release.py --platform github
 Taskfile.yml         # local dev wrappers
 scripts/rename.sh    # thin wrapper over the weisssrv-new-project CLI
 scripts/select-ci.sh # keep one CI shape, drop the other two (run once at setup)
 scripts/check-doc-links.py  # offline Markdown link checker (docs-link-check job)
-scripts/semantic-release.py # vendored release script (the `release` stage, shape A)
+scripts/semantic-release.py # vendored release script (both CI shapes; --platform github for B)
 docs/                # CI-SHAPES.md, CONSUMING.md, ARCHITECTURE.md, ONBOARDING.md,
                      #   VERSIONING.md
 tests/               # the TEMPLATE's own gate (rename + CI-shape selection);

@@ -220,6 +220,29 @@ include:
   #     tags: []
   #     changes: ["terraform/**/*"]
 
+  # -- pr-agent AI review: optional, never blocks, BYO keys -------------------
+  # tags: [] for the tenant's tag-less shared runner. The two *_key inputs take
+  # CI variable REFERENCES, not values, and `gate` is the expression that must be
+  # non-empty for the job to exist at all — absent the variables there is no job.
+  - project: eric/weisssrv-lib
+    ref: v0.3.0
+    file: /ci/review/pr-agent.yml
+    inputs:
+      tags: []
+      gitlab_url: "https://git.ericsweiss.com"
+      openai_key: "$AI_REVIEW_OPENAI_KEY"
+      gitlab_token: "$GITLAB_REVIEW_TOKEN"
+      gate: "$AI_REVIEW_OPENAI_KEY && $GITLAB_REVIEW_TOKEN"
+      needs:
+        - job: yaml-lint
+          optional: true
+        - job: flux-lint
+          optional: true
+        - job: python-tests
+          optional: true
+        - job: secret_detection
+          optional: true
+
 # The library's secret-detection template pulls in GitLab's managed
 # Secret-Detection job through a nested include, which resolves onto the
 # `infrastructure` (privileged) runner and exposes no `tags` input. A tenant runs
@@ -245,45 +268,20 @@ python-tests:
     WEISSSRV_REQUIRE_CLI: "1"
 
 # ============================================================================
-# AI REVIEW — optional, never blocks. BYO-keys: runs only when BOTH masked
-# CI/CD variables AI_REVIEW_OPENAI_KEY and GITLAB_REVIEW_TOKEN are set on the
-# project (Settings -> CI/CD -> Variables); absent them (e.g. fork MRs) the job
-# simply isn't created. There is no in-job 1Password path: the shared runner is
-# non-root and can't install the op CLI at job time, so 1Password users source
-# those two values from their vault WHEN THEY SET the CI variables (e.g.
-# `op read "op://Homelab/OpenAI API Key/api-key"`), not at runtime. This is the
-# ONE generic job the library does not ship (it carries no pr-agent template),
-# so it stays defined here — see docs/CONSUMING.md ("Bring your own keys").
+# AI REVIEW — now the library's shared template (see the include: block above),
+# not a job defined here. It used to be inline because the library shipped no
+# pr-agent template; that stopped being true at v0.2.0, and the divergence had
+# already cost something real: the inline copy pinned codiumai/pr-agent:0.34, a
+# namespace FROZEN when the project moved to the community org, and ran only
+# `review` — no `improve` pass, so no code suggestions at all.
+#
+# BYO-keys is unchanged: the job is CREATED only when both masked CI/CD
+# variables are set (Settings -> CI/CD -> Variables), so a fork MR simply has no
+# AI review, which is expected rather than a failure. There is still no in-job
+# 1Password path — the shared runner is non-root and cannot install `op` at job
+# time, so 1Password users read those values into the CI variables when they SET
+# them. See docs/CONSUMING.md ("Bring your own keys").
 # ============================================================================
-pr-agent-review:
-  stage: ai-review
-  # Digest-pinned: this job exports a GitLab PAT and an OpenAI key into the
-  # container, so the image must not move under a mutable tag (supply-chain).
-  image: codiumai/pr-agent:0.34@sha256:1c1743e93bf6627cd14528cd4defe82465f17860e8f20e6c0ac6558971f61c61
-  needs:
-    - job: yaml-lint
-      optional: true
-    - job: flux-lint
-      optional: true
-    - job: python-tests
-      optional: true
-    - job: secret_detection
-      optional: true
-  variables:
-    CONFIG__GIT_PROVIDER: "gitlab"
-    GITLAB__URL: "https://git.ericsweiss.com"
-  before_script:
-    - export OPENAI__KEY="$AI_REVIEW_OPENAI_KEY"
-    - export GITLAB__PERSONAL_ACCESS_TOKEN="$GITLAB_REVIEW_TOKEN"
-  script:
-    - |
-      python -m pr_agent.cli \
-        --pr_url="${CI_MERGE_REQUEST_PROJECT_URL}/-/merge_requests/${CI_MERGE_REQUEST_IID}" \
-        review
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $AI_REVIEW_OPENAI_KEY && $GITLAB_REVIEW_TOKEN'
-  allow_failure: true
-  timeout: 30m
 
 # ============================================================================
 # OPTIONAL manual reconcile poke. Flux owns deploys: on merge to main it pulls

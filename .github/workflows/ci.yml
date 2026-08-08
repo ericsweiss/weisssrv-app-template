@@ -61,6 +61,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          # Do not leave GITHUB_TOKEN in .git/config: every job below runs
+          # PR-controlled repository content (this one executes
+          # scripts/check-doc-links.py outright), and none of them pushes.
+          persist-credentials: false
       - name: Install yamllint
         # pipx ships in the GitHub-hosted runner image and puts the console
         # script on PATH. (Ubuntu's system Python is externally managed, so a
@@ -78,6 +83,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          # Do not leave GITHUB_TOKEN in .git/config: every job below runs
+          # PR-controlled repository content (this one executes
+          # scripts/check-doc-links.py outright), and none of them pushes.
+          persist-credentials: false
       - name: Install kustomize + kubeconform (sha256-verified)
         run: |
           set -euo pipefail
@@ -115,6 +125,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          # Do not leave GITHUB_TOKEN in .git/config: every job below runs
+          # PR-controlled repository content (this one executes
+          # scripts/check-doc-links.py outright), and none of them pushes.
+          persist-credentials: false
       - name: Install shellcheck (sha256-verified)
         run: |
           set -euo pipefail
@@ -148,6 +163,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          # Do not leave GITHUB_TOKEN in .git/config: every job below runs
+          # PR-controlled repository content (this one executes
+          # scripts/check-doc-links.py outright), and none of them pushes.
+          persist-credentials: false
       - name: Check relative doc links
         # The vendored, stdlib-only checker — no network, no dependencies.
         run: python3 scripts/check-doc-links.py
@@ -167,6 +187,9 @@ jobs:
           # Full history so the commit-range scan below can see every commit a
           # pull request adds.
           fetch-depth: 0
+          # gitleaks only reads the local clone and never pushes, so the token
+          # has no business surviving checkout into .git/config.
+          persist-credentials: false
       - name: Install gitleaks (sha256-verified)
         run: |
           set -euo pipefail

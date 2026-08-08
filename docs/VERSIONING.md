@@ -66,27 +66,29 @@ Moving those pins changes what gates a derived project, so:
   alters a resolved job — is a MAJOR here, because a derived project that
   copies the new `.gitlab-ci.yml` over its own inherits the break.
 
-The refs are **not uniform today**: the generic jobs are on `v0.1.1` and the
-release include is on `v0.2.0`, the first library tag that ships
-`ci/release/semantic-release.yml`. Bringing the rest up to `v0.2.0` is its own
-MR — it moves tool pins and the secret-detection `allow_failure` default.
+Every include pins the **same** tag (`v0.3.0` today). They were briefly split —
+generic jobs on `v0.1.1`, the release include on `v0.2.0`, the first tag shipping
+`ci/release/semantic-release.yml` — which made "what does this template pin?"
+unanswerable without reading every entry. Bump them together.
 
-## Only the GitLab shape releases
+## Both CI shapes release
 
-The release stage lives in `.gitlab-ci.yml`, so it belongs to **CI shape A
-(`gitlab`)** only — see [CI-SHAPES.md](CI-SHAPES.md).
+- **Shape `gitlab`** — the release stage in `.gitlab-ci.yml`, from the library's
+  `ci/release/semantic-release.yml`.
+- **Shape `github`** — `.github/workflows/release.yml`, vendored from the
+  library's `ci/release/github-release-workflow.example.yml`.
 
-- **Shape `github`** — `prune ci:github` deletes `.gitlab-ci.yml`, and with it
-  the release job. There is **no ported workflow**: the vendored
-  `scripts/semantic-release.py` talks to the GitLab Releases API
-  (`$CI_API_V4_URL/projects/:id/releases`, `JOB-TOKEN`) and has no GitHub mode,
-  so a `.github/workflows/release.yml` would mean either forking the script —
-  which destroys the byte-identical-to-the-library property that makes it
-  trustworthy — or taking a marketplace-action dependency, which nothing else in
-  this template does. Tag by hand (`git tag -a vX.Y.Z && git push --tags`, then
-  a GitHub Release), or ask for GitHub support in the library's script. This is
-  another entry on the shape-B ledger in
-  [CI-SHAPES.md](CI-SHAPES.md#what-a-githubcom-repo-genuinely-loses).
+Both drive the **same** vendored `scripts/semantic-release.py`, which grew a
+`--platform github` backend in library `v0.3.0` for exactly this. That preserves
+the property that made the script trustworthy in the first place: it is
+byte-identical to the library's copy in every repo that vendors it, so there is
+one implementation to audit rather than one per forge. Neither shape needs a
+marketplace action.
+
+This previously said shape `github` could not release — true until `v0.3.0`, and
+the reason was worth keeping: the alternatives on offer were forking the script
+(destroying the byte-identical property) or taking a marketplace dependency that
+nothing else here takes. Adding the backend upstream avoided both.
 - **Shape `none`** — no pipeline, so no releases. `scripts/semantic-release.py`
   is left behind unused, exactly as `scripts/check-doc-links.py` is; delete it
   if it bothers you.

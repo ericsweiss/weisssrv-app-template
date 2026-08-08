@@ -88,7 +88,7 @@ so both shapes gate on byte-identical tools.
 | `secret_detection` | `secret-detection` | **Same detector, different wrapper** — see below. |
 | `build-image` | `docker-build` (in `ci.yml`) + `build-image` | **Split by privilege, different registry** — see below. |
 | `pr-agent-review` | — | **Not ported.** |
-| `semantic-release` | — | **Not ported** — GitLab-API-only, see below. |
+| `semantic-release` | `release` (in `release.yml`) | **Ported.** Same vendored `scripts/semantic-release.py`, `--platform github`. |
 | `python-tests` | — | **Not ported** — it gates the TEMPLATE (`tests/`), not your app, and skips itself once you have renamed. Delete `tests/`. |
 
 **Secret detection.** GitLab runs its managed Secret-Detection analyzer, which
@@ -149,17 +149,18 @@ authenticated with the built-in `GITHUB_TOKEN`, the way shape A uses the
 4. **`pr-agent-review`.** Not ported. `pr-agent` supports GitHub; add it as a
    workflow with your own `OPENAI_API_KEY` if you want it. It never blocked
    anything in shape A either.
-5. **`semantic-release`.** Not ported, and not portable as it stands. The
-   vendored `scripts/semantic-release.py` creates the tag and the Release in one
-   call to the **GitLab** Releases API (`$CI_API_V4_URL/projects/:id/releases`,
-   `JOB-TOKEN`); it has no GitHub mode. A workflow here would mean either
-   forking that script — losing the byte-identical-to-the-library property that
-   is the only reason to trust a vendored copy — or depending on a marketplace
-   action, which nothing else in this template does. So shape B tags by hand
-   (`git tag -a vX.Y.Z && git push --tags`, then a GitHub Release), or waits for
-   the library's script to grow a GitHub backend. The commit-parsing half
-   (`plan_release`) is platform-neutral, so that is a small library change if it
-   is ever wanted. See [VERSIONING.md](VERSIONING.md).
+5. **`semantic-release`.** Ported as of library `v0.3.0`, via
+   `.github/workflows/release.yml` (vendored from the library's
+   `ci/release/github-release-workflow.example.yml`). It drives the SAME vendored
+   `scripts/semantic-release.py` with `--platform github`, so shape B is no
+   longer a hand-tagging exercise. This entry previously said it was "not
+   portable as it stands", and the reasoning is worth keeping because it shaped
+   the fix: the options then were forking the script — losing the
+   byte-identical-to-the-library property that is the only reason to trust a
+   vendored copy — or depending on a marketplace action, which nothing else here
+   does. The commit-parsing half (`plan_release`) was already platform-neutral,
+   so adding a backend upstream was the small change that avoided both.
+   See [VERSIONING.md](VERSIONING.md).
 6. **The in-cluster runner.** The tenant `k8s-deploy` runner has internet egress
    only — no LAN, no tailnet, no SSH — so shape A gives up most of that too, and
    parity is closer than it sounds. What you do lose is the *option*: on GitLab
