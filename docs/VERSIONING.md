@@ -66,10 +66,14 @@ Moving those pins changes what gates a derived project, so:
   alters a resolved job — is a MAJOR here, because a derived project that
   copies the new `.gitlab-ci.yml` over its own inherits the break.
 
-Every include pins the **same** tag (`v0.3.0` today). They were briefly split —
-generic jobs on `v0.1.1`, the release include on `v0.2.0`, the first tag shipping
+Every include pins the **same** tag (`v0.3.1` today), and so do the `rename.sh`
+and `select-ci.sh` wrappers. They were briefly split — generic jobs on `v0.1.1`,
+the release include on `v0.2.0`, the first tag shipping
 `ci/release/semantic-release.yml` — which made "what does this template pin?"
-unanswerable without reading every entry. Bump them together.
+unanswerable without reading every entry, and left the two wrappers running
+different versions of the same CLI. Bump them together; the library's contract
+tests now fail if they disagree, or if a ref moves without the vendored
+`scripts/semantic-release.py` moving with it.
 
 ## Both CI shapes release
 
