@@ -230,9 +230,15 @@ include:
     inputs:
       tags: []
       gitlab_url: "https://git.ericsweiss.com"
-      openai_key: "$AI_REVIEW_OPENAI_KEY"
-      gitlab_token: "$GITLAB_REVIEW_TOKEN"
-      gate: "$AI_REVIEW_OPENAI_KEY && $GITLAB_REVIEW_TOKEN"
+      # openai_key/gitlab_token are NOT overridden: the library already defaults
+      # them to $OPENAI__KEY and $GITLAB__PERSONAL_ACCESS_TOKEN, which is what a
+      # project actually sets. Overriding them with different names is how the
+      # first attempt shipped a reviewer that never ran — the gate referenced
+      # variables nobody had created, so the job was never CREATED and the
+      # pipeline went green with no review attached and nothing to notice.
+      # gate requires BOTH: with only one set, the job would be created and then
+      # fail on the missing credential instead of quietly not existing.
+      gate: "$OPENAI__KEY && $GITLAB__PERSONAL_ACCESS_TOKEN"
       needs:
         - job: yaml-lint
           optional: true
