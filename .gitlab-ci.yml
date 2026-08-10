@@ -49,6 +49,16 @@ workflow:
     # creates a tag on every releasable merge, it would do so routinely. Add it
     # back together with the tag-triggered job that needs it.
 
+variables:
+  # Single source for the library pin. `include:` CANNOT read this — GitLab
+  # resolves includes at pipeline-CREATION time, before job variables exist — so
+  # every entry below repeats the tag as a literal, and the wrappers carry their
+  # own default too. scripts/check-lib-pins.py (vendored from the library) fails
+  # the pipeline when an include drifts from this value or pins a branch, and
+  # tests/ ties the wrappers and LIB_REF to it as well. Bump here, run
+  # `scripts/check-lib-pins.py --fix`, and update the two wrappers.
+  WEISSSRV_LIB_REF: "v0.5.2"
+
 # ============================================================================
 # Shared library templates (include:project + inputs). Every job is the tenant
 # profile: `tags: []` (shared runner) and the non-root-safe input set.
@@ -56,7 +66,7 @@ workflow:
 include:
   # -- yaml-lint: lint the whole tree against the repo-local .yamllint --------
   - project: eric/weisssrv-lib
-    ref: v0.3.1
+    ref: v0.5.2
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
@@ -76,7 +86,7 @@ include:
   # pinned here: it is the cluster's k8s minor kubeconform validates against, a
   # per-consumer fact (k3s v1.36.x today), not a library-owned tool version.
   - project: eric/weisssrv-lib
-    ref: v0.3.1
+    ref: v0.5.2
     file: /ci/validate/flux-lint.yml
     inputs:
       tags: []
@@ -87,7 +97,7 @@ include:
 
   # -- shellcheck: lint the scripts/ helpers (the rename wrapper) -------------
   - project: eric/weisssrv-lib
-    ref: v0.3.1
+    ref: v0.5.2
     file: /ci/lint/shellcheck.yml
     inputs:
       tags: []
@@ -100,7 +110,7 @@ include:
   # Runs the vendored, stdlib-only scripts/check-doc-links.py (copied from the
   # library). Scans docs/ + README.md + CLAUDE.md.
   - project: eric/weisssrv-lib
-    ref: v0.3.1
+    ref: v0.5.2
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
@@ -123,12 +133,10 @@ include:
   # already substituted and the suite skips itself (delete tests/ to be rid of
   # the skip). It is not ported to the `github` shape — see docs/CI-SHAPES.md.
   #
-  # PINNED AT v0.2.0 like the release include, and for the same reason: the
-  # `setup_command` / `pip_packages` inputs the CLI install needs do not exist
-  # in this template at v0.1.1. `changes: ["**/*"]` because the suite reads the
-  # whole tree (token scan, YAML parse, per-shape diff).
+  # `changes: ["**/*"]` because the suite reads the whole tree (token scan, YAML
+  # parse, per-shape diff).
   - project: eric/weisssrv-lib
-    ref: v0.3.1
+    ref: v0.5.2
     file: /ci/test/python-tests.yml
     inputs:
       tags: []
@@ -155,7 +163,7 @@ include:
   # To make a secret finding HARD-BLOCK the pipeline, add
   # `inputs: { allow_failure: false }`.
   - project: eric/weisssrv-lib
-    ref: v0.3.1
+    ref: v0.5.2
     file: /ci/security/secret-detection.yml
 
   # -- build-image: build THIS service's container image (the main use case) --
@@ -171,7 +179,7 @@ include:
   # `weisssrv-new-project prune image-build` to drop the Dockerfile. See
   # docs/CONSUMING.md ("Building the service image").
   - project: eric/weisssrv-lib
-    ref: v0.3.1
+    ref: v0.5.2
     file: /ci/build/docker-build.yml
     inputs:
       tags: ["infrastructure"]       # a PRIVILEGED runner (retag to yours)
@@ -202,7 +210,7 @@ include:
   # major_on_zero stays false: while the tag is 0.x a `feat!:` bumps MINOR, and
   # calling this 1.0.0 is a deliberate act (flip the input for that release).
   - project: eric/weisssrv-lib
-    ref: v0.3.1
+    ref: v0.5.2
     file: /ci/release/semantic-release.yml
     inputs:
       tags: []
@@ -214,7 +222,7 @@ include:
   # would need a remote/HTTP state backend and internet-reachable providers.
   # --------------------------------------------------------------------------
   # - project: eric/weisssrv-lib
-  #   ref: v0.3.1
+  #   ref: v0.5.2
   #   file: /ci/validate/terraform.yml
   #   inputs:
   #     tags: []
@@ -225,7 +233,7 @@ include:
   # CI variable REFERENCES, not values, and `gate` is the expression that must be
   # non-empty for the job to exist at all — absent the variables there is no job.
   - project: eric/weisssrv-lib
-    ref: v0.3.1
+    ref: v0.5.2
     file: /ci/review/pr-agent.yml
     inputs:
       tags: []
@@ -264,13 +272,13 @@ secret_detection:
 # job FAILURE: locally the suite skips when it is absent, and a skip that reads
 # as green in CI would be a gate that cannot fail.
 #
-# v0.3.1 is the first library tag whose CLI has `prune ci:<shape>` at all, and
-# it is NOT CUT YET — this job's clone (and select-ci.sh's own pipx path) both
-# fail until the library releases it.
+# `prune ci:<shape>` first shipped in the library CLI at v0.3.1, so LIB_REF must
+# stay at or above that tag: below it, this job's clone and select-ci.sh's own
+# pipx path both fail on a subcommand the CLI does not have.
 python-tests:
   variables:
     LIB_PROJECT: "eric/weisssrv-lib"
-    LIB_REF: "v0.3.1"
+    LIB_REF: "v0.5.2"
     WEISSSRV_REQUIRE_CLI: "1"
 
 # ============================================================================
