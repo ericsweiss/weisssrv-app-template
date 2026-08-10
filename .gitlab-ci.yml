@@ -57,7 +57,7 @@ variables:
   # the pipeline when an include drifts from this value or pins a branch, and
   # tests/ ties the wrappers and LIB_REF to it as well. Bump here, run
   # `scripts/check-lib-pins.py --fix`, and update the two wrappers.
-  WEISSSRV_LIB_REF: "v0.5.1"
+  WEISSSRV_LIB_REF: "v0.5.2"
 
 # ============================================================================
 # Shared library templates (include:project + inputs). Every job is the tenant
@@ -66,7 +66,7 @@ variables:
 include:
   # -- yaml-lint: lint the whole tree against the repo-local .yamllint --------
   - project: eric/weisssrv-lib
-    ref: v0.5.1
+    ref: v0.5.2
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
@@ -86,7 +86,7 @@ include:
   # pinned here: it is the cluster's k8s minor kubeconform validates against, a
   # per-consumer fact (k3s v1.36.x today), not a library-owned tool version.
   - project: eric/weisssrv-lib
-    ref: v0.5.1
+    ref: v0.5.2
     file: /ci/validate/flux-lint.yml
     inputs:
       tags: []
@@ -97,7 +97,7 @@ include:
 
   # -- shellcheck: lint the scripts/ helpers (the rename wrapper) -------------
   - project: eric/weisssrv-lib
-    ref: v0.5.1
+    ref: v0.5.2
     file: /ci/lint/shellcheck.yml
     inputs:
       tags: []
@@ -110,7 +110,7 @@ include:
   # Runs the vendored, stdlib-only scripts/check-doc-links.py (copied from the
   # library). Scans docs/ + README.md + CLAUDE.md.
   - project: eric/weisssrv-lib
-    ref: v0.5.1
+    ref: v0.5.2
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
@@ -136,7 +136,7 @@ include:
   # `changes: ["**/*"]` because the suite reads the whole tree (token scan, YAML
   # parse, per-shape diff).
   - project: eric/weisssrv-lib
-    ref: v0.5.1
+    ref: v0.5.2
     file: /ci/test/python-tests.yml
     inputs:
       tags: []
@@ -163,7 +163,7 @@ include:
   # To make a secret finding HARD-BLOCK the pipeline, add
   # `inputs: { allow_failure: false }`.
   - project: eric/weisssrv-lib
-    ref: v0.5.1
+    ref: v0.5.2
     file: /ci/security/secret-detection.yml
 
   # -- build-image: build THIS service's container image (the main use case) --
@@ -179,7 +179,7 @@ include:
   # `weisssrv-new-project prune image-build` to drop the Dockerfile. See
   # docs/CONSUMING.md ("Building the service image").
   - project: eric/weisssrv-lib
-    ref: v0.5.1
+    ref: v0.5.2
     file: /ci/build/docker-build.yml
     inputs:
       tags: ["infrastructure"]       # a PRIVILEGED runner (retag to yours)
@@ -210,7 +210,7 @@ include:
   # major_on_zero stays false: while the tag is 0.x a `feat!:` bumps MINOR, and
   # calling this 1.0.0 is a deliberate act (flip the input for that release).
   - project: eric/weisssrv-lib
-    ref: v0.5.1
+    ref: v0.5.2
     file: /ci/release/semantic-release.yml
     inputs:
       tags: []
@@ -222,7 +222,7 @@ include:
   # would need a remote/HTTP state backend and internet-reachable providers.
   # --------------------------------------------------------------------------
   # - project: eric/weisssrv-lib
-  #   ref: v0.5.1
+  #   ref: v0.5.2
   #   file: /ci/validate/terraform.yml
   #   inputs:
   #     tags: []
@@ -233,7 +233,7 @@ include:
   # CI variable REFERENCES, not values, and `gate` is the expression that must be
   # non-empty for the job to exist at all — absent the variables there is no job.
   - project: eric/weisssrv-lib
-    ref: v0.5.1
+    ref: v0.5.2
     file: /ci/review/pr-agent.yml
     inputs:
       tags: []
@@ -278,7 +278,7 @@ secret_detection:
 python-tests:
   variables:
     LIB_PROJECT: "eric/weisssrv-lib"
-    LIB_REF: "v0.5.1"
+    LIB_REF: "v0.5.2"
     WEISSSRV_REQUIRE_CLI: "1"
 
 # ============================================================================
