@@ -157,3 +157,27 @@ def test_the_gate_runs_the_cli_version_select_ci_installs():
     job's library ref and the wrapper's pin move together."""
     ci = yaml.safe_load((tr.REPO_ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8"))
     assert ci["python-tests"]["variables"]["LIB_REF"] == tr.lib_ref("select-ci.sh")
+
+
+def test_every_library_pin_agrees_with_the_single_source():
+    """One reference per repo, across ALL the places this repo pins the library.
+
+    scripts/check-lib-pins.py covers the `include:` entries. It cannot see the
+    other two kinds of pin — the python-tests job's LIB_REF and the two wrapper
+    defaults — and those are exactly what drifted before: the wrappers once
+    fetched a different build of the same CLI than the gate that tested it.
+    """
+    ci = yaml.safe_load((tr.REPO_ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8"))
+    want = ci["variables"]["WEISSSRV_LIB_REF"]
+
+    include_refs = {
+        entry["ref"]
+        for entry in ci["include"]
+        if isinstance(entry, dict) and entry.get("project") == "eric/weisssrv-lib"
+    }
+    assert include_refs, "no weisssrv-lib includes found — did the block move?"
+    assert include_refs == {want}, f"include refs {include_refs} != {want}"
+
+    assert ci["python-tests"]["variables"]["LIB_REF"] == want
+    assert tr.lib_ref("select-ci.sh") == want
+    assert tr.lib_ref("rename.sh") == want
