@@ -8,6 +8,8 @@
 # week, and the platform already issues the `default`-namespace wildcards. A
 # per-host cert per tenant avoids sharing/copying those and stays well under
 # the rate limit. `renewBefore: 720h` (30d) matches the cluster convention.
+#
+# The matching internal-hostname cert is optional/certificate-internal.yaml.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -21,22 +23,3 @@ spec:
   dnsNames:
     - changeme-app.ericsweiss.com
   renewBefore: 720h
-
-# ---
-# # Internal certificate — enable together with the internal IngressRoute.
-# # `changeme-app.esweiss.com` resolves only on the LAN/tailnet (operator adds
-# # the AdGuard rewrite — see docs/ONBOARDING.md). cert-manager still validates
-# # it over public DNS-01, so issuance works even though the name is internal.
-# apiVersion: cert-manager.io/v1
-# kind: Certificate
-# metadata:
-#   name: changeme-app-tls-internal
-# spec:
-#   secretName: changeme-app-esweiss-tls
-#   issuerRef:
-#     name: letsencrypt-prod
-#     kind: ClusterIssuer
-#   commonName: changeme-app.esweiss.com
-#   dnsNames:
-#     - changeme-app.esweiss.com
-#   renewBefore: 720h

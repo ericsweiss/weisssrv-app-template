@@ -28,20 +28,36 @@ namespace. There is no `kubectl apply` / `helm upgrade` in the normal flow.
   namespace fail to apply.
 - The tree ships app-slug and GitLab-group placeholders. Run
   `./scripts/rename.sh <app> <group>` (a wrapper over the `weisssrv-new-project`
-  CLI's `rename`; the CLI also `prune`s / `wire`s optional components — see
-  `docs/CONSUMING.md`) and `./scripts/select-ci.sh <shape>`, or
-  `grep -rn 'changeme[-]' .` for leftovers before shipping (the bracket keeps
-  the pattern from matching this line).
+  CLI's `rename`; the CLI also `prune`s optional components — see
+  `docs/CONSUMING.md`) and `./scripts/select-ci.sh <shape>` (a wrapper over the
+  same CLI's `prune ci:<shape>`), then `grep -rn 'changeme[-]' .` for leftovers
+  before shipping (the bracket keeps the pattern from matching this line).
+- **The cluster identity is hard-wired.** `ericsweiss.com`, `esweiss.com`, the
+  `esweiss.com/*` node labels, `registry.git.ericsweiss.com` and the
+  `infrastructure` runner tag are literals, not variables. Do not generalise
+  them; `docs/ONBOARDING.md` § Step 0 lists every one for a repo being pointed
+  at a different cluster.
 
 ## Local loop
 
 ```bash
-task lint                 # yamllint + kustomize build + kubeconform
+task lint                 # yamllint + kustomize/kubeconform + shellcheck + doc links
 task render               # see exactly what Flux will apply
 task build                # docker build (needs a Dockerfile)
 ```
 
-CI mirrors `task lint`. Fix lint locally before opening the MR.
+`task lint` mirrors the CI lint stage, including the second kubeconform pass over
+`kubernetes/flux/optional/`. Secret detection is pipeline-only; `pre-commit
+install` covers it locally. Fix lint before opening the MR.
+
+## `tests/` is the template's gate, not yours
+
+`tests/` exercises the scaffold's own wrappers and skips itself once the repo is
+renamed. If you delete it, delete the `/ci/test/python-tests.yml` include and the
+`python-tests:` variables override with it — pytest exits 4 on a missing
+directory. If you keep it, the operator must allowlist this project on
+`eric/weisssrv-lib`'s CI/CD job-token list, since the job clones the internal
+library. Both paths: `docs/CONSUMING.md` § Removing the template's gate.
 
 ## Deploy + verify
 
@@ -76,9 +92,14 @@ doesn't exist in the registry.
 - **Observability.** Ship a `ServiceMonitor` (auto-discovered cluster-wide) and
   a `PrometheusRule` for down/stale alerts. Container logs go to Loki via Alloy
   automatically — no config needed.
-- **Autoscaling.** VPA (`Initial`) right-sizes by default; `hpa.yaml` is an
-  opt-in HPA + PDB. If you enable the HPA, drop `replicas` from the Deployment
-  and make the VPA memory-only.
+- **Autoscaling.** VPA (`Initial`) right-sizes by default and the PDB is always
+  on; `optional/hpa.yaml` is the opt-in HPA. Enabling it means uncommenting its
+  line in `kubernetes/flux/kustomization.yaml`, dropping `replicas` from the
+  Deployment, and making the VPA memory-only.
+- **Opt-in add-ons.** `kubernetes/flux/optional/` holds real, CI-validated
+  manifests Flux does not build (HPA, internal route + cert, the GitLab secret
+  backend, the registry pull secret). Enabling one is uncommenting its line in
+  `kubernetes/flux/kustomization.yaml`; each file's header carries the rest.
 - **Scheduling / hardening.** Pods run non-root with a read-only root FS and
   soft NAS-avoidance. To pin to the storage node for zvol-backed data, use a
   required hostname affinity plus the `esweiss.com/nas` toleration.
@@ -87,10 +108,16 @@ doesn't exist in the registry.
 
 `registry.git.ericsweiss.com/<group>/<app>` is your image registry in shape
 `gitlab` (in shape `github` it is `ghcr.io/<owner>/<repo>`, built by
-`.github/workflows/build-image.yml`; a **private** GHCR package additionally
-needs an `imagePullSecret` in your namespace). Point
-`deployment.yaml`'s `image:` at a tag there (literal tag; bump it yourself in an
-MR — there is no hosted dependency bot) or at any upstream image.
+`.github/workflows/build-image.yml`). Point `deployment.yaml`'s `image:` at a tag
+there (literal tag; bump it yourself in an MR — there is no hosted dependency
+bot) or at any upstream image. The shipped `:REPLACE-ME` tag is a placeholder no
+registry has, so the first reconcile fails until you replace it.
+
+A **private** registry — a GitLab project registry by default, or a private GHCR
+package — needs an `imagePullSecret` in your namespace: an `ExternalSecret` of
+type `kubernetes.io/dockerconfigjson` plus `imagePullSecrets:` on the Deployment.
+That is an operator-assisted step (`docs/ONBOARDING.md` § O2b); making the
+package public avoids it.
 
 A placeholder `Dockerfile` ships and the CI **builds the service image by
 default** (the `build-image` job, the library's `ci/build/docker-build.yml`).
@@ -132,9 +159,15 @@ Docker.
 ## Shared library + consumption (this repo)
 
 - `docs/CI-SHAPES.md` — the three CI shapes, the one-command selector, the
-  GitLab↔GitHub job-parity table, and the Flux-only (no-CI) operator wiring.
+  GitLab↔GitHub job-parity table, and the operator wiring for a GitHub-hosted
+  tenant.
 - `docs/CONSUMING.md` — the two instantiation paths, library consumption +
-  bumping, optional-enablement toggles, the image build, and BYO-keys.
+  bumping, the included-job table, optional-enablement toggles, the image build,
+  and BYO-keys.
+- `docs/ONBOARDING.md` — cluster-identity literals, then the tenant and operator
+  checklists (secret backend, registry pull credential, DNS, storage, SSO).
+- `docs/VERSIONING.md` — what the release job reads from commit subjects, and
+  what MAJOR/MINOR/PATCH mean here.
 - Library include contract (each CI template's inputs):
   https://git.ericsweiss.com/eric/weisssrv-lib/-/blob/main/docs/INCLUDE-CONTRACT.md
 - Library versioning / tag pinning:

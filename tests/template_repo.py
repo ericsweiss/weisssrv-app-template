@@ -44,8 +44,7 @@ CI_PATHS = frozenset(
         ".gitlab/secret-detection-ruleset.toml",
         ".github/workflows/ci.yml",
         ".github/workflows/build-image.yml",
-        # Shape B's release path (vendored semantic-release.py --platform
-        # github), added when library v0.3.0 made a GitHub release possible.
+        # Shape B's release path (vendored semantic-release.py --platform github).
         ".github/workflows/release.yml",
     }
 )

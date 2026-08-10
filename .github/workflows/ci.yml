@@ -16,8 +16,9 @@
 #
 # Tool versions are pinned, and every downloaded binary is sha256-verified
 # against the value the GitLab library template uses, so both shapes gate on
-# byte-identical tools. Bump them deliberately in a PR (there is no dependency
-# bot), keeping them in step with the `ref:` in `.gitlab-ci.yml`.
+# byte-identical tools. tests/test_ci_shapes.py reads the library at
+# `variables.WEISSSRV_LIB_REF` and asserts the env block below matches its
+# template defaults, so a library bump that moves a pin fails here too.
 name: ci
 
 # Quoted: unquoted `on` is a YAML 1.1 boolean, which yamllint's truthy rule
@@ -50,8 +51,9 @@ env:
   # Matches the gitleaks rev pinned in .pre-commit-config.yaml.
   GITLEAKS_VERSION: "8.30.1"
   GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
-  # The cluster's Kubernetes minor — a per-consumer fact, same value as the
-  # `k8s_version` input in .gitlab-ci.yml. Keep the two in step.
+  # The cluster's Kubernetes minor — a per-consumer fact. Same value as the
+  # `k8s_version` input in .gitlab-ci.yml and K8S_VERSION in Taskfile.yml;
+  # tests/test_ci_shapes.py asserts the three agree.
   K8S_VERSION: "1.36.0"
 
 jobs:
@@ -62,9 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
-          # Do not leave GITHUB_TOKEN in .git/config: every job below runs
-          # PR-controlled repository content (this one executes
-          # scripts/check-doc-links.py outright), and none of them pushes.
+          # No job here pushes; do not persist the token.
           persist-credentials: false
       - name: Install yamllint
         # pipx ships in the GitHub-hosted runner image and puts the console
@@ -84,9 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
-          # Do not leave GITHUB_TOKEN in .git/config: every job below runs
-          # PR-controlled repository content (this one executes
-          # scripts/check-doc-links.py outright), and none of them pushes.
+          # No job here pushes; do not persist the token.
           persist-credentials: false
       - name: Install kustomize + kubeconform (sha256-verified)
         run: |
@@ -112,12 +110,17 @@ jobs:
           # kubeconform's bundled schemas. -ignore-missing-schemas keeps a CRD
           # with no published schema from failing the gate.
           CATALOG='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
-          kustomize build kubernetes/flux > "$RUNNER_TEMP/rendered.yaml"
-          kubeconform -strict -ignore-missing-schemas \
-            -kubernetes-version "$K8S_VERSION" \
-            -schema-location default \
-            -schema-location "$CATALOG" \
-            -summary "$RUNNER_TEMP/rendered.yaml"
+          # kubernetes/flux/optional holds real manifests that are deliberately
+          # commented out of kubernetes/flux/kustomization.yaml; validating them
+          # here is what keeps a switched-off add-on from rotting.
+          for dir in kubernetes/flux kubernetes/flux/optional; do
+            kustomize build "$dir" > "$RUNNER_TEMP/rendered.yaml"
+            kubeconform -strict -ignore-missing-schemas \
+              -kubernetes-version "$K8S_VERSION" \
+              -schema-location default \
+              -schema-location "$CATALOG" \
+              -summary "$RUNNER_TEMP/rendered.yaml"
+          done
 
   # --- shellcheck: lint the scripts/ helpers --------------------------------
   shellcheck:
@@ -126,9 +129,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
-          # Do not leave GITHUB_TOKEN in .git/config: every job below runs
-          # PR-controlled repository content (this one executes
-          # scripts/check-doc-links.py outright), and none of them pushes.
+          # No job here pushes; do not persist the token.
           persist-credentials: false
       - name: Install shellcheck (sha256-verified)
         run: |
@@ -164,9 +165,8 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
-          # Do not leave GITHUB_TOKEN in .git/config: every job below runs
-          # PR-controlled repository content (this one executes
-          # scripts/check-doc-links.py outright), and none of them pushes.
+          # This job executes PR-controlled repository content
+          # (scripts/check-doc-links.py), and nothing here pushes.
           persist-credentials: false
       - name: Check relative doc links
         # The vendored, stdlib-only checker — no network, no dependencies.
@@ -176,8 +176,8 @@ jobs:
   # GitLab's managed Secret-Detection analyzer runs gitleaks under the hood and
   # loads .gitleaks.toml through .gitlab/secret-detection-ruleset.toml. On
   # GitHub there is no analyzer wrapper, so gitleaks is invoked directly with
-  # the same config file — findings FAIL the job (see docs/CI-SHAPES.md for the
-  # difference from the `allow_failure` default of the GitLab include).
+  # the same config file. Findings FAIL the job in both shapes; what GitHub
+  # gives up is the vulnerability report and MR widget — see docs/CI-SHAPES.md.
   secret-detection:
     name: secret-detection
     runs-on: ubuntu-latest

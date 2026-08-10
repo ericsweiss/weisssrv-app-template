@@ -61,3 +61,51 @@ def test_the_kustomization_lists_only_manifests_that_exist(shaped):
     assert resources
     missing = [name for name in resources if not (flux / name).is_file()]
     assert missing == []
+
+
+def test_optional_manifests_are_real_files_reachable_by_one_uncomment(shaped):
+    """The opt-in add-ons are live YAML in kubernetes/flux/optional/, listed by
+    that directory's own kustomization (so CI schema-validates them) and offered
+    as a commented resource line in the live kustomization (so enabling one is
+    uncommenting a single line)."""
+    _, root = shaped
+    flux = root / "kubernetes" / "flux"
+    optional = flux / "optional"
+
+    on_disk = {
+        p.name
+        for p in optional.iterdir()
+        if p.is_file() and p.name != "kustomization.yaml"
+    }
+    assert on_disk, "kubernetes/flux/optional/ is empty"
+
+    listed = yaml.safe_load(
+        (optional / "kustomization.yaml").read_text(encoding="utf-8")
+    )["resources"]
+    assert set(listed) == on_disk, "optional/kustomization.yaml is out of step with its dir"
+
+    live = (flux / "kustomization.yaml").read_text(encoding="utf-8")
+    offered = {
+        line.split("- optional/", 1)[1].split()[0]
+        for line in live.splitlines()
+        if line.lstrip().startswith("# - optional/")
+    }
+    assert offered == on_disk, "every optional manifest needs a commented resource line"
+
+    active = yaml.safe_load(live)["resources"]
+    assert not [r for r in active if r.startswith("optional/")], (
+        "an optional manifest is enabled in the shipped template"
+    )
+
+
+def test_no_manifest_ships_a_commented_out_resource(shaped):
+    """House rule: alternates ship as real files in optional/, never as
+    commented-out YAML no linter can validate."""
+    _, root = shaped
+    offenders = [
+        rel
+        for rel, text in tr.text_files(root)
+        if rel.startswith("kubernetes/")
+        and any(line.lstrip().startswith("# apiVersion:") for line in text.splitlines())
+    ]
+    assert offenders == []

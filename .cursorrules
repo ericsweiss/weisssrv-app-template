@@ -3,8 +3,11 @@
 This is a weisssrv cluster tenant repo. **Before making any change, read and
 follow `.claude/skills/project-development/SKILL.md`** — the authoritative
 workflow for this repo (also enforced by `.cursor/rules/project-development.mdc`,
-`alwaysApply: true`). See [CLAUDE.md](CLAUDE.md) for the full guidance; it is the
-canonical agent doc. Key rules:
+`alwaysApply: true`). See [CLAUDE.md](CLAUDE.md) for the standing rules and the
+doc index; it is the canonical agent doc.
+
+The rules that must hold in every change, restated here because they are the
+ones that cost real damage:
 
 - NEVER commit secrets — use `ExternalSecret` manifests referencing 1Password or
   GitLab CI/CD variables.
@@ -14,10 +17,3 @@ canonical agent doc. Key rules:
 - Containers stay non-root with a read-only root filesystem; no `latest` tags.
 - Run `task lint` before opening a merge request.
 - Stay within your single namespace.
-- CI comes in three shapes and this repo keeps one: `.gitlab-ci.yml` (shape
-  `gitlab`, includes the shared `eric/weisssrv-lib` library at a pinned tag — do
-  not re-inline it), `.github/workflows/` (shape `github`, a vendored
-  equivalent), or neither (shape `none`, Flux-only). Check which is present
-  before editing CI — see `docs/CI-SHAPES.md`.
-- Scaffold with the `weisssrv-new-project` CLI; pick the CI shape with
-  `./scripts/select-ci.sh` — see `docs/CONSUMING.md`.

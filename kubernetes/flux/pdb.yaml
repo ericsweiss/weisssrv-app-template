@@ -7,7 +7,7 @@
 #
 # If you switch to a single-replica app, DELETE this (a `minAvailable: 1` on one
 # replica blocks every voluntary eviction — a node can never drain it). If you
-# enable hpa.yaml, keep `minReplicas >= 2` so this stays satisfiable.
+# enable optional/hpa.yaml, keep `minReplicas >= 2` so this stays satisfiable.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:

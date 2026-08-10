@@ -85,7 +85,7 @@ def test_rename_writes_the_values_the_manifests_consume(renamed):
     assert deployment["metadata"]["labels"]["app.kubernetes.io/name"] == APP
     container = deployment["spec"]["template"]["spec"]["containers"][0]
     # One line carrying BOTH tokens, and the group is the nested form.
-    assert container["image"] == f"registry.git.ericsweiss.com/{GROUP}/{APP}:0.1.0"
+    assert container["image"] == f"registry.git.ericsweiss.com/{GROUP}/{APP}:REPLACE-ME"
     assert container["env"][0]["valueFrom"]["secretKeyRef"]["name"] == f"{APP}-secrets"
 
     route = _docs(renamed, "kubernetes/flux/ingressroute.yaml")[0]
@@ -111,7 +111,7 @@ def test_rename_accepts_substitution_hostile_values(project, script_env, app, gr
     image = _docs(project, "kubernetes/flux/deployment.yaml")[0]["spec"]["template"][
         "spec"
     ]["containers"][0]["image"]
-    assert image == f"registry.git.ericsweiss.com/{group}/{app}:0.1.0"
+    assert image == f"registry.git.ericsweiss.com/{group}/{app}:REPLACE-ME"
 
 
 def test_rename_is_idempotent(project, script_env):

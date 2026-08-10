@@ -35,6 +35,17 @@ see [step 3](#3-set-your-image).
 > [`docs/VERSIONING.md`](docs/VERSIONING.md) covers the release tags this
 > pipeline cuts — for the scaffold, and then for your own service.
 
+**One cluster, spelled out in literals.** This template targets eric's
+`weisssrv` cluster: `ericsweiss.com` / `esweiss.com`, the `esweiss.com/*` node
+labels, `registry.git.ericsweiss.com` and the `infrastructure` runner tag are
+written into the manifests and `.gitlab-ci.yml` rather than parameterised, which
+is what lets `kustomize build` run with no inputs. They are collected in one
+seam: edit `scripts/cluster-identity.env` and run
+`./scripts/apply-cluster-identity.sh` once to retarget the scaffold at a cluster
+generated from `weisssrv-cluster-template`. The defaults are weisssrv's values,
+so an existing tenant never runs it. See
+[`docs/ONBOARDING.md` § Step 0](docs/ONBOARDING.md#step-0--cluster-identity).
+
 ---
 
 ## Quick start
@@ -53,20 +64,24 @@ group/instance custom template — otherwise it won't show up in the picker.)
 ```
 
 `scripts/rename.sh` is a thin wrapper over the library's `weisssrv-new-project`
-CLI. For choosing components (not just renaming), use the CLI directly — it can
-`prune` what you don't need and `wire` opt-ins structurally, then `verify`:
+CLI. For dropping components (not just renaming), use the CLI directly — it
+`prune`s structurally and then `verify`s the result:
 
 ```bash
 weisssrv-new-project rename <app-slug> <gitlab-group>
 weisssrv-new-project prune metrics single-replica   # optional
-weisssrv-new-project wire  hpa                       # optional
+weisssrv-new-project verify
 ```
 
-See [`docs/CONSUMING.md`](docs/CONSUMING.md) for install + the full toggle list.
 Either way, `grep -rn 'changeme[-]' .` afterward confirms no placeholders are
 left. The bracket is deliberate: the pattern matches a real placeholder but not
 this line, so a clean project gets zero hits instead of hits on the very docs
 telling you to run the check.
+
+[`docs/CONSUMING.md`](docs/CONSUMING.md) has the CLI install instructions and the
+full toggle list. The library is an **internal-visibility** project, so the same
+page also carries the credential forms for fetching the CLI — and a no-CLI
+fallback if you have no path to it at all.
 
 `scripts/select-ci.sh` keeps one CI shape and deletes the other two's files —
 **`gitlab` is the default**, and running it even for `gitlab` matters (it drops
@@ -80,15 +95,26 @@ The three things you're really setting:
    Keep it a valid DNS label (`recipe-box`, not `Recipe_Box`).
 2. **Public host** — defaults to `<slug>.ericsweiss.com` in
    `kubernetes/flux/ingressroute.yaml` and `certificate.yaml`.
-3. **Internal host** (optional) — `<slug>.esweiss.com`; uncomment the internal
-   `IngressRoute` and `Certificate` and request the operator DNS step.
+3. **Internal host** (optional) — `<slug>.esweiss.com`; uncomment
+   `- optional/ingressroute-internal.yaml` and
+   `- optional/certificate-internal.yaml` in
+   `kubernetes/flux/kustomization.yaml`, and request the operator DNS step.
+
+Targeting a different cluster? Edit `scripts/cluster-identity.env` and run
+`./scripts/apply-cluster-identity.sh` before you go further
+([`docs/ONBOARDING.md` § Step 0](docs/ONBOARDING.md#step-0--cluster-identity)).
 
 ### 3. Set your image
 
-Point `kubernetes/flux/deployment.yaml`'s `image:` at any image. Tags are
+**Required, not optional.** `kubernetes/flux/deployment.yaml` ships
+`registry.git.ericsweiss.com/changeme-group/changeme-app:REPLACE-ME` — a tag no
+registry has. Replace it, or the first reconcile `ImagePullBackOff`s.
+The usual value is the `:<short-sha>` the CI build just pushed. Tags are
 **literal pins** — there's no Flux `${var}` substitution for tenant repos and no
 hosted dependency bot, so bump them yourself (see [Keeping image tags
-current](#keeping-image-tags-current)).
+current](#keeping-image-tags-current)). If the project registry is private, the
+namespace also needs a pull credential — operator step
+[O2b](docs/ONBOARDING.md#o2b--registry-pull-credential-only-if-the-image-is-private).
 
 A placeholder `Dockerfile` ships as the buildable default — **replace it with
 your service's real build**. Three ways an image gets built (full detail in
@@ -98,7 +124,7 @@ your service's real build**. Three ways an image gets built (full detail in
   include builds the repo-root Dockerfile on every MR/main and pushes
   `$CI_REGISTRY_IMAGE:<short-sha>` (+ `:latest` on main). It runs on a
   **privileged runner** (Docker-in-Docker), tagged `infrastructure` — retag it
-  to your own privileged runner if you have one; see [CI runner](#ci-runner).
+  to your own privileged runner if you have one; see [CI runner](#ci-runner-shape-gitlab).
   Shape `github`: `.github/workflows/build-image.yml` does the same to
   `ghcr.io/<owner>/<repo>`, building on pull requests and pushing on merge
   ([`docs/CI-SHAPES.md`](docs/CI-SHAPES.md)). Shape `none` builds nothing.
@@ -112,13 +138,15 @@ your service's real build**. Three ways an image gets built (full detail in
 ### 4. Ship
 
 ```bash
-task lint            # yamllint + kustomize build + kubeconform (same as CI)
+task lint            # the same four gates the CI lint stage runs
 git switch -c my-change && git commit -am "feat: ..." && git push -u origin my-change
 ```
 
 Open the MR (or PR). On merge, Flux reconciles — assuming the operator has wired
-your repo once (below). In shape `none` there is no pipeline, so `task lint` and
-the pre-commit hooks are the only gate: run them.
+your repo once (below). `task lint` covers CI's whole lint stage (yamllint,
+kustomize + kubeconform, shellcheck, Markdown links); secret detection is
+pipeline-only, and the pre-commit hooks cover it locally. In shape `none` there
+is no pipeline at all, so those two together are the whole gate.
 
 ---
 
@@ -145,9 +173,10 @@ backends (match your wiring file — see `docs/ONBOARDING.md`):
 | **1Password** (Option C, recommended) | you have Homelab vault access | prefixed item title `"<slug>: <Item>"` (+ `property: <field>`) |
 | **GitLab CI/CD variables** | you're a collaborator without the vault | the CI variable name |
 
-`kubernetes/flux/externalsecret.yaml` ships both variants (1Password active,
-GitLab commented). If your app needs no secrets, delete the file and its
-references. This matches weisssrv
+`kubernetes/flux/externalsecret.yaml` is the 1Password variant;
+`kubernetes/flux/optional/externalsecret-gitlab.yaml` is the GitLab one. They
+create the same Secret, so enable exactly one. If your app needs no secrets,
+delete the file and its references. This matches weisssrv
 [`docs/30`](https://git.ericsweiss.com/eric/weisssrv/-/blob/main/docs/30-multi-repo-onboarding.md).
 
 ---
@@ -191,9 +220,10 @@ Public is fully self-serve; internal needs one operator step.
   restarts.
 - `pdb.yaml` — a `minAvailable: 1` PodDisruptionBudget (always on) so a kured
   node-drain can't take both default replicas down at once.
-- `hpa.yaml` — opt-in HPA. Enable it, drop `replicas` from the Deployment, and
-  make the VPA memory-only so the two don't fight over CPU (keep
-  `minReplicas >= 2` so the PDB stays satisfiable).
+- `optional/hpa.yaml` — opt-in HPA. Uncomment its line in
+  `kubernetes/flux/kustomization.yaml`, drop `replicas` from the Deployment, and
+  make the VPA memory-only so the two don't fight over CPU (`minReplicas: 2`
+  keeps the PDB satisfiable).
 
 ---
 
@@ -219,7 +249,7 @@ Requires `task` (go-task), plus `kustomize`, `kubeconform`, and `yamllint` for
 linting. `task --list` shows everything.
 
 ```bash
-task lint            # what CI runs
+task lint            # yamllint + kustomize/kubeconform + shellcheck + doc links
 task render          # print the manifests Flux will apply
 task build           # docker build (needs a Dockerfile)
 task flux:status     # reconcile state (read-only; needs a kubeconfig)
@@ -276,17 +306,20 @@ push-mirror**, configured in the UI (nothing in this repo):
 kubernetes/flux/     # what Flux reconciles into your namespace
   deployment.yaml    #   hardened non-root app + probes + resources
   service.yaml
-  ingressroute.yaml  #   public route (+ commented internal variant)
-  certificate.yaml   #   per-host LE cert (+ commented internal)
-  externalsecret.yaml#   1Password (active) / GitLab (commented) backends
+  ingressroute.yaml  #   public route
+  certificate.yaml   #   per-host LE cert
+  externalsecret.yaml#   secrets, 1Password backend
   networkpolicy.yaml #   default-deny + scoped allows
   servicemonitor.yaml
   prometheusrule.yaml
   vpa.yaml
   pdb.yaml           #   default PodDisruptionBudget (minAvailable: 1)
-  hpa.yaml           #   opt-in HPA (commented)
-  kustomization.yaml
-Dockerfile           # placeholder service image (task build / opt-in CI build)
+  kustomization.yaml #   the reconciled resource list; opt-ins are commented lines
+  optional/          #   real, CI-validated add-ons Flux does NOT build:
+                     #     hpa.yaml, ingressroute-internal.yaml,
+                     #     certificate-internal.yaml, externalsecret-gitlab.yaml,
+                     #     externalsecret-registry.yaml
+Dockerfile           # placeholder service image (task build / CI build, active by default)
 .dockerignore
 .gitlab-ci.yml       # CI shape A: includes eric/weisssrv-lib templates @ a pinned tag
 .github/workflows/   # CI shape B: the same gates as GitHub Actions
@@ -296,12 +329,17 @@ Dockerfile           # placeholder service image (task build / opt-in CI build)
 Taskfile.yml         # local dev wrappers
 scripts/rename.sh    # thin wrapper over the weisssrv-new-project CLI
 scripts/select-ci.sh # keep one CI shape, drop the other two (run once at setup)
+scripts/lib-cli.sh   # shared CLI resolver both wrappers source
+scripts/cluster-identity.env        # the cluster this scaffold targets
+scripts/apply-cluster-identity.sh   # retarget it at another cluster
 scripts/check-doc-links.py  # offline Markdown link checker (docs-link-check job)
+scripts/check-lib-pins.py   # every library ref matches WEISSSRV_LIB_REF
 scripts/semantic-release.py # vendored release script (both CI shapes; --platform github for B)
 docs/                # CI-SHAPES.md, CONSUMING.md, ARCHITECTURE.md, ONBOARDING.md,
                      #   VERSIONING.md
 tests/               # the TEMPLATE's own gate (rename + CI-shape selection);
-                     #   skips itself once renamed — delete it in your project
+                     #   skips itself once renamed. Deleting it also means
+                     #   dropping the python-tests include — docs/CONSUMING.md
 .claude/             # agent settings + project-development skill
 ```
 

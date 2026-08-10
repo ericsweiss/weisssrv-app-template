@@ -181,3 +181,51 @@ def test_every_library_pin_agrees_with_the_single_source():
     assert ci["python-tests"]["variables"]["LIB_REF"] == want
     assert tr.lib_ref("select-ci.sh") == want
     assert tr.lib_ref("rename.sh") == want
+
+
+# --------------------------------------------------------------------------
+# Pins that must agree across the two CI shapes and the Taskfile
+# --------------------------------------------------------------------------
+
+
+def _gitlab_ci() -> dict:
+    return yaml.safe_load((tr.REPO_ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8"))
+
+
+def _flux_lint_inputs() -> dict:
+    """Inputs of the include that validates kubernetes/flux (not optional/)."""
+    for entry in _gitlab_ci()["include"]:
+        if not isinstance(entry, dict) or entry.get("file") != "/ci/validate/flux-lint.yml":
+            continue
+        inputs = entry.get("inputs", {})
+        if "kustomize_path" not in inputs:
+            return inputs
+    raise AssertionError("no flux-lint include for kubernetes/flux")
+
+
+def _github_env() -> dict:
+    wf = yaml.safe_load(
+        (tr.REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    )
+    return wf["env"]
+
+
+def test_the_kubernetes_minor_is_pinned_once_in_effect():
+    """`task lint` must not validate against a different minor than CI does."""
+    want = _flux_lint_inputs()["k8s_version"]
+    assert _github_env()["K8S_VERSION"] == want
+    taskfile = yaml.safe_load((tr.REPO_ROOT / "Taskfile.yml").read_text(encoding="utf-8"))
+    assert taskfile["vars"]["K8S_VERSION"] == want
+
+
+def test_gitleaks_pin_matches_the_pre_commit_hook():
+    hooks = yaml.safe_load(
+        (tr.REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    )
+    revs = [
+        repo["rev"].lstrip("v")
+        for repo in hooks["repos"]
+        if "gitleaks" in repo["repo"]
+    ]
+    assert revs, "no gitleaks hook in .pre-commit-config.yaml"
+    assert _github_env()["GITLEAKS_VERSION"] in revs

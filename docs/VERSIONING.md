@@ -20,10 +20,10 @@ you**, because a derived project inherits those paths and then edits them in
 place. Concretely:
 
 - **`kubernetes/flux/` and its `kustomization.yaml` resource list** — the
-  manifests Flux reconciles, and the names inside them (Deployment, Service,
-  namespace, the `-internal` IngressRoute/Certificate suffix convention).
-  Renaming a manifest or a resource is a rename in every derived project's live
-  cluster.
+  manifests Flux reconciles, the `optional/` add-ons and their commented entries,
+  and the names inside them (Deployment, Service, namespace, the `-internal`
+  IngressRoute/Certificate suffix convention). Renaming a manifest or a resource
+  is a rename in every derived project's live cluster.
 - **The placeholder tokens `changeme-app` / `changeme-group`** — what
   `scripts/rename.sh` substitutes. They are also what the shared library's
   `weisssrv-new-project` CLI keys off, so changing one breaks a tool in another
@@ -32,13 +32,17 @@ place. Concretely:
   `.gitlab/secret-detection-ruleset.toml`. `weisssrv-new-project prune
   ci:<shape>` deletes them by a **fixed table** of paths held in the library, so
   moving one silently turns the selector into a no-op.
-- **The prune/verify surface generally** — the opt-in manifests
-  (`hpa.yaml`), the `Dockerfile` / `.dockerignore` pair that `prune image-build`
-  targets, and the `allow-scrape-from-observability` NetworkPolicy document that
-  `prune metrics` removes. The library's `cli/tests/test_template_contract.py`
-  asserts every one of these against a checkout of this repository — a change
-  here fails *the library's* pipeline.
+- **The prune/verify surface generally** — the opt-in manifests under
+  `kubernetes/flux/optional/` and their commented lines in the kustomization, the
+  `Dockerfile` / `.dockerignore` pair that `prune image-build` targets, and the
+  `allow-scrape-from-observability` NetworkPolicy document that `prune metrics`
+  removes. The library's `cli/tests/test_template_contract.py` asserts every one
+  of these against a checkout of this repository — a change here fails *the
+  library's* pipeline.
 - **`Taskfile.yml` task names** — documented procedures name them.
+- **`scripts/cluster-identity.env`'s variable names** — a derived project that
+  ran the applier keeps the file, and a renamed variable silently stops being
+  substituted.
 
 Not API: comments, docs, the placeholder `Dockerfile`'s contents, the wording of
 anything under `docs/`.
@@ -66,36 +70,28 @@ Moving those pins changes what gates a derived project, so:
   alters a resolved job — is a MAJOR here, because a derived project that
   copies the new `.gitlab-ci.yml` over its own inherits the break.
 
-Every include pins the **same** tag (`v0.5.2` today), and so do the `rename.sh`
-and `select-ci.sh` wrappers. They were briefly split — generic jobs on `v0.1.1`,
-the release include on `v0.2.0`, the first tag shipping
-`ci/release/semantic-release.yml` — which made "what does this template pin?"
-unanswerable without reading every entry, and left the two wrappers running
-different versions of the same CLI. Bump them together; the library's contract
-tests now fail if they disagree, or if a ref moves without the vendored
+Every include pins the **same** tag (`v0.6.0` today), and so do the `rename.sh`
+and `select-ci.sh` wrappers and the `python-tests` job's clone. Bump them
+together: `scripts/check-lib-pins.py` fails the pipeline on an include that
+drifts from `variables.WEISSSRV_LIB_REF`, `tests/` ties the wrappers to the same
+value, and the library's contract tests fail if a ref moves without the vendored
 `scripts/semantic-release.py` moving with it.
 
-## Both CI shapes release
+## Releasing, by shape
 
 - **Shape `gitlab`** — the release stage in `.gitlab-ci.yml`, from the library's
   `ci/release/semantic-release.yml`.
 - **Shape `github`** — `.github/workflows/release.yml`, vendored from the
   library's `ci/release/github-release-workflow.example.yml`.
-
-Both drive the **same** vendored `scripts/semantic-release.py`, which grew a
-`--platform github` backend in library `v0.3.0` for exactly this. That preserves
-the property that made the script trustworthy in the first place: it is
-byte-identical to the library's copy in every repo that vendors it, so there is
-one implementation to audit rather than one per forge. Neither shape needs a
-marketplace action.
-
-This previously said shape `github` could not release — true until `v0.3.0`, and
-the reason was worth keeping: the alternatives on offer were forking the script
-(destroying the byte-identical property) or taking a marketplace dependency that
-nothing else here takes. Adding the backend upstream avoided both.
 - **Shape `none`** — no pipeline, so no releases. `scripts/semantic-release.py`
   is left behind unused, exactly as `scripts/check-doc-links.py` is; delete it
   if it bothers you.
+
+Both pipelined shapes drive the **same** vendored `scripts/semantic-release.py`,
+selecting the forge with `--platform {gitlab,github}`. That keeps the property
+that makes a vendored copy trustworthy: it is byte-identical to the library's, so
+there is one implementation to audit rather than one per forge. Neither shape
+needs a marketplace action.
 
 ## Releases are cut automatically (conventional commits)
 
@@ -121,10 +117,11 @@ re-running on an already-released commit is a no-op.
 project protects `v*` tags, pass a PAT reference through the template's
 `release_token` input with `token_header: PRIVATE-TOKEN`.
 
-`scripts/semantic-release.py` is **vendored** from weisssrv-lib and is meant to
-stay byte-identical to the library's copy at the ref the include pins. Nothing
-in this repository checks that automatically, so re-copy it deliberately in the
-same MR that bumps the ref.
+`scripts/semantic-release.py` is **vendored** from weisssrv-lib and stays
+byte-identical to the library's copy at the ref the include pins — the library's
+own contract tests fail when it does not. Re-copy it in the same MR that bumps
+the ref, alongside `scripts/check-doc-links.py` and `scripts/check-lib-pins.py`,
+which nothing checks.
 
 ## After `rename.sh`: releasing your own service
 
