@@ -24,6 +24,7 @@ ENV_FROM_LIBRARY = {
     "KUSTOMIZE_SHA256": ("ci/validate/flux-lint.yml", "kustomize_sha256"),
     "KUBECONFORM_VERSION": ("ci/validate/flux-lint.yml", "kubeconform_version"),
     "KUBECONFORM_SHA256": ("ci/validate/flux-lint.yml", "kubeconform_sha256"),
+    "RUFF_VERSION": ("ci/lint/python-lint.yml", "ruff_version"),
 }
 
 # shellcheck has no version input — the library pins the tool by image tag.

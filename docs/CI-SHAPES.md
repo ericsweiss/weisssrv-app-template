@@ -85,12 +85,13 @@ so both shapes gate on byte-identical tools.
 | `yaml-lint` | `yaml-lint` | **Exact.** yamllint 1.38.0, `-c .yamllint`, whole tree. |
 | `flux-lint` + `flux-lint-optional` (simple mode) | `flux-lint` (loops both trees) | **Exact.** kustomize 5.4.3 + kubeconform 0.6.7 (same sha256s), `-strict -ignore-missing-schemas -kubernetes-version 1.36.0` with the datreeio CRDs-catalog schema location, over `kubernetes/flux` and `kubernetes/flux/optional`. |
 | `shellcheck` | `shellcheck` | **Exact.** shellcheck 0.10.0, `--severity=warning --exclude=SC1091,SC2034`, over `scripts/*.sh`. |
+| `python-lint` | `python-lint` | **Exact.** ruff 0.16.0 over `scripts tests`, both resolving the vendored `./ruff.toml`. |
 | `docs-link-check` | `docs-link-check` | **Exact.** the same vendored `scripts/check-doc-links.py`. |
 | `secret_detection` | `secret-detection` | **Same detector, different wrapper** — see below. |
 | `build-image` | `docker-build` (in `ci.yml`) + `build-image` | **Split by privilege, different registry** — see below. |
 | `pr-agent-review` | — | **Not ported.** |
 | `semantic-release` | `release` (in `release.yml`) | **Ported.** Same vendored `scripts/semantic-release.py`, `--platform github`. |
-| `python-tests` | — | **Not ported** — it gates the TEMPLATE (`tests/`), not your app, and skips itself once you have renamed. Removing it is a three-part edit: see [CONSUMING.md](CONSUMING.md#removing-the-templates-gate). |
+| `python-tests` | — | **Not ported** — it gates the TEMPLATE (`tests/`), not your app, and skips itself once you have renamed. Removing it is a four-part edit: see [CONSUMING.md](CONSUMING.md#removing-the-templates-gate). |
 
 **Secret detection.** GitLab runs its managed Secret-Detection analyzer, which
 is gitleaks underneath, loading `.gitleaks.toml` through
@@ -270,13 +271,14 @@ Two things to put in its place:
 
 ```bash
 pre-commit install     # gitleaks + yamllint + YAML syntax on every commit
-task lint              # the same four gates the CI lint stage runs
+task lint              # the same five gates the CI lint stage runs
 ```
 
-`.gitleaks.toml`, `.yamllint`, `.pre-commit-config.yaml` and `Taskfile.yml` all
-survive shape C, so the local checks really are the same checks: `task lint`
-covers CI's lint stage (yamllint, kustomize + kubeconform over both trees,
-shellcheck, Markdown links) and pre-commit covers secret scanning. Run them —
+`.gitleaks.toml`, `.yamllint`, `.pre-commit-config.yaml`, `ruff.toml` and
+`Taskfile.yml` all survive shape C, so the local checks really are the same
+checks: `task lint` covers CI's lint stage (yamllint, kustomize + kubeconform
+over both trees, shellcheck, ruff, Markdown links) and pre-commit covers secret
+scanning. Run them —
 nothing else will. There is nothing to build an image with, so use an upstream
 image or `task build` and push by hand.
 

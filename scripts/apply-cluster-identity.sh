@@ -33,9 +33,28 @@ for var in CLUSTER_EXTERNAL_DOMAIN CLUSTER_INTERNAL_DOMAIN \
     case "${!var}" in *'|'*) echo "error: $var must not contain '|'" >&2; exit 1 ;; esac
 done
 
+# The external/internal split is load-bearing: the two Certificates and the two
+# IngressRoutes are told apart ONLY by domain, and the two TLS Secrets only by
+# the domain's first label. Collapse either and the pair collides — two
+# cert-manager Certificates contending for one Secret (duplicate Let's Encrypt
+# orders against the 5/week limit), or two IngressRoutes claiming one Host().
+if [ "$CLUSTER_EXTERNAL_DOMAIN" = "$CLUSTER_INTERNAL_DOMAIN" ]; then
+    echo "error: CLUSTER_EXTERNAL_DOMAIN and CLUSTER_INTERNAL_DOMAIN are both" \
+         "'$CLUSTER_EXTERNAL_DOMAIN'; the external and internal IngressRoutes" \
+         "would claim the same Host()" >&2
+    exit 1
+fi
+
 # TLS secret names use the domain's first label, not the whole domain.
 ext_label="${CLUSTER_EXTERNAL_DOMAIN%%.*}"
 int_label="${CLUSTER_INTERNAL_DOMAIN%%.*}"
+if [ "$ext_label" = "$int_label" ]; then
+    echo "error: CLUSTER_EXTERNAL_DOMAIN ($CLUSTER_EXTERNAL_DOMAIN) and" \
+         "CLUSTER_INTERNAL_DOMAIN ($CLUSTER_INTERNAL_DOMAIN) share the first" \
+         "label '$ext_label'; both TLS Secrets would be named <app>-$ext_label-tls." \
+         "Use domains whose first labels differ." >&2
+    exit 1
+fi
 
 # Ordered: the most specific literal first, so a longer host is consumed before
 # the bare domain inside it can match. The two sentinels park the repository

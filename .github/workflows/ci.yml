@@ -48,6 +48,8 @@ env:
   # Matches the weisssrv-lib shellcheck template's image tag.
   SHELLCHECK_VERSION: "0.10.0"
   SHELLCHECK_SHA256: "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87"
+  # Matches the weisssrv-lib python-lint template's ruff_version default.
+  RUFF_VERSION: "0.16.0"
   # Matches the gitleaks rev pinned in .pre-commit-config.yaml.
   GITLEAKS_VERSION: "8.30.1"
   GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
@@ -157,6 +159,25 @@ jobs:
             fi
           done
           exit "$rc"
+
+  # --- python-lint: ruff over the Python this repo ships --------------------
+  # The GitLab twin pins the same ruff version and the same targets, and both
+  # resolve the vendored ./ruff.toml by ruff's own discovery, so the two shapes
+  # report identical findings. Drop `tests` from the target list here too if you
+  # delete the template's gate — ruff errors on a path that does not exist.
+  python-lint:
+    name: python-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          # No job here pushes; do not persist the token.
+          persist-credentials: false
+      - name: Lint scripts/ and tests/
+        run: |
+          set -euo pipefail
+          pip install --quiet "ruff==${RUFF_VERSION}"
+          ruff check --no-cache --output-format concise scripts tests
 
   # --- docs-link-check: relative Markdown cross-links resolve ---------------
   docs-link-check:

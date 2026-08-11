@@ -125,8 +125,10 @@ your service's real build**. Three ways an image gets built (full detail in
   `$CI_REGISTRY_IMAGE:<short-sha>` (+ `:latest` on main). It runs on a
   **privileged runner** (Docker-in-Docker), tagged `infrastructure` — retag it
   to your own privileged runner if you have one; see [CI runner](#ci-runner-shape-gitlab).
-  Shape `github`: `.github/workflows/build-image.yml` does the same to
-  `ghcr.io/<owner>/<repo>`, building on pull requests and pushing on merge
+  Shape `github`: `.github/workflows/build-image.yml` pushes to
+  `ghcr.io/<owner>/<repo>` on **merge only** — it holds `packages: write`, and a
+  `pull_request` run would execute the PR's own copy of it. The pull-request
+  Dockerfile gate is `ci.yml`'s `docker-build` job, which builds without pushing
   ([`docs/CI-SHAPES.md`](docs/CI-SHAPES.md)). Shape `none` builds nothing.
 - **Locally** — `task build`, then push to
   `registry.git.ericsweiss.com/<group>/<slug>:<tag>` (or your own registry).
@@ -138,13 +140,13 @@ your service's real build**. Three ways an image gets built (full detail in
 ### 4. Ship
 
 ```bash
-task lint            # the same four gates the CI lint stage runs
+task lint            # the same five gates the CI lint stage runs
 git switch -c my-change && git commit -am "feat: ..." && git push -u origin my-change
 ```
 
 Open the MR (or PR). On merge, Flux reconciles — assuming the operator has wired
 your repo once (below). `task lint` covers CI's whole lint stage (yamllint,
-kustomize + kubeconform, shellcheck, Markdown links); secret detection is
+kustomize + kubeconform, shellcheck, ruff, Markdown links); secret detection is
 pipeline-only, and the pre-commit hooks cover it locally. In shape `none` there
 is no pipeline at all, so those two together are the whole gate.
 

@@ -27,11 +27,12 @@ tasks:
     silent: true
 
   lint:
-    desc: Run every local check — the same four gates the CI lint stage runs.
+    desc: Run every local check — the same five gates the CI lint stage runs.
     cmds:
       - task: yaml-lint
       - task: flux-lint
       - task: shellcheck
+      - task: python-lint
       - task: doc-links
 
   yaml-lint:
@@ -41,6 +42,11 @@ tasks:
 
   flux-lint:
     desc: kustomize build + kubeconform, for the live tree and the opt-in add-ons.
+    # pipefail: without it only kubeconform's status counts, and a FAILED
+    # `kustomize build` hands it empty stdin — which it accepts, exiting 0. This
+    # task is the whole lint gate in CI shape `none`, so a broken kustomization
+    # would go green. (CI's own runs are already `set -eo pipefail`.)
+    set: [pipefail]
     cmds:
       - for: ["kubernetes/flux", "kubernetes/flux/optional"]
         cmd: >-
@@ -55,6 +61,13 @@ tasks:
     desc: Lint scripts/*.sh with the same severity/exclusions as CI.
     cmds:
       - shellcheck --severity=warning --exclude=SC1091,SC2034 scripts/*.sh
+
+  python-lint:
+    desc: Lint the repo's Python with ruff, using the vendored ./ruff.toml.
+    # Same targets as the CI job; drop `tests` here too if you delete the
+    # template's gate. ruff resolves ./ruff.toml itself, so no --config.
+    cmds:
+      - ruff check --no-cache --output-format concise scripts tests
 
   doc-links:
     desc: Resolve every relative Markdown cross-link (vendored, stdlib-only).

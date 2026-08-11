@@ -118,6 +118,26 @@ include:
       changes:
         - "scripts/**/*"
 
+  # -- python-lint: ruff over the Python this repo ships ----------------------
+  # `scripts/` is the vendored library helpers, `tests/` the template's own
+  # gate. No `config:` input — ruff discovers the vendored ./ruff.toml, which is
+  # the same file `task python-lint` and the `github` shape's step resolve, so
+  # all three report identical findings.
+  #
+  # Deleting tests/ (docs/CONSUMING.md § Removing the template's gate) means
+  # dropping `tests` from `targets` here too: ruff errors on a path that does
+  # not exist. Add your own package to `targets` when you add one.
+  - project: eric/weisssrv-lib
+    ref: v0.6.0
+    file: /ci/lint/python-lint.yml
+    inputs:
+      tags: []
+      targets: "scripts tests"
+      changes:
+        - "**/*.py"
+        - "ruff.toml"
+        - ".gitlab-ci.yml"
+
   # -- docs-link-check: relative Markdown cross-links resolve -----------------
   # Runs the vendored, stdlib-only scripts/check-doc-links.py, which scans every
   # git-tracked *.md in the repo. The FULL python image, not the library's

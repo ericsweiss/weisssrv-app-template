@@ -210,9 +210,17 @@ stdlib-only tools — the library's job templates run them from *these* paths, s
 the copy in this repo is the one that executes. Re-vendor all three (copy from
 the library tag you are moving to) in the same MR that bumps the `ref:`.
 
-Only one of them is checked: the library's own contract tests fail if a ref moves
-without `scripts/semantic-release.py` moving with it. The other two drift
-silently, which is why re-vendoring is part of the bump rather than a follow-up.
+`ruff.toml` at the repo root is vendored the same way (from the library's
+`lint/ruff.toml`), so `python-lint` reports the same findings here as it does in
+the library — re-copy it on a bump too.
+
+All three scripts are checked while `tests/` is still here:
+`tests/test_vendored_scripts.py` byte-compares every non-local file in
+`scripts/` against the library checkout at the pinned ref, and `python-tests`
+sets `WEISSSRV_REQUIRE_CLI=1` so a missing checkout fails the job instead of
+skipping green. Delete `tests/` (below) and that gate goes with it — from then
+on re-vendoring is unenforced, which is why it belongs in the bump MR rather
+than a follow-up.
 
 ### Removing the template's gate
 
@@ -225,15 +233,19 @@ generated project the suite skips itself, and you are meant to delete it:
 rm -rf tests/
 ```
 
-Deleting `tests/` alone leaves a job that fails — `pytest` exits 4 on a missing
-directory. Remove **all three** pieces together:
+Deleting `tests/` alone leaves two jobs that fail — `pytest` exits 4 on a
+missing directory, and `ruff` errors on a target path that does not exist.
+Remove **all four** pieces together:
 
 1. `rm -rf tests/`
 2. the `/ci/test/python-tests.yml` entry in the `include:` block
 3. the `python-tests:` variables override near the bottom of `.gitlab-ci.yml`
+4. `tests` from the `python-lint` include's `targets:` — and from the same list
+   in `Taskfile.yml`'s `python-lint` task, plus `.github/workflows/ci.yml`'s
+   `python-lint` step in shape `github`
 
 Keeping `tests/` instead is fine; the suite is a no-op once renamed. Shape
-`github` never ported this job, so there is nothing to remove there.
+`github` never ported `python-tests`, so only step 4 applies there.
 
 ### Cluster identity
 

@@ -44,12 +44,19 @@ rewrites the two repository URLs (`…/eric/weisssrv-lib`, `…/eric/weisssrv`) 
 those name repositories, not your cluster. The defaults *are* weisssrv's values,
 so running it unedited changes nothing, and it is idempotent.
 
-Three things it does **not** cover, because they are choices rather than
-substitutions: `kubernetes/flux/networkpolicy.yaml` (the platform namespace
-names `traefik`/`observability`, the excluded private CIDRs, and the LAN host
-IPs in its two commented opt-in egress rules), the ClusterIssuer name
-(`letsencrypt-prod`) in `certificate.yaml`, and the weisssrv runbook URLs in
-`prometheusrule.yaml`. Check those by hand.
+What it does **not** cover, because these are choices rather than
+substitutions — check each by hand:
+
+- `kubernetes/flux/networkpolicy.yaml`: the platform namespace names
+  `traefik`/`observability`, the excluded private CIDRs, and the LAN host IPs in
+  its two commented opt-in egress rules.
+- The ClusterIssuer name `letsencrypt-prod`, in **both** `certificate.yaml` and
+  `optional/certificate-internal.yaml`.
+- The Traefik middleware references — `hsts-header` in `ingressroute.yaml`, and
+  `lan-tailscale-only` + `hsts-header` in `optional/ingressroute-internal.yaml`,
+  all in `namespace: traefik`. A route naming a middleware the target cluster
+  does not define is rejected, so the hostname 404s.
+- The weisssrv runbook URLs in `prometheusrule.yaml`.
 
 The library's account of which *mechanisms* are pluggable (secrets backend,
 storage, forge) and which are backend-by-design is
