@@ -14,7 +14,9 @@
 # The shipped defaults ARE weisssrv's values, so a run with an unedited
 # identity file changes nothing. Run it once after scripts/rename.sh; it is
 # idempotent, and re-running after a change is a no-op because the literals it
-# matches are gone.
+# matches are gone. An identity whose OWN values contain one of those literals
+# would break that promise on the second run, so it is refused up front (see the
+# idempotence guard below) rather than written and discovered later.
 #
 # Two links are deliberately NOT rewritten: the weisssrv-lib project URL and the
 # weisssrv runbook URL. Both name repositories, not this cluster.
@@ -105,9 +107,54 @@ rules=(
 )
 
 script=""
+park_rules=()
+restore_script=""
 for rule in "${rules[@]}"; do
     script+="${rule}
 "
+    case "$rule" in
+        "s|@@"*) restore_script+="${rule}
+" ;;
+        *) park_rules+=("$rule") ;;
+    esac
+done
+
+# Sentinels make ONE pass order-independent. They do not make a SECOND pass a
+# no-op: the second run sees the values this run wrote, and rewrites any of them
+# that still contains a literal the park pass consumes. With
+# CLUSTER_EXTERNAL_DOMAIN=esweiss.io the external Secret becomes
+# `-esweiss-tls` — which is exactly the literal the INTERNAL label rule parks —
+# so a second run renames it to `-<internal label>-tls` and the two
+# Certificates collide on one Secret. That is the failure the first-label guard
+# above rejects, arriving one run later.
+#
+# So refuse the identity instead of silently writing a tree that only survives
+# being retargeted once. The test IS the property: take what each rule writes
+# (its parked replacement with the restore pass applied) and feed it back
+# through the whole script. Anything that comes out different is a value the
+# next run would rewrite. Running the real script means rule ORDER and the
+# sentinels are honoured, so the deliberately-preserved forge URLs — which do
+# contain `ericsweiss.com` but are parked by an earlier, longer rule — are not
+# false positives. Everything is derived from `rules`, so a rule added later is
+# covered with no second list to keep in step.
+for rule in "${park_rules[@]}"; do
+    body="${rule#s|}"
+    body="${body%|g}"
+    literal="${body%%|*}"
+    written="$(printf '%s' "${body#*|}" | sed -e "$restore_script")"
+    rewritten="$(printf '%s' "$written" | sed -e "$script")"
+    if [ "$rewritten" = "$written" ]; then
+        continue
+    fi
+    echo "error: this identity is not safe to re-apply." \
+         "'${literal}' becomes '${written}', which this same script rewrites" \
+         "again — to '${rewritten}'. The second run would not be a no-op, and" \
+         "for the TLS-secret rules it collapses the external and internal" \
+         "Secrets onto one name (two Certificates contending for one Secret)." \
+         "Nothing has been written. Pick values that do not contain the" \
+         "literals this script matches — most often a domain whose first label" \
+         "is one of the scaffold's own." >&2
+    exit 1
 done
 
 changed=0

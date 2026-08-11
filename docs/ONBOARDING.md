@@ -44,6 +44,13 @@ rewrites the two repository URLs (`…/eric/weisssrv-lib`, `…/eric/weisssrv`) 
 those name repositories, not your cluster. The defaults *are* weisssrv's values,
 so running it unedited changes nothing, and it is idempotent.
 
+That last promise is enforced, not assumed: an identity whose own values contain
+one of the literals the applier matches — most often a domain whose first label
+is `esweiss` or `ericsweiss` — would be rewritten *again* on a second run, and
+for the TLS-secret names that collapses the external and internal Secrets onto
+one name. Such an identity is **refused before anything is written**, naming the
+colliding literal. Pick values that do not contain the scaffold's own.
+
 What it does **not** cover, because these are choices rather than
 substitutions — check each by hand:
 
