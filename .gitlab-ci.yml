@@ -9,7 +9,7 @@
 # The generic lint / validate / security jobs are NOT defined here — they are
 # pulled from the shared library `eric/weisssrv-lib` at a pinned release tag, so
 # a tooling/version change is made once in the library and every consumer picks
-# it up by bumping the ref. See docs/CONSUMING.md for the full story and
+# it up by bumping the ref. See docs/CONSUMING.md, and
 # https://git.ericsweiss.com/eric/weisssrv-lib/-/blob/main/docs/INCLUDE-CONTRACT.md
 # for each template's inputs.
 #
@@ -20,20 +20,18 @@
 # runner for Docker-in-Docker and is therefore tagged `infrastructure`. Deploys
 # happen through Flux (git is the source of truth), never a CI `kubectl apply`.
 #
-# Bumping the library: change every `ref:` below to the new tag in one MR (there
-# is no hosted dependency bot — bumps are deliberate). See docs/CONSUMING.md.
-# Every include pins the SAME tag. They diverged once (generic jobs on v0.1.1,
-# release on v0.2.0) and the wrappers below drifted with them, so `rename.sh` and
-# `select-ci.sh` could fetch two different builds of the same CLI. Keep them in
-# step: bump all of them, or none.
+# Bumping the library: every `ref:` below, `variables.WEISSSRV_LIB_REF`, the
+# `python-tests` job's LIB_REF and both scripts/ wrappers move together in one
+# MR, and the vendored scripts (scripts/check-lib-pins.py,
+# scripts/check-doc-links.py, scripts/semantic-release.py) are re-copied from
+# the new tag in the same MR. `lib-pin-check` and tests/ enforce both halves.
 #
 # `release` is LAST on purpose: the semantic-release job sets no `needs:`, so
 # stage ordering is what gates the tag on every job above it having passed. See
 # docs/VERSIONING.md.
 stages:
-  - build       # only the OPTIONAL image build lands here (see the include below)
+  - build       # only the image build lands here (see the include below)
   - lint
-  - validate    # only the OPTIONAL terraform validate lands here
   - test        # the TEMPLATE's own gate (tests/) — see python-tests below
   - security
   - ai-review
@@ -45,19 +43,17 @@ workflow:
     - if: '$CI_COMMIT_BRANCH == "main"'
     # No `$CI_COMMIT_TAG` clause. NO job below runs on a tag pipeline (every
     # rule here is merge-request / main / web), so the clause could only ever
-    # ask GitLab for a pipeline with zero jobs — and now that the release stage
-    # creates a tag on every releasable merge, it would do so routinely. Add it
-    # back together with the tag-triggered job that needs it.
+    # ask GitLab for a pipeline with zero jobs. Add it back together with the
+    # tag-triggered job that needs it.
 
 variables:
   # Single source for the library pin. `include:` CANNOT read this — GitLab
   # resolves includes at pipeline-CREATION time, before job variables exist — so
   # every entry below repeats the tag as a literal, and the wrappers carry their
   # own default too. scripts/check-lib-pins.py (vendored from the library) fails
-  # the pipeline when an include drifts from this value or pins a branch, and
-  # tests/ ties the wrappers and LIB_REF to it as well. Bump here, run
-  # `scripts/check-lib-pins.py --fix`, and update the two wrappers.
-  WEISSSRV_LIB_REF: "v0.5.2"
+  # the pipeline when an include drifts from this value or pins a branch; the
+  # `lib-pin-check` job runs it whether or not tests/ survives.
+  WEISSSRV_LIB_REF: "v0.6.0"
 
 # ============================================================================
 # Shared library templates (include:project + inputs). Every job is the tenant
@@ -66,7 +62,7 @@ variables:
 include:
   # -- yaml-lint: lint the whole tree against the repo-local .yamllint --------
   - project: eric/weisssrv-lib
-    ref: v0.5.2
+    ref: v0.6.0
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
@@ -80,13 +76,13 @@ include:
   # -- flux-lint: kustomize build + kubeconform (SIMPLE mode) ----------------
   # substitute: false — a tenant has no cluster-versions ConfigMap and pins
   # literal image tags, so there is nothing to envsubst. The TOOL versions
-  # (kubeconform / kustomize + their sha256s) are OWNED by the library's
-  # defaults on purpose — do not re-pin them here; bump the library ref to move
-  # them (this removes the drift the template used to carry). k8s_version IS
-  # pinned here: it is the cluster's k8s minor kubeconform validates against, a
-  # per-consumer fact (k3s v1.36.x today), not a library-owned tool version.
+  # (kubeconform / kustomize + their sha256s) are library-owned; bump the
+  # library ref to move them. k8s_version IS pinned here: it is the cluster's
+  # k8s minor kubeconform validates against, a per-consumer fact. It appears in
+  # three places (here, .github/workflows/ci.yml, Taskfile.yml) and tests/
+  # asserts the three agree.
   - project: eric/weisssrv-lib
-    ref: v0.5.2
+    ref: v0.6.0
     file: /ci/validate/flux-lint.yml
     inputs:
       tags: []
@@ -95,9 +91,25 @@ include:
       changes:
         - "kubernetes/**/*"
 
-  # -- shellcheck: lint the scripts/ helpers (the rename wrapper) -------------
+  # -- flux-lint (optional add-ons): the same gate over kubernetes/flux/optional
+  # Those manifests are real and schema-validated but deliberately NOT in
+  # kubernetes/flux/kustomization.yaml — enabling one is uncommenting its line
+  # there. This job is what keeps them from rotting while switched off.
   - project: eric/weisssrv-lib
-    ref: v0.5.2
+    ref: v0.6.0
+    file: /ci/validate/flux-lint.yml
+    inputs:
+      job_name: flux-lint-optional
+      tags: []
+      substitute: false
+      k8s_version: "1.36.0"
+      kustomize_path: "kubernetes/flux/optional"
+      changes:
+        - "kubernetes/**/*"
+
+  # -- shellcheck: lint the scripts/ helpers ---------------------------------
+  - project: eric/weisssrv-lib
+    ref: v0.6.0
     file: /ci/lint/shellcheck.yml
     inputs:
       tags: []
@@ -106,37 +118,61 @@ include:
       changes:
         - "scripts/**/*"
 
-  # -- docs-link-check: relative Markdown cross-links resolve -----------------
-  # Runs the vendored, stdlib-only scripts/check-doc-links.py (copied from the
-  # library). Scans docs/ + README.md + CLAUDE.md.
+  # -- python-lint: ruff over the Python this repo ships ----------------------
+  # `scripts/` is the vendored library helpers, `tests/` the template's own
+  # gate. No `config:` input — ruff discovers the vendored ./ruff.toml, which is
+  # the same file `task python-lint` and the `github` shape's step resolve, so
+  # all three report identical findings.
+  #
+  # Deleting tests/ (docs/CONSUMING.md § Removing the template's gate) means
+  # dropping `tests` from `targets` here too: ruff errors on a path that does
+  # not exist. Add your own package to `targets` when you add one.
   - project: eric/weisssrv-lib
-    ref: v0.5.2
+    ref: v0.6.0
+    file: /ci/lint/python-lint.yml
+    inputs:
+      tags: []
+      targets: "scripts tests"
+      changes:
+        - "**/*.py"
+        - "ruff.toml"
+        - ".gitlab-ci.yml"
+
+  # -- docs-link-check: relative Markdown cross-links resolve -----------------
+  # Runs the vendored, stdlib-only scripts/check-doc-links.py, which scans every
+  # git-tracked *.md in the repo. The FULL python image, not the library's
+  # -slim default: the tracked scan shells out to `git ls-files`, and without
+  # git the checker falls back to docs/ + README.md + CLAUDE.md — silently, and
+  # green, so AGENTS.md and .claude/skills/ would never be checked.
+  - project: eric/weisssrv-lib
+    ref: v0.6.0
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
+      image: python:3.13
       changes:
-        - "docs/**/*"
-        - "README.md"
-        - "CLAUDE.md"
-        - "AGENTS.md"
+        - "**/*.md"
         - "scripts/check-doc-links.py"
 
   # -- python-tests: the TEMPLATE's own gate (tests/) -------------------------
   # Renders this template into a scratch directory and runs the two setup
   # commands a new project runs — `scripts/rename.sh` then
   # `scripts/select-ci.sh` — asserting that no placeholder survives, that each
-  # CI shape keeps exactly what docs/CI-SHAPES.md says it keeps, and that
-  # kubernetes/ is byte-identical across the three. Without it a regression in
-  # either wrapper ships silently into every project created from here.
+  # CI shape keeps exactly what docs/CI-SHAPES.md says it keeps, that
+  # kubernetes/ is byte-identical across the three, and that the vendored
+  # library scripts still match the library at the pinned ref.
   #
   # This gate is TEMPLATE-ONLY: in a generated project the placeholders are
-  # already substituted and the suite skips itself (delete tests/ to be rid of
-  # the skip). It is not ported to the `github` shape — see docs/CI-SHAPES.md.
+  # already substituted and the suite skips itself. To be rid of the skip,
+  # delete tests/ AND this include AND the `python-tests:` override below.
+  # It is not ported to the `github` shape — see docs/CI-SHAPES.md.
   #
-  # `changes: ["**/*"]` because the suite reads the whole tree (token scan, YAML
-  # parse, per-shape diff).
+  # The library is internal-visibility, so the clone uses $CI_JOB_TOKEN: the
+  # operator must add this project to weisssrv-lib's CI/CD job-token allowlist
+  # (docs/ONBOARDING.md). `changes: ["**/*"]` because the suite reads the whole
+  # tree (token scan, YAML parse, per-shape diff, vendored-script comparison).
   - project: eric/weisssrv-lib
-    ref: v0.5.2
+    ref: v0.6.0
     file: /ci/test/python-tests.yml
     inputs:
       tags: []
@@ -146,8 +182,6 @@ include:
       image: python:3.13
       apt_packages: ""
       test_dir: "tests"
-      # Clone the library with the job token rather than fetching the CLI from
-      # an anonymous git+https URL — the library is internal-visibility.
       setup_command: >-
         git clone --depth 1 --branch "$LIB_REF"
         "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${LIB_PROJECT}.git"
@@ -157,14 +191,18 @@ include:
         - "**/*"
 
   # -- secret-detection: GitLab Secret Detection (gitleaks) ------------------
-  # Defaults reproduce this template's previous job: the modern-CPU node
-  # selector the shared runner allowlists, and allow_failure: true (findings
-  # WARN). Tuned by .gitleaks.toml via .gitlab/secret-detection-ruleset.toml.
-  # To make a secret finding HARD-BLOCK the pipeline, add
-  # `inputs: { allow_failure: false }`.
+  # Findings FAIL the job at the pinned ref (the library's allow_failure default
+  # is false), which is what makes this a merge block. Pass
+  # `inputs: { allow_failure: true }` only for deliberate advisory mode.
+  # Tuned by .gitleaks.toml via .gitlab/secret-detection-ruleset.toml.
+  #
+  # `tags: []` moves the job off the privileged runner the nested GitLab-managed
+  # template would otherwise land on, onto the shared tag-less tenant runner.
   - project: eric/weisssrv-lib
-    ref: v0.5.2
+    ref: v0.6.0
     file: /ci/security/secret-detection.yml
+    inputs:
+      tags: []
 
   # -- build-image: build THIS service's container image (the main use case) --
   # ACTIVE by default — a template-derived project builds its service image out
@@ -179,73 +217,50 @@ include:
   # `weisssrv-new-project prune image-build` to drop the Dockerfile. See
   # docs/CONSUMING.md ("Building the service image").
   - project: eric/weisssrv-lib
-    ref: v0.5.2
+    ref: v0.6.0
     file: /ci/build/docker-build.yml
     inputs:
       tags: ["infrastructure"]       # a PRIVILEGED runner (retag to yours)
       dockerfile: "Dockerfile"
-      # This instance's runners validate the node-selector override against
-      # ^esweiss\.com/cpu=(modern|legacy)$ — the library's default ("") is
-      # rejected, so pin the build to modern-CPU nodes. Drop/adjust if your
-      # runner has no node_selector_overwrite_allowed restriction.
+      # This instance's runners validate the node-selector override against a
+      # `<node-label-domain>/cpu=(modern|legacy)` allowlist — the library's
+      # default ("") is rejected, so pin the build to modern-CPU nodes.
+      # Drop/adjust if your runner has no node_selector_overwrite_allowed rule.
       cpu_selector: "esweiss.com/cpu=modern"
-      # image_name: ""               # default: push to the $CI_REGISTRY_IMAGE base
-      # context: "."
-      # publish_on_main: true        # push :latest on main (always pushes :<sha>)
 
   # -- semantic-release: tag + GitLab Release from the conventional commits ---
   # Merging to main reads the conventional commits since the last tag, decides
   # the bump, and creates the tag AND the Release with generated notes in one
   # Releases-API call ($CI_JOB_TOKEN is enough). Nothing releasable means no tag
   # and a green pipeline. Runs the vendored, stdlib-only
-  # scripts/semantic-release.py — re-copy it from the library when you bump the
-  # ref, exactly like scripts/check-doc-links.py. See docs/VERSIONING.md.
-  #
-  # PINNED AT v0.2.0, ahead of every include above. This is not a partial
-  # library bump: `ci/release/semantic-release.yml` and its script do not exist
-  # at v0.1.1, so v0.2.0 is the earliest ref that can serve this include at all.
-  # Move the rest to v0.2.0 in its own MR — that bump changes tool pins and the
-  # secret-detection default, and wants its own verification.
+  # scripts/semantic-release.py. See docs/VERSIONING.md.
   #
   # major_on_zero stays false: while the tag is 0.x a `feat!:` bumps MINOR, and
   # calling this 1.0.0 is a deliberate act (flip the input for that release).
   - project: eric/weisssrv-lib
-    ref: v0.5.2
+    ref: v0.6.0
     file: /ci/release/semantic-release.yml
     inputs:
       tags: []
 
-  # ==========================================================================
-  # OPTIONAL — terraform fmt + validate, if this repo grows a terraform/ dir.
-  # Inert until terraform/ exists (the changes: rules never match otherwise).
-  # Runs on the shared runner (no LAN), so `plan`/`apply` (not shipped here)
-  # would need a remote/HTTP state backend and internet-reachable providers.
-  # --------------------------------------------------------------------------
-  # - project: eric/weisssrv-lib
-  #   ref: v0.5.2
-  #   file: /ci/validate/terraform.yml
-  #   inputs:
-  #     tags: []
-  #     changes: ["terraform/**/*"]
-
   # -- pr-agent AI review: optional, never blocks, BYO keys -------------------
-  # tags: [] for the tenant's tag-less shared runner. The two *_key inputs take
-  # CI variable REFERENCES, not values, and `gate` is the expression that must be
-  # non-empty for the job to exist at all — absent the variables there is no job.
+  # The job is CREATED only when both masked CI/CD variables are set (Settings
+  # -> CI/CD -> Variables), so a fork MR has no AI review by design. There is no
+  # in-job 1Password path: the shared runner is non-root and cannot install `op`
+  # at job time, so 1Password users read the values into the CI variables when
+  # they set them. See docs/CONSUMING.md ("Bring your own keys").
   - project: eric/weisssrv-lib
-    ref: v0.5.2
+    ref: v0.6.0
     file: /ci/review/pr-agent.yml
     inputs:
       tags: []
       gitlab_url: "https://git.ericsweiss.com"
-      # openai_key/gitlab_token are NOT overridden: the library already defaults
-      # them to $OPENAI__KEY and $GITLAB__PERSONAL_ACCESS_TOKEN, which is what a
-      # project actually sets. Overriding them with different names is how the
-      # first attempt shipped a reviewer that never ran — the gate referenced
-      # variables nobody had created, so the job was never CREATED and the
-      # pipeline went green with no review attached and nothing to notice.
-      # gate requires BOTH: with only one set, the job would be created and then
-      # fail on the missing credential instead of quietly not existing.
+      # Do NOT override openai_key/gitlab_token: the library already defaults
+      # them to $OPENAI__KEY / $GITLAB__PERSONAL_ACCESS_TOKEN. A renamed
+      # variable means the job is never created and the pipeline goes green with
+      # no review. The gate requires BOTH — with only one set the job would be
+      # created and fail on the missing credential instead of silently not
+      # existing.
       gate: "$OPENAI__KEY && $GITLAB__PERSONAL_ACCESS_TOKEN"
       needs:
         - job: yaml-lint
@@ -257,60 +272,36 @@ include:
         - job: secret_detection
           optional: true
 
-# The library's secret-detection template pulls in GitLab's managed
-# Secret-Detection job through a nested include, which resolves onto the
-# `infrastructure` (privileged) runner and exposes no `tags` input. A tenant runs
-# secret scanning on the shared tag-less runner like every other lint job, so pin
-# it back here. (Only the `tags` key is overridden; the library still owns the
-# job's rules, variables, and allow_failure.)
-secret_detection:
+# The library-pin gate, defined here rather than in tests/ so it survives into a
+# generated project that deletes the template's own suite. It reads
+# variables.WEISSSRV_LIB_REF and requires every include above to pin exactly it,
+# as a release tag.
+lib-pin-check:
+  stage: lint
+  image: python:3.13-slim
   tags: []
+  needs: []
+  variables:
+    PYYAML_VERSION: "6.0.2"
+  script:
+    - pip install --quiet --no-cache-dir "pyyaml==$PYYAML_VERSION"
+    - python3 scripts/check-lib-pins.py
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - ".gitlab-ci.yml"
+        - "scripts/check-lib-pins.py"
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
 
 # The template's gate exercises the same `weisssrv-new-project` CLI a project
 # gets, so the ref cloned here is the one scripts/select-ci.sh pins — the suite
 # asserts the two are equal. WEISSSRV_REQUIRE_CLI makes an unresolvable CLI a
 # job FAILURE: locally the suite skips when it is absent, and a skip that reads
 # as green in CI would be a gate that cannot fail.
-#
-# `prune ci:<shape>` first shipped in the library CLI at v0.3.1, so LIB_REF must
-# stay at or above that tag: below it, this job's clone and select-ci.sh's own
-# pipx path both fail on a subcommand the CLI does not have.
 python-tests:
   variables:
     LIB_PROJECT: "eric/weisssrv-lib"
-    LIB_REF: "v0.5.2"
+    LIB_REF: "v0.6.0"
     WEISSSRV_REQUIRE_CLI: "1"
-
-# ============================================================================
-# AI REVIEW — now the library's shared template (see the include: block above),
-# not a job defined here. It used to be inline because the library shipped no
-# pr-agent template; that stopped being true at v0.2.0, and the divergence had
-# already cost something real: the inline copy pinned codiumai/pr-agent:0.34, a
-# namespace FROZEN when the project moved to the community org, and ran only
-# `review` — no `improve` pass, so no code suggestions at all.
-#
-# BYO-keys is unchanged: the job is CREATED only when both masked CI/CD
-# variables are set (Settings -> CI/CD -> Variables), so a fork MR simply has no
-# AI review, which is expected rather than a failure. There is still no in-job
-# 1Password path — the shared runner is non-root and cannot install `op` at job
-# time, so 1Password users read those values into the CI variables when they SET
-# them. See docs/CONSUMING.md ("Bring your own keys").
-# ============================================================================
-
-# ============================================================================
-# OPTIONAL manual reconcile poke. Flux owns deploys: on merge to main it pulls
-# this repo and reconciles automatically (see the operator-side GitRepository).
-# This job only fast-forwards that by POSTing to a Flux webhook receiver, and
-# only if you set FLUX_WEBHOOK_URL (the receiver must be PUBLICLY reachable —
-# the shared runner has no LAN access). Default off.
-# ----------------------------------------------------------------------------
-# trigger-reconcile:
-#   stage: ai-review
-#   image: curlimages/curl:8.11.1
-#   needs: []
-#   script:
-#     - curl -fsS -X POST "$FLUX_WEBHOOK_URL"
-#   rules:
-#     - if: '$CI_COMMIT_BRANCH == "main" && $FLUX_WEBHOOK_URL'
-#       when: manual
-#       allow_failure: true
+    WEISSSRV_LIB_PATH: "$CI_PROJECT_DIR/.tmp/lib"

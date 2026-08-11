@@ -1,52 +1,40 @@
 ---
-# REFERENCE COPY — this file is not a GitLab CI template and is not `include:`d.
+# Canonical copy: weisssrv-lib `ci/release/github-release-workflow.example.yml`.
+# Consumers vendor it byte-identically as `.github/workflows/release.yml` — edit
+# it upstream, then re-vendor; a library test compares the two copies. Vendoring
+# rather than `uses:` is forced: GitHub has no equivalent of GitLab's
+# `include: project:` for a private library.
 #
-# It is the GitHub Actions counterpart of ci/release/semantic-release.yml, for a
-# repo on github.com (the app template's CI shape B). Vendor it into the
-# consumer as `.github/workflows/release.yml` alongside the vendored
-# `scripts/semantic-release.py`, which grew a `--platform github` backend for
-# exactly this: ONE script, byte-identical in every repo that copies it, two
-# forges.
-#
-# It stays here rather than in the consumer because the library has no reusable
-# Actions workflows to `uses:` — GitHub has no equivalent of `include: project:`
-# for a private GitLab library — so a GitHub consumer vendors, and re-vendors
-# deliberately when this file changes.
+# It is the GitHub Actions counterpart of the library's
+# `ci/release/semantic-release.yml` and runs `scripts/semantic-release.py` with
+# `--platform github` — the same script that job runs, vendored into every
+# consumer. The job-for-job parity table is in docs/CI-SHAPES.md (app template).
 #
 # What it reproduces from the GitLab job:
 #   - runs only on the release branch, never on a schedule;
-#   - runs only AFTER the gates pass (see "ordering" below — GitLab gets this
-#     from `stage: release` being last; Actions needs `workflow_run`);
+#   - runs only AFTER the gates pass (GitLab gets this from `stage: release`
+#     being last; Actions needs `workflow_run` — see ordering below);
 #   - serialises rapid merges (`concurrency`, GitLab's `resource_group`);
 #   - full history + tags, so `<last tag>..HEAD` resolves (GitLab's GIT_DEPTH 0);
 #   - publishes release.json unconditionally (GitLab's `artifacts: when:always`).
 #
-# Ordering — the one real difference. A second workflow on `push: main` would
-# run in PARALLEL with ci.yml and could tag a commit whose gates then fail, so
-# this triggers on ci.yml COMPLETING successfully.
-#
-# That makes `ci` the aggregate gate, and it must actually BE one: this waits for
-# `ci` and for nothing else, so any OTHER workflow you require on main — the app
-# template ships `build-image.yml` separately — can still be running, or already
-# failed, when the tag is cut. If a required workflow must gate the release, make
-# it a job inside ci.yml rather than a sibling workflow. Polling the Actions API
-# for a sibling run was considered and rejected: docs/CI-SHAPES.md documents
-# deleting build-image.yml for a project with no image, and a poller cannot tell
-# "not started yet" from "will never exist", so it would hang and then fail the
-# release for exactly those repos. The cost of `workflow_run` is
-# that its own `github.sha` is the default branch tip at trigger time, NOT the
-# commit that was tested — hence `head_sha` in both the checkout and `--ref`.
-# If you would rather not reason about that, delete this file and append the
-# same step to ci.yml as a job with `needs: [yaml-lint, flux-lint, shellcheck,
-# docs-link-check, secret-detection]` and
-# `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`.
+# Ordering: this triggers on `ci` COMPLETING successfully rather than on
+# `push: main`, so a tag is never cut for a commit whose gates then fail. That
+# makes `ci` the aggregate gate and nothing else — a sibling workflow
+# (build-image.yml) can still be running or already red when the tag is cut, so
+# put anything that must gate the release inside ci.yml as a job. `workflow_run`
+# reports `github.sha` as the default-branch tip at trigger time, not the commit
+# that was tested, which is why `head_sha` is used in both the checkout and
+# `--ref`. If you would rather not reason about that, delete this file and
+# append the same step to ci.yml as a job gated on the other jobs and on
+# `github.event_name == 'push' && github.ref == 'refs/heads/main'`.
 name: release
 
 # No workflow_dispatch. A dispatch runs the workflow definition FROM THE
-# SELECTED REF, so any `if:` guard here is guarded by a file the caller chose —
-# a branch that deletes the guard runs its own code with contents:write, past
-# branch protection. Pinning the dispatch to `github.ref == main` looked like a
-# fix and was not: main's copy of that condition never executes.
+# SELECTED REF, so any `if:` guard here is one the caller chose — a branch that
+# deletes the guard runs its own code with contents:write, past branch
+# protection. A `github.ref == main` guard does not help: a dispatch evaluates
+# the SELECTED ref's copy of the condition, never main's.
 #
 # Recovery the script's crash message asks for ("if <tag> is missing its
 # Release, re-run this job") is GitHub's "Re-run jobs" on the previous run,

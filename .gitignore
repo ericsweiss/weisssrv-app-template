@@ -1,7 +1,8 @@
-# Secrets / local env — never commit these
+# Secrets / local env — never commit these. `*.env` is deliberately NOT here:
+# scripts/cluster-identity.env is a committed, generated-but-tracked file, and
+# the family has other `*.env` fixtures.
 .env
 .env.*
-*.env
 .tmp/
 *.tfvars
 !example.tfvars
@@ -18,9 +19,10 @@ kubeconfig
 .terraform.lock.hcl
 *.tfplan
 
-# Build output
-dist/
-build/
+# Build output — anchored to the repo root so a `build/` inside the app source
+# tree is still tracked.
+/dist/
+/build/
 node_modules/
 target/
 
@@ -29,6 +31,11 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+.pytest_cache/
+.ruff_cache/
+
+# Agent tooling — keep the shared config, drop the per-machine overrides.
+.claude/settings.local.json
 
 # Editor / OS cruft
 .DS_Store

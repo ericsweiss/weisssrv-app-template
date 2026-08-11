@@ -22,8 +22,10 @@ set -euo pipefail
 
 # Pin the library version the CLI is fetched from (override with the env var to
 # track a newer tag). Keep this in step with the ref: in .gitlab-ci.yml.
-LIB_REF="${WEISSSRV_LIB_REF:-v0.5.2}"
-LIB_SPEC="git+https://git.ericsweiss.com/eric/weisssrv-lib.git@${LIB_REF}#subdirectory=cli"
+LIB_REF="${WEISSSRV_LIB_REF:-v0.6.0}"
+
+# shellcheck source=scripts/lib-cli.sh
+. "$(dirname "$0")/lib-cli.sh"
 
 usage() {
     cat >&2 <<'EOF'
@@ -45,15 +47,4 @@ case "$1" in
     *) usage ;;
 esac
 
-if command -v weisssrv-new-project >/dev/null 2>&1; then
-    exec weisssrv-new-project prune "ci:$1"
-elif command -v pipx >/dev/null 2>&1; then
-    exec pipx run --spec "$LIB_SPEC" weisssrv-new-project prune "ci:$1"
-else
-    echo "error: the weisssrv-new-project CLI is required but was not found." >&2
-    echo "Install it (from a weisssrv-lib checkout, or straight from git):" >&2
-    echo "  pipx install --spec '${LIB_SPEC}' weisssrv-new-project" >&2
-    echo "  # or, from a local library checkout: pip install ./cli" >&2
-    echo "then re-run:  weisssrv-new-project prune ci:$1" >&2
-    exit 1
-fi
+run_cli prune "ci:$1"

@@ -6,8 +6,8 @@
 # Conventions to keep in mind:
 #   * Stateful/DB workloads → set `updateMode: "Off"` (recommend-only; apply by
 #     hand) so the VPA never evicts a pod holding open storage.
-#   * If you enable hpa.yaml (HPA owns CPU), make this VPA memory-only by setting
-#     `controlledResources: [memory]` so the two don't fight over CPU.
+#   * If you enable optional/hpa.yaml (the HPA owns CPU), make this VPA
+#     memory-only with `controlledResources: [memory]`.
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
 metadata:

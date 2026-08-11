@@ -24,8 +24,9 @@ flowchart LR
 - **Internal** `*.esweiss.com` (opt-in): reached only on the LAN/tailnet via the
   `.101` VIP and the `lan-tailscale-only` middleware. The internal DNS name is
   **not** auto-provisioned — the operator adds an AdGuard rewrite. Activate the
-  manifests with `weisssrv-new-project wire internal-ingress` (see
-  [CONSUMING.md](CONSUMING.md)).
+  route by uncommenting `- optional/ingressroute-internal.yaml` and
+  `- optional/certificate-internal.yaml` in `kubernetes/flux/kustomization.yaml`
+  (see [CONSUMING.md](CONSUMING.md)).
 - **TLS**: a per-host `Certificate` (ClusterIssuer `letsencrypt-prod`, DNS-01
   over Cloudflare) issues a secret into your namespace; Traefik terminates TLS
   from that secret. Per-host, not wildcard, to stay under Let's Encrypt's
@@ -69,10 +70,10 @@ flowchart LR
 - **PDB** (`pdb.yaml`, always on) holds `minAvailable: 1`, so `kured`'s
   coordinated node-reboot drains can't evict both default replicas at once — a
   replica stays up across drains without opting into anything.
-- **HPA** is opt-in (`hpa.yaml`). Enabling it means dropping the static
-  `replicas` and making the VPA memory-only so the two never fight CPU (keep
-  `minReplicas >= 2` so the PDB stays satisfiable). `weisssrv-new-project wire
-  hpa` makes all three edits — see [CONSUMING.md](CONSUMING.md).
+- **HPA** is opt-in (`optional/hpa.yaml`). Enabling it means uncommenting its
+  line in `kubernetes/flux/kustomization.yaml`, dropping the static `replicas`,
+  and making the VPA memory-only so the two never fight CPU (`minReplicas: 2`
+  keeps the PDB satisfiable) — see [CONSUMING.md](CONSUMING.md).
 
 ## Observability
 

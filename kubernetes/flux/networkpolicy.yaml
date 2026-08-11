@@ -94,23 +94,13 @@ spec:
         - protocol: TCP
           port: 443
     # SMTP relay (submission) — uncomment if the app sends mail.
-    # - to:
-    #     - ipBlock:
-    #         cidr: 192.168.0.151/32
-    #   ports:
-    #     - protocol: TCP
-    #       port: 587
+    # - to: [{ipBlock: {cidr: 192.168.0.151/32}}]
+    #   ports: [{protocol: TCP, port: 587}]
     # kube-apiserver — uncomment only if the app talks to the Kubernetes API.
-    # kube-proxy DNATs the in-cluster VIP to the real server node IPs BEFORE
-    # NetworkPolicy is evaluated, so allowlist the node IPs on 6443 (a
-    # 10.43.0.1/32 rule never matches the post-DNAT packet).
+    # kube-proxy DNATs the in-cluster VIP before NetworkPolicy is evaluated, so
+    # the server node IPs are the allowlist (10.43.0.1/32 never matches).
     # - to:
-    #     - ipBlock:
-    #         cidr: 192.168.0.222/32
-    #     - ipBlock:
-    #         cidr: 192.168.0.223/32
-    #     - ipBlock:
-    #         cidr: 192.168.0.227/32
-    #   ports:
-    #     - protocol: TCP
-    #       port: 6443
+    #     - {ipBlock: {cidr: 192.168.0.222/32}}
+    #     - {ipBlock: {cidr: 192.168.0.223/32}}
+    #     - {ipBlock: {cidr: 192.168.0.227/32}}
+    #   ports: [{protocol: TCP, port: 6443}]

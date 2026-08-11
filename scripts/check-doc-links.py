@@ -1,31 +1,24 @@
 #!/usr/bin/env python3
-# VENDORED from eric/weisssrv-lib (scripts/check-doc-links.py). It is kept in
-# this repo (not an include) because the docs-link-check CI job runs it from
-# this path. Re-vendor it when you bump the library ref: copy the file from the
-# pinned library tag.
-"""Offline checker for relative Markdown cross-links in the repo's docs.
+"""Offline checker for relative Markdown cross-links.
 
-docs/ and the top-level READMEs are the declared source of truth (CLAUDE.md),
-and the tree carries dozens of internal `](docs/NN-*.md)` / `](../NN-*.md)`
-links plus the README docs-index table. Docs are renumbered/reorganized over
-time, so a renamed or deleted doc silently rots these links. This gate resolves
-every relative `.md` link against the filesystem and fails on a missing target.
+A renamed or deleted doc silently rots every `](docs/NN-*.md)` link pointing at
+it. This gate resolves every relative `.md` link against the filesystem and
+fails on a missing target.
 
-Scope (intentionally narrow to stay false-positive-free):
-- Only Markdown inline links `[text](target)` whose target is a *relative*
-  `.md` path (optionally with a `#anchor`) are checked. URLs (http/https/
-  mailto), in-page `#anchor` links, and links to non-`.md` targets (images,
-  directories, code) are ignored — the finding's scope is doc cross-links.
-- Targets are resolved relative to the containing file's directory.
-- Anchors are not validated (only that the target file exists).
+Scope: every *tracked* `*.md` in the repo (role/app/agent READMEs cross-link
+into docs/ too), falling back to docs/ + $CHECK_DOC_LINKS_EXTRA when the root
+is not a git checkout. Only inline `[text](target)` links to relative `.md`
+paths are checked — URLs, in-page anchors and non-`.md` targets are ignored,
+and anchors themselves are not validated.
 
-Run via `pytest scripts/` (test_check_doc_links.py) or directly:
-  scripts/check-doc-links.py            # scan the repo (docs/, README.md, CLAUDE.md)
-  scripts/check-doc-links.py <root>...  # scan an explicit repo root
+  scripts/check-doc-links.py            # scan every tracked *.md in the repo
+  scripts/check-doc-links.py <root>...  # scan explicit roots
 """
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -39,14 +32,44 @@ _LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 _SKIP_PREFIXES = ("http://", "https://", "mailto:", "//", "#", "tel:")
 
 
+def _tracked_markdown(root: Path) -> list[Path]:
+    """Every git-tracked *.md under `root`; empty when git cannot answer.
+
+    Tracked-only is deliberate: untracked scratch Markdown is not ours to gate,
+    and including it would make the check fail differently on every machine.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z", "--", "*.md"],
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        # In a real checkout a failed enumeration must not silently shrink
+        # coverage to the narrow docs/ fallback (e.g. a slim CI image without
+        # git); only a genuinely non-git tree gets the fallback.
+        if (root / ".git").exists():
+            raise RuntimeError(
+                f"cannot enumerate tracked Markdown under {root}: {exc}"
+            ) from exc
+        return []
+    files = [root / p for p in out.split("\0") if p]
+    return sorted(f for f in files if f.is_file())
+
+
 def doc_files(root: Path) -> list[Path]:
-    """The Markdown files to scan: everything under docs/, plus the top-level
-    README.md / CLAUDE.md and ansible/TESTING.md when present."""
+    """The Markdown files to scan: every tracked *.md, or — outside a git
+    checkout — everything under docs/ plus $CHECK_DOC_LINKS_EXTRA."""
+    tracked = _tracked_markdown(root)
+    if tracked:
+        return tracked
+
     files: list[Path] = []
     docs = root / "docs"
     if docs.is_dir():
         files.extend(sorted(docs.rglob("*.md")))
-    for name in ("README.md", "CLAUDE.md", "ansible/TESTING.md"):
+    for name in os.environ.get("CHECK_DOC_LINKS_EXTRA", "README.md CLAUDE.md").split():
         p = root / name
         if p.is_file():
             files.append(p)

@@ -52,19 +52,20 @@ and `.github/pull_request_template.md`, which this template does not ship.
 
 ---
 
-## Shape A — `gitlab` (default, unchanged)
+## Shape A — `gitlab` (default)
 
 Everything in [CONSUMING.md](CONSUMING.md) applies as written: the generic
 lint/validate/security jobs come from `eric/weisssrv-lib` at a pinned `ref:`,
 they run tag-less on the operator's shared non-privileged `k8s-deploy` runner,
 and `build-image` runs tagged `infrastructure` on the privileged runner.
 
-Shape A is also the only shape that **releases**: `.gitlab-ci.yml` carries a
-final `release` stage that tags the repository from its conventional commits and
-publishes a GitLab Release. See [VERSIONING.md](VERSIONING.md).
+`.gitlab-ci.yml` carries a final `release` stage that tags the repository from
+its conventional commits and publishes a GitLab Release; shape B does the
+equivalent through `.github/workflows/release.yml`. See
+[VERSIONING.md](VERSIONING.md).
 
-Nothing about shape A changed when B and C were added. If you are on the
-operator's GitLab, stop reading here and follow [CONSUMING.md](CONSUMING.md).
+If you are on the operator's GitLab, stop reading here and follow
+[CONSUMING.md](CONSUMING.md).
 
 ---
 
@@ -82,26 +83,23 @@ so both shapes gate on byte-identical tools.
 | GitLab job | GitHub job | Parity |
 |---|---|---|
 | `yaml-lint` | `yaml-lint` | **Exact.** yamllint 1.38.0, `-c .yamllint`, whole tree. |
-| `flux-lint` (simple mode) | `flux-lint` | **Exact.** kustomize 5.4.3 + kubeconform 0.6.7 (same sha256s), `-strict -ignore-missing-schemas -kubernetes-version 1.36.0` with the datreeio CRDs-catalog schema location. |
+| `flux-lint` + `flux-lint-optional` (simple mode) | `flux-lint` (loops both trees) | **Exact.** kustomize 5.4.3 + kubeconform 0.6.7 (same sha256s), `-strict -ignore-missing-schemas -kubernetes-version 1.36.0` with the datreeio CRDs-catalog schema location, over `kubernetes/flux` and `kubernetes/flux/optional`. |
 | `shellcheck` | `shellcheck` | **Exact.** shellcheck 0.10.0, `--severity=warning --exclude=SC1091,SC2034`, over `scripts/*.sh`. |
+| `python-lint` | `python-lint` | **Exact.** ruff 0.16.0 over `scripts tests`, both resolving the vendored `./ruff.toml`. |
 | `docs-link-check` | `docs-link-check` | **Exact.** the same vendored `scripts/check-doc-links.py`. |
 | `secret_detection` | `secret-detection` | **Same detector, different wrapper** — see below. |
 | `build-image` | `docker-build` (in `ci.yml`) + `build-image` | **Split by privilege, different registry** — see below. |
 | `pr-agent-review` | — | **Not ported.** |
 | `semantic-release` | `release` (in `release.yml`) | **Ported.** Same vendored `scripts/semantic-release.py`, `--platform github`. |
-| `python-tests` | — | **Not ported** — it gates the TEMPLATE (`tests/`), not your app, and skips itself once you have renamed. Delete `tests/`. |
+| `python-tests` | — | **Not ported** — it gates the TEMPLATE (`tests/`), not your app, and skips itself once you have renamed. Removing it is a four-part edit: see [CONSUMING.md](CONSUMING.md#removing-the-templates-gate). |
 
 **Secret detection.** GitLab runs its managed Secret-Detection analyzer, which
 is gitleaks underneath, loading `.gitleaks.toml` through
 `.gitlab/secret-detection-ruleset.toml`. The workflow runs the same gitleaks
 (8.30.1, the version pinned in `.pre-commit-config.yaml`) directly against the
 same `.gitleaks.toml`: the working tree always, plus the commit range a pull
-request adds. Two deliberate differences:
+request adds. **Findings block the job in both shapes.** One difference remains:
 
-- **Findings block the job on GitHub.** The GitLab include here is still on the
-  library's pre-`v0.2.0` `allow_failure: true` default, i.e. findings only
-  *warn*. Pass `inputs: { allow_failure: false }` on the `secret-detection.yml`
-  include to make shape A block the same way.
 - You get gitleaks' own output and exit code — not GitLab's vulnerability
   report, merge-request security widget, or security dashboard.
 
@@ -149,18 +147,12 @@ authenticated with the built-in `GITHUB_TOKEN`, the way shape A uses the
 4. **`pr-agent-review`.** Not ported. `pr-agent` supports GitHub; add it as a
    workflow with your own `OPENAI_API_KEY` if you want it. It never blocked
    anything in shape A either.
-5. **`semantic-release`.** Ported as of library `v0.3.0`, via
-   `.github/workflows/release.yml` (vendored from the library's
-   `ci/release/github-release-workflow.example.yml`). It drives the SAME vendored
-   `scripts/semantic-release.py` with `--platform github`, so shape B is no
-   longer a hand-tagging exercise. This entry previously said it was "not
-   portable as it stands", and the reasoning is worth keeping because it shaped
-   the fix: the options then were forking the script — losing the
-   byte-identical-to-the-library property that is the only reason to trust a
-   vendored copy — or depending on a marketplace action, which nothing else here
-   does. The commit-parsing half (`plan_release`) was already platform-neutral,
-   so adding a backend upstream was the small change that avoided both.
-   See [VERSIONING.md](VERSIONING.md).
+5. **Nothing, for `semantic-release`.** `.github/workflows/release.yml`
+   (vendored from the library's
+   `ci/release/github-release-workflow.example.yml`) drives the SAME vendored
+   `scripts/semantic-release.py` with `--platform github`, so both shapes release
+   from one implementation and neither needs a marketplace action. See
+   [VERSIONING.md](VERSIONING.md).
 6. **The in-cluster runner.** The tenant `k8s-deploy` runner has internet egress
    only — no LAN, no tailnet, no SSH — so shape A gives up most of that too, and
    parity is closer than it sounds. What you do lose is the *option*: on GitLab
@@ -179,32 +171,14 @@ authenticated with the built-in `GITHUB_TOKEN`, the way shape A uses the
 
 ---
 
-## Shape C — `none` (Flux-only)
+## Operator wiring for a GitHub-hosted tenant
 
-No pipeline at all. Flux pulls this repo on its `interval` and reconciles
-`kubernetes/flux/` into your namespace — exactly as in shapes A and B, because
-in all three shapes *Flux* is what deploys. What you give up is the gate: a
-manifest that fails `kustomize build` reaches the cluster, and the tenant
-`Kustomization` goes `NotReady` instead of the pipeline going red.
-
-Two things to put in its place:
-
-```bash
-pre-commit install     # gitleaks + yamllint + YAML syntax on every commit
-task lint              # yamllint + kustomize build + kubeconform — what CI would run
-```
-
-`.gitleaks.toml`, `.yamllint`, `.pre-commit-config.yaml` and `Taskfile.yml` all
-survive shape C, so the local checks are the same checks. There is nothing to
-build an image with, so use an upstream image or `task build` and push by hand.
-
-### Operator wiring for a GitHub-hosted tenant
-
-The wiring file in the cluster repo
+This applies to **shapes B and C alike**: what changes is where the repo lives,
+not whether it runs a pipeline. The wiring file in the cluster repo
 (`kubernetes/clusters/weisssrv/tenants/<slug>.yaml`) is **unchanged** from
-[ONBOARDING.md](ONBOARDING.md) step O3 except for the `GitRepository`. Shape C
-is not GitHub-specific — a GitLab repo with no pipeline works identically — but
-GitHub is the case that needs credentials spelled out.
+[ONBOARDING.md](ONBOARDING.md) step O3 except for the `GitRepository`. A GitLab
+repo with no pipeline (shape C on the operator's instance) needs none of the
+credential work below; GitHub is the case that needs it spelled out.
 
 **Public GitHub repo — no credential at all:**
 
@@ -285,6 +259,36 @@ Notes that bite people:
 
 ---
 
+## Shape C — `none` (Flux-only)
+
+No pipeline at all. Flux pulls this repo on its `interval` and reconciles
+`kubernetes/flux/` into your namespace — exactly as in shapes A and B, because
+in all three shapes *Flux* is what deploys. What you give up is the gate: a
+manifest that fails `kustomize build` reaches the cluster, and the tenant
+`Kustomization` goes `NotReady` instead of the pipeline going red.
+
+Two things to put in its place:
+
+```bash
+pre-commit install     # gitleaks + yamllint + YAML syntax on every commit
+task lint              # the same five gates the CI lint stage runs
+```
+
+`.gitleaks.toml`, `.yamllint`, `.pre-commit-config.yaml`, `ruff.toml` and
+`Taskfile.yml` all survive shape C, so the local checks really are the same
+checks: `task lint` covers CI's lint stage (yamllint, kustomize + kubeconform
+over both trees, shellcheck, ruff, Markdown links) and pre-commit covers secret
+scanning. Run them —
+nothing else will. There is nothing to build an image with, so use an upstream
+image or `task build` and push by hand.
+
+The operator wiring is the same as for any other shape — a GitLab-hosted repo
+needs nothing extra, a GitHub-hosted one is covered in
+[Operator wiring for a GitHub-hosted tenant](#operator-wiring-for-a-github-hosted-tenant)
+above.
+
+---
+
 ## Related
 
 - [CONSUMING.md](CONSUMING.md) — library consumption, component toggles, image
@@ -293,3 +297,5 @@ Notes that bite people:
   file.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — how a request, a secret, and an image
   flow through the platform.
+- [VERSIONING.md](VERSIONING.md) — the release tags both pipelined shapes cut,
+  and the conventional-commit subjects that drive them.

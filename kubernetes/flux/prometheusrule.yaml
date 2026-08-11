@@ -4,12 +4,12 @@
 # metrics (always present), so they work even before your app exposes /metrics.
 #
 # Matches the weisssrv rule style: a `homelab.<domain>` group name, CamelCase
-# alert names, and the for/severity/runbook_url annotation shape. The alert
-# names are kept slug-independent (the app identity is carried by the
-# `deployment`/`namespace` labels) because scripts/rename.sh only substitutes
-# the lowercase `changeme-app` token — a CamelCase `ChangemeAppDown` would not
-# be rewritten. The group name does carry the token, so it renames to
-# `homelab.<slug>`.
+# alert names, and the for/severity/runbook_url annotation shape. Alert names
+# are slug-independent — rename.sh substitutes only the lowercase token, so a
+# CamelCase `ChangemeAppDown` would not be rewritten — and the app identity
+# rides on the `deployment`/`namespace` labels instead. AppAbsent sets
+# `namespace` explicitly because absent() drops every label, which would
+# otherwise collapse the alert across tenants.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -39,6 +39,7 @@ spec:
           for: 15m
           labels:
             severity: warning
+            namespace: changeme-app
           annotations:
             runbook_url: 'https://git.ericsweiss.com/eric/weisssrv/-/blob/main/docs/29-flux-operations.md'
             summary: 'changeme-app deployment metric is absent'

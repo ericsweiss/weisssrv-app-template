@@ -3,12 +3,12 @@
 # tenant namespace's Pod Security Admission (enforce: baseline / warn+audit:
 # restricted). Swap the image, port, probe paths, and resources for your app.
 #
-# Image tag is a LITERAL pin (Flux postBuild `${var}` substitution is
-# weisssrv-internal and is NOT available to tenants). There is no hosted
-# dependency bot — bump the tag yourself in an MR (see README "Keeping image
-# tags current"). Point this at the image you build here (the opt-in CI
-# build-image job pushes registry.git.ericsweiss.com/<group>/<app>) or any
-# upstream image.
+# The image tag below is a PLACEHOLDER that README step 3 replaces: the CI
+# build-image job pushes `<registry>/<group>/<app>:<short-sha>`, which is what
+# belongs here. Tags are LITERAL pins (Flux postBuild `${var}`
+# substitution is weisssrv-internal and not available to tenants) and there is
+# no dependency bot, so bump the tag in an MR. A private registry also needs
+# optional/externalsecret-registry.yaml plus an `imagePullSecrets:` entry.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,8 +16,8 @@ metadata:
   labels:
     app.kubernetes.io/name: changeme-app
 spec:
-  # Two replicas for rolling updates without downtime. If you enable hpa.yaml,
-  # DELETE this `replicas:` line so Flux server-side apply doesn't fight the HPA.
+  # Two replicas for rolling updates without downtime. Remove when
+  # optional/hpa.yaml is enabled — see its header.
   replicas: 2
   selector:
     matchLabels:
@@ -63,7 +63,7 @@ spec:
                     app.kubernetes.io/name: changeme-app
       containers:
         - name: app
-          image: registry.git.ericsweiss.com/changeme-group/changeme-app:0.1.0
+          image: registry.git.ericsweiss.com/changeme-group/changeme-app:REPLACE-ME
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -90,18 +90,10 @@ spec:
             capabilities:
               drop:
                 - ALL
-          # Adjust paths to your app's health endpoints.
-          # A slow-booting image can be killed by the livenessProbe before it
-          # ever comes up (here: ~15s + 3*20s ≈ 75s of grace). If yours needs
-          # longer, uncomment this startupProbe — while it runs, the liveness
-          # and readiness probes are held off, and failureThreshold*periodSeconds
-          # (300s below) is the real startup budget.
-          # startupProbe:
-          #   httpGet:
-          #     path: /
-          #     port: http
-          #   periodSeconds: 10
-          #   failureThreshold: 30
+          # Adjust paths to your app's health endpoints. The liveness grace on
+          # a slow boot is ~75s; for anything slower add a `startupProbe` with
+          # the same httpGet, since it holds liveness/readiness off until it
+          # passes and its failureThreshold*periodSeconds is the startup budget.
           readinessProbe:
             httpGet:
               path: /

@@ -6,6 +6,8 @@
 # operator action and no Terraform edit for a public hostname. The middlewares
 # live in the platform `traefik` namespace; cross-namespace references are
 # enabled cluster-side (`allowCrossNamespace: true`).
+#
+# An internal (LAN/tailnet) route is optional/ingressroute-internal.yaml.
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -21,7 +23,13 @@ spec:
       middlewares:
         - name: hsts-header
           namespace: traefik
-        # To require Authentik SSO in front of the app (forward-auth), add:
+        # Authentik SSO (forward-auth). The middleware alone does nothing: the
+        # operator must also create a proxy provider whose `external_host` is
+        # EXACTLY this route's hostname, an application, a group and a policy
+        # binding, and add the provider to the embedded outpost. A missing
+        # outpost assignment surfaces as a 404 from the outpost, and an
+        # `external_host` on the other split-horizon hostname breaks the
+        # redirect. See docs/ONBOARDING.md.
         # - name: authentik-auth
         #   namespace: authentik
       services:
@@ -29,32 +37,3 @@ spec:
           port: 8080
   tls:
     secretName: changeme-app-ericsweiss-tls
-
-# ---
-# # Internal route: changeme-app.esweiss.com (LAN + tailnet only).
-# #
-# # `lan-tailscale-only` restricts the source to the LAN, the tailnet, and the
-# # pod CIDR. The internal hostname is NOT auto-provisioned — external-dns only
-# # manages ericsweiss.com — so the operator must add an AdGuard rewrite
-# # (`changeme-app.esweiss.com -> 192.168.0.101`) via a weisssrv MR. Enable the
-# # internal Certificate in certificate.yaml alongside this route.
-# apiVersion: traefik.io/v1alpha1
-# kind: IngressRoute
-# metadata:
-#   name: changeme-app-internal
-# spec:
-#   entryPoints:
-#     - websecure
-#   routes:
-#     - match: Host(`changeme-app.esweiss.com`)
-#       kind: Rule
-#       middlewares:
-#         - name: lan-tailscale-only
-#           namespace: traefik
-#         - name: hsts-header
-#           namespace: traefik
-#       services:
-#         - name: changeme-app
-#           port: 8080
-#   tls:
-#     secretName: changeme-app-esweiss-tls

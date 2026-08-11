@@ -7,12 +7,13 @@ alwaysApply: true
 # Project development
 
 Before making any change in this repo, read and follow
-`.claude/skills/project-development/SKILL.md`. It is the authoritative workflow
-for developing and shipping this service onto the weisssrv k3s cluster: the
-local loop, Flux debugging, and the secret / routing / observability
-conventions.
+`.claude/skills/project-development/SKILL.md` — the authoritative workflow for
+developing and shipping this service onto the weisssrv k3s cluster (local loop,
+Flux debugging, secret / routing / observability conventions, and which CI shape
+this repo is on). `CLAUDE.md` carries the standing rules and the doc index.
 
-Key standing rules (the skill has the detail):
+The rules that must hold in every change, restated here because they are the
+ones that cost real damage:
 
 - Flux owns all Kubernetes state under `kubernetes/flux/`. Never `kubectl apply`
   or `helm upgrade` to deploy — preview with `kustomize build kubernetes/flux`
@@ -21,10 +22,3 @@ Key standing rules (the skill has the detail):
 - Never commit secrets — reference them from `ExternalSecret` manifests.
 - Containers stay non-root with a read-only root filesystem; no `latest` tags.
 - Stay within your single namespace.
-- CI comes in three shapes and this repo keeps one: `.gitlab-ci.yml` (shape
-  `gitlab`, includes the shared `eric/weisssrv-lib` library at a pinned tag — do
-  not re-inline it), `.github/workflows/` (shape `github`, a vendored
-  equivalent), or neither (shape `none`, Flux-only). Check which is present
-  before editing CI — see `docs/CI-SHAPES.md`.
-- Scaffold with the `weisssrv-new-project` CLI; pick the CI shape with
-  `./scripts/select-ci.sh` — see `docs/CONSUMING.md`.
