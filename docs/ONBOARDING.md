@@ -176,8 +176,10 @@ pushes exactly there, so most tenants need this.
 1. In the **tenant** project, create a deploy token scoped `read_registry`
    (Settings → Repository → Deploy tokens). The token *name* is not a secret; the
    value is.
-2. Store the value in the tenant's secret backend under the field
-   `kubernetes/flux/optional/externalsecret-registry.yaml` reads.
+2. Store the deploy token in the tenant's secret backend under the `token` and
+   `username` fields `kubernetes/flux/optional/externalsecret-registry.yaml`
+   reads — GitLab generates the token's username (e.g. `gitlab+deploy-token-N`),
+   so it is not `changeme-app` and must be stored, not assumed.
 3. Tell the tenant to enable that manifest: uncomment
    `- optional/externalsecret-registry.yaml` in
    `kubernetes/flux/kustomization.yaml` and add

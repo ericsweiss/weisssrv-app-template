@@ -74,21 +74,21 @@ fi
 # the sentinels back. No rule can see another's output, which makes the pass
 # order-independent and idempotent. Sentinels are `@@NAME@@`: no dot, no slash,
 # nothing any pattern here matches, and rejected in the inputs above.
-LIB_URL="git.ericsweiss.com/eric/weisssrv-lib"
-WS_URL="git.ericsweiss.com/eric/weisssrv"
+LIB_URL="git\.ericsweiss\.com/eric/weisssrv-lib"
+WS_URL="git\.ericsweiss\.com/eric/weisssrv"
 rules=(
     # Park: literal -> sentinel. Most specific first, so a longer host is
     # consumed before the bare domain inside it can match.
     "s|${LIB_URL}|@@LIB_URL@@|g"
     "s|${WS_URL}|@@WS_URL@@|g"
-    "s|registry.git.ericsweiss.com|@@REGISTRY_HOST@@|g"
-    "s|registry.git.esweiss.com|@@REGISTRY_PULL_HOST@@|g"
-    "s|esweiss.com/|@@NODE_LABEL_DOMAIN@@/|g"
-    "s|ericsweiss.com|@@EXTERNAL_DOMAIN@@|g"
-    "s|esweiss.com|@@INTERNAL_DOMAIN@@|g"
+    "s|registry\.git\.ericsweiss\.com|@@REGISTRY_HOST@@|g"
+    "s|registry\.git\.esweiss\.com|@@REGISTRY_PULL_HOST@@|g"
+    "s|esweiss\.com/|@@NODE_LABEL_DOMAIN@@/|g"
+    "s|ericsweiss\.com|@@EXTERNAL_DOMAIN@@|g"
+    "s|esweiss\.com|@@INTERNAL_DOMAIN@@|g"
     "s|-ericsweiss-tls|-@@EXTERNAL_LABEL@@-tls|g"
     "s|-esweiss-tls|-@@INTERNAL_LABEL@@-tls|g"
-    "s|192.168.0.101|@@INTERNAL_VIP@@|g"
+    "s|192\.168\.0\.101|@@INTERNAL_VIP@@|g"
     "s|\"infrastructure\"|\"@@RUNNER_TAG@@\"|g"
     "s|\`infrastructure\`|\`@@RUNNER_TAG@@\`|g"
     # Restore: sentinel -> value. Order is irrelevant — the sentinels are
