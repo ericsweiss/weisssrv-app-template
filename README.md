@@ -247,11 +247,11 @@ PAT plus a `secretRef`, if it is private):
 
 ## Local development
 
-Requires `task` (go-task), plus `kustomize`, `kubeconform`, and `yamllint` for
-linting. `task --list` shows everything.
+Requires `task` (go-task), plus `kustomize`, `kubeconform`, `yamllint`,
+`shellcheck` and `ruff` for linting. `task --list` shows everything.
 
 ```bash
-task lint            # yamllint + kustomize/kubeconform + shellcheck + doc links
+task lint            # yamllint + kustomize/kubeconform + shellcheck + ruff + doc links
 task render          # print the manifests Flux will apply
 task build           # docker build (needs a Dockerfile)
 task flux:status     # reconcile state (read-only; needs a kubeconfig)

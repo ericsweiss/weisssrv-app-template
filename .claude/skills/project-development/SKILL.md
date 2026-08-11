@@ -41,7 +41,7 @@ namespace. There is no `kubectl apply` / `helm upgrade` in the normal flow.
 ## Local loop
 
 ```bash
-task lint                 # yamllint + kustomize/kubeconform + shellcheck + doc links
+task lint                 # yamllint + kustomize/kubeconform + shellcheck + ruff + doc links
 task render               # see exactly what Flux will apply
 task build                # docker build (needs a Dockerfile)
 ```
@@ -53,9 +53,13 @@ install` covers it locally. Fix lint before opening the MR.
 ## `tests/` is the template's gate, not yours
 
 `tests/` exercises the scaffold's own wrappers and skips itself once the repo is
-renamed. If you delete it, delete the `/ci/test/python-tests.yml` include and the
-`python-tests:` variables override with it — pytest exits 4 on a missing
-directory. If you keep it, the operator must allowlist this project on
+renamed. Deleting it is a **four**-part edit, because two jobs read the path:
+pytest exits 4 on a missing directory and ruff errors on a target that does not
+exist. Remove together: (1) `tests/`, (2) the `/ci/test/python-tests.yml`
+include, (3) the `python-tests:` variables override, and (4) `tests` from the
+`python-lint` include's `targets:` — and from the same list in `Taskfile.yml`'s
+`python-lint` task and `.github/workflows/ci.yml`'s `python-lint` step. If you
+keep it, the operator must allowlist this project on
 `eric/weisssrv-lib`'s CI/CD job-token list, since the job clones the internal
 library. Both paths: `docs/CONSUMING.md` § Removing the template's gate.
 

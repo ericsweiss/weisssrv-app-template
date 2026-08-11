@@ -31,6 +31,9 @@ for var in CLUSTER_EXTERNAL_DOMAIN CLUSTER_INTERNAL_DOMAIN \
     CLUSTER_REGISTRY_PULL_HOST CLUSTER_PRIVILEGED_RUNNER_TAG; do
     [ -n "${!var:-}" ] || { echo "error: $var is unset or empty in $IDENTITY" >&2; exit 1; }
     case "${!var}" in *'|'*) echo "error: $var must not contain '|'" >&2; exit 1 ;; esac
+    # `@@` is the sentinel marker below; a value containing one would be
+    # rewritten by its own restore pass.
+    case "${!var}" in *'@@'*) echo "error: $var must not contain '@@'" >&2; exit 1 ;; esac
 done
 
 # The external/internal split is load-bearing: the two Certificates and the two
@@ -56,26 +59,49 @@ if [ "$ext_label" = "$int_label" ]; then
     exit 1
 fi
 
-# Ordered: the most specific literal first, so a longer host is consumed before
-# the bare domain inside it can match. The two sentinels park the repository
-# URLs out of reach of the domain rules, then come back untouched.
+# The rules run as ONE sed script, in order, over each file — so a rule's output
+# is still on the line when every later rule runs. Ordering alone does not make
+# that safe: it decides which literal is CONSUMED first, not whether the
+# replacement is re-matched. `-ericsweiss-tls` -> `-esweiss-tls` (external
+# domain `esweiss.io`) is then hit by the `-esweiss-tls` rule, and both
+# Certificates end up naming ONE Secret — the exact collision the first-label
+# guard above rejects. The same holds for `esweiss.com/` -> a node-label domain
+# that still contains `esweiss.com`, and for either registry host.
+#
+# So EVERY rule emits a sentinel instead of its value, and a second pass swaps
+# the sentinels back. No rule can see another's output, which makes the pass
+# order-independent and idempotent. Sentinels are `@@NAME@@`: no dot, no slash,
+# nothing any pattern here matches, and rejected in the inputs above.
 LIB_URL="git.ericsweiss.com/eric/weisssrv-lib"
 WS_URL="git.ericsweiss.com/eric/weisssrv"
 rules=(
+    # Park: literal -> sentinel. Most specific first, so a longer host is
+    # consumed before the bare domain inside it can match.
     "s|${LIB_URL}|@@LIB_URL@@|g"
     "s|${WS_URL}|@@WS_URL@@|g"
-    "s|registry.git.ericsweiss.com|${CLUSTER_REGISTRY_HOST}|g"
-    "s|registry.git.esweiss.com|${CLUSTER_REGISTRY_PULL_HOST}|g"
-    "s|esweiss.com/|${CLUSTER_NODE_LABEL_DOMAIN}/|g"
-    "s|ericsweiss.com|${CLUSTER_EXTERNAL_DOMAIN}|g"
-    "s|esweiss.com|${CLUSTER_INTERNAL_DOMAIN}|g"
-    "s|-ericsweiss-tls|-${ext_label}-tls|g"
-    "s|-esweiss-tls|-${int_label}-tls|g"
-    "s|192.168.0.101|${CLUSTER_INTERNAL_VIP}|g"
-    "s|\"infrastructure\"|\"${CLUSTER_PRIVILEGED_RUNNER_TAG}\"|g"
-    "s|\`infrastructure\`|\`${CLUSTER_PRIVILEGED_RUNNER_TAG}\`|g"
+    "s|registry.git.ericsweiss.com|@@REGISTRY_HOST@@|g"
+    "s|registry.git.esweiss.com|@@REGISTRY_PULL_HOST@@|g"
+    "s|esweiss.com/|@@NODE_LABEL_DOMAIN@@/|g"
+    "s|ericsweiss.com|@@EXTERNAL_DOMAIN@@|g"
+    "s|esweiss.com|@@INTERNAL_DOMAIN@@|g"
+    "s|-ericsweiss-tls|-@@EXTERNAL_LABEL@@-tls|g"
+    "s|-esweiss-tls|-@@INTERNAL_LABEL@@-tls|g"
+    "s|192.168.0.101|@@INTERNAL_VIP@@|g"
+    "s|\"infrastructure\"|\"@@RUNNER_TAG@@\"|g"
+    "s|\`infrastructure\`|\`@@RUNNER_TAG@@\`|g"
+    # Restore: sentinel -> value. Order is irrelevant — the sentinels are
+    # distinct and no value may contain one.
     "s|@@LIB_URL@@|${LIB_URL}|g"
     "s|@@WS_URL@@|${WS_URL}|g"
+    "s|@@REGISTRY_HOST@@|${CLUSTER_REGISTRY_HOST}|g"
+    "s|@@REGISTRY_PULL_HOST@@|${CLUSTER_REGISTRY_PULL_HOST}|g"
+    "s|@@NODE_LABEL_DOMAIN@@|${CLUSTER_NODE_LABEL_DOMAIN}|g"
+    "s|@@EXTERNAL_DOMAIN@@|${CLUSTER_EXTERNAL_DOMAIN}|g"
+    "s|@@INTERNAL_DOMAIN@@|${CLUSTER_INTERNAL_DOMAIN}|g"
+    "s|@@EXTERNAL_LABEL@@|${ext_label}|g"
+    "s|@@INTERNAL_LABEL@@|${int_label}|g"
+    "s|@@INTERNAL_VIP@@|${CLUSTER_INTERNAL_VIP}|g"
+    "s|@@RUNNER_TAG@@|${CLUSTER_PRIVILEGED_RUNNER_TAG}|g"
 )
 
 script=""

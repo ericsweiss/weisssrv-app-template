@@ -173,10 +173,16 @@ jobs:
         with:
           # No job here pushes; do not persist the token.
           persist-credentials: false
+      - name: Install ruff
+        # pipx, for the same reason yaml-lint uses it: Ubuntu's system Python is
+        # externally managed (PEP 668), so `pip install` — with or without
+        # --user — exits 1 with `error: externally-managed-environment` on
+        # ubuntu-latest. pipx ships in the runner image and puts the console
+        # script on PATH.
+        run: pipx install "ruff==${RUFF_VERSION}"
       - name: Lint scripts/ and tests/
         run: |
           set -euo pipefail
-          pip install --quiet "ruff==${RUFF_VERSION}"
           ruff check --no-cache --output-format concise scripts tests
 
   # --- docs-link-check: relative Markdown cross-links resolve ---------------
