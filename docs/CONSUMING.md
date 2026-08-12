@@ -56,7 +56,7 @@ result. Install it once, at the tag this repo pins:
 ```bash
 # The spec is POSITIONAL — `pipx install --spec …` fails ("unrecognized
 # arguments: --spec"; pipx dropped that flag).
-pipx install 'git+https://git.ericsweiss.com/eric/weisssrv-lib.git@v0.6.0#subdirectory=cli'
+pipx install 'git+https://git.ericsweiss.com/eric/weisssrv-lib.git@vX.Y.Z#subdirectory=cli'
 
 weisssrv-new-project rename recipe-box eric/apps
 weisssrv-new-project prune  metrics single-replica   # drop what you don't use
@@ -75,18 +75,19 @@ anonymous `git+https://` clone gets a 404 — the same reason `.gitlab-ci.yml`'s
 
 ```bash
 # a) SSH, if your key is on the instance (no token to manage):
-pipx install 'git+ssh://git@git.ericsweiss.com/eric/weisssrv-lib.git@v0.6.0#subdirectory=cli'
+pipx install 'git+ssh://git@git.ericsweiss.com/eric/weisssrv-lib.git@vX.Y.Z#subdirectory=cli'
 
 # b) HTTPS with a PAT scoped to read_repository:
-pipx install 'git+https://oauth2:<PAT>@git.ericsweiss.com/eric/weisssrv-lib.git@v0.6.0#subdirectory=cli'
+pipx install 'git+https://oauth2:<PAT>@git.ericsweiss.com/eric/weisssrv-lib.git@vX.Y.Z#subdirectory=cli'
 
 # c) from a local checkout of the library (no network at all):
 pip install ./cli
 ```
 
 A configured git credential helper covers (b) without putting the token in the
-URL. The `WEISSSRV_LIB_REF` environment variable overrides the tag both wrappers
-fetch, which is how you test an unreleased library ref.
+URL. `vX.Y.Z` above is the tag your repo pins — `variables.WEISSSRV_LIB_REF` in
+`.gitlab-ci.yml`, the single source. The `WEISSSRV_LIB_REF` environment variable
+overrides the tag the wrappers fetch, which is how you test an unreleased ref.
 
 #### No-CLI fallback
 
@@ -127,7 +128,7 @@ Every generic lint/validate/security job is pulled in `.gitlab-ci.yml` via
 ```yaml
 include:
   - project: eric/weisssrv-lib
-    ref: v0.6.0
+    ref: vX.Y.Z            # == variables.WEISSSRV_LIB_REF; check-lib-pins keeps it in step
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []            # the shared non-privileged tenant runner

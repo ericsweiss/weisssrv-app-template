@@ -240,8 +240,21 @@ def shape_claims(text: str) -> dict[str, Claim]:
 
 
 def lib_ref(script: str) -> str:
-    """The weisssrv-lib tag a wrapper script fetches the CLI from."""
+    """The weisssrv-lib tag a wrapper script resolves the CLI from.
+
+    The scripts no longer restate the tag: they read variables.WEISSSRV_LIB_REF
+    from .gitlab-ci.yml (the single source), honouring a WEISSSRV_LIB_REF env
+    override. Assert that derivation and return the resolved tag, so the
+    single-source test stays meaningful without a second literal to keep in step.
+    """
     text = (REPO_ROOT / "scripts" / script).read_text(encoding="utf-8")
-    match = re.search(r'LIB_REF="\$\{WEISSSRV_LIB_REF:-([^}"]+)\}"', text)
-    assert match, f"no WEISSSRV_LIB_REF default in scripts/{script}"
-    return match.group(1)
+    assert "WEISSSRV_LIB_REF:-$(sed" in text and ".gitlab-ci.yml" in text, (
+        f"scripts/{script} must derive LIB_REF from .gitlab-ci.yml's WEISSSRV_LIB_REF"
+    )
+    source = re.search(
+        r'^\s{2}WEISSSRV_LIB_REF:\s*"([^"]+)"',
+        (REPO_ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8"),
+        re.M,
+    )
+    assert source, "WEISSSRV_LIB_REF not found in .gitlab-ci.yml"
+    return source.group(1)

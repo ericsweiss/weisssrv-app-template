@@ -15,9 +15,11 @@
 # For prune / wire / verify, call the CLI directly — see docs/CONSUMING.md.
 set -euo pipefail
 
-# Pin the library version the CLI is fetched from (override with the env var to
-# track a newer tag). Keep this in step with the ref: in .gitlab-ci.yml.
-LIB_REF="${WEISSSRV_LIB_REF:-v0.6.0}"
+# The library pin lives in ONE place: variables.WEISSSRV_LIB_REF in
+# .gitlab-ci.yml. Honour an explicit env override, otherwise read it from there
+# so the tag is never restated here. (GitLab cannot interpolate the include:
+# refs, so check-lib-pins.py keeps those in step with the same source.)
+LIB_REF="${WEISSSRV_LIB_REF:-$(sed -n 's/^  WEISSSRV_LIB_REF: "\(v[0-9][0-9.]*\)".*/\1/p' "$(dirname "$0")/../.gitlab-ci.yml")}"
 
 # shellcheck source=scripts/lib-cli.sh
 . "$(dirname "$0")/lib-cli.sh"
