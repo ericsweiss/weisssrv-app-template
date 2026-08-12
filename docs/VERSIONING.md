@@ -70,12 +70,14 @@ Moving those pins changes what gates a derived project, so:
   alters a resolved job — is a MAJOR here, because a derived project that
   copies the new `.gitlab-ci.yml` over its own inherits the break.
 
-Every include pins the **same** tag (`v0.6.0` today), and so do the `rename.sh`
-and `select-ci.sh` wrappers and the `python-tests` job's clone. Bump them
-together: `scripts/check-lib-pins.py` fails the pipeline on an include that
-drifts from `variables.WEISSSRV_LIB_REF`, `tests/` ties the wrappers to the same
-value, and the library's contract tests fail if a ref moves without the vendored
-`scripts/semantic-release.py` moving with it.
+The library tag lives in **one** place — `variables.WEISSSRV_LIB_REF`. The
+`include: ref:` entries can't reference it (GitLab forbids a variable in
+`include: ref:`), so `scripts/check-lib-pins.py --fix` syncs those literals and
+`lib-pin-check` fails the pipeline on any that drift. Everything else derives
+from the source: the `python-tests` job references `$WEISSSRV_LIB_REF`, and the
+`rename.sh`/`select-ci.sh` wrappers read it from `.gitlab-ci.yml`. So a bump is
+one edit plus `--fix`. The library's contract tests still fail if a ref moves
+without the vendored `scripts/semantic-release.py` moving with it.
 
 ## Releasing, by shape
 

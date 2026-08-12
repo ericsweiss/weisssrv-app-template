@@ -154,9 +154,13 @@ def test_select_ci_refuses_bad_input_without_touching_the_tree(
 
 def test_the_gate_runs_the_cli_version_select_ci_installs():
     """The suite is only evidence about the CLI a project actually gets, so the
-    job's library ref and the wrapper's pin move together."""
+    job's library ref and the wrapper's pin must resolve to the same tag. Both
+    now trace to the single source (variables.WEISSSRV_LIB_REF): the job
+    references it, the wrapper derives it."""
     ci = yaml.safe_load((tr.REPO_ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8"))
-    assert ci["python-tests"]["variables"]["LIB_REF"] == tr.lib_ref("select-ci.sh")
+    want = ci["variables"]["WEISSSRV_LIB_REF"]
+    assert ci["python-tests"]["variables"]["LIB_REF"] == "$WEISSSRV_LIB_REF"
+    assert tr.lib_ref("select-ci.sh") == want
 
 
 def test_every_library_pin_agrees_with_the_single_source():
@@ -178,7 +182,10 @@ def test_every_library_pin_agrees_with_the_single_source():
     assert include_refs, "no weisssrv-lib includes found — did the block move?"
     assert include_refs == {want}, f"include refs {include_refs} != {want}"
 
-    assert ci["python-tests"]["variables"]["LIB_REF"] == want
+    # python-tests references the single source directly (GitLab expands the job
+    # variable), and the wrapper scripts derive it from .gitlab-ci.yml — so
+    # neither restates the tag. tr.lib_ref asserts the derivation and resolves it.
+    assert ci["python-tests"]["variables"]["LIB_REF"] == "$WEISSSRV_LIB_REF"
     assert tr.lib_ref("select-ci.sh") == want
     assert tr.lib_ref("rename.sh") == want
 
