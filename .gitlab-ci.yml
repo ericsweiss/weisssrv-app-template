@@ -57,7 +57,7 @@ variables:
   # own default too. scripts/check-lib-pins.py (vendored from the library) fails
   # the pipeline when an include drifts from this value or pins a branch; the
   # `lib-pin-check` job runs it whether or not tests/ survives.
-  WEISSSRV_LIB_REF: "v0.6.1"
+  WEISSSRV_LIB_REF: "v0.6.2"
 
 # ============================================================================
 # Shared library templates (include:project + inputs). Every job is the tenant
@@ -66,7 +66,7 @@ variables:
 include:
   # -- yaml-lint: lint the whole tree against the repo-local .yamllint --------
   - project: eric/weisssrv-lib
-    ref: v0.6.1
+    ref: v0.6.2
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
@@ -86,7 +86,7 @@ include:
   # three places (here, .github/workflows/ci.yml, Taskfile.yml) and tests/
   # asserts the three agree.
   - project: eric/weisssrv-lib
-    ref: v0.6.1
+    ref: v0.6.2
     file: /ci/validate/flux-lint.yml
     inputs:
       tags: []
@@ -100,7 +100,7 @@ include:
   # kubernetes/flux/kustomization.yaml — enabling one is uncommenting its line
   # there. This job is what keeps them from rotting while switched off.
   - project: eric/weisssrv-lib
-    ref: v0.6.1
+    ref: v0.6.2
     file: /ci/validate/flux-lint.yml
     inputs:
       job_name: flux-lint-optional
@@ -113,7 +113,7 @@ include:
 
   # -- shellcheck: lint the scripts/ helpers ---------------------------------
   - project: eric/weisssrv-lib
-    ref: v0.6.1
+    ref: v0.6.2
     file: /ci/lint/shellcheck.yml
     inputs:
       tags: []
@@ -132,7 +132,7 @@ include:
   # dropping `tests` from `targets` here too: ruff errors on a path that does
   # not exist. Add your own package to `targets` when you add one.
   - project: eric/weisssrv-lib
-    ref: v0.6.1
+    ref: v0.6.2
     file: /ci/lint/python-lint.yml
     inputs:
       tags: []
@@ -149,7 +149,7 @@ include:
   # git the checker falls back to docs/ + README.md + CLAUDE.md — silently, and
   # green, so AGENTS.md and .claude/skills/ would never be checked.
   - project: eric/weisssrv-lib
-    ref: v0.6.1
+    ref: v0.6.2
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
@@ -176,7 +176,7 @@ include:
   # (docs/ONBOARDING.md). `changes: ["**/*"]` because the suite reads the whole
   # tree (token scan, YAML parse, per-shape diff, vendored-script comparison).
   - project: eric/weisssrv-lib
-    ref: v0.6.1
+    ref: v0.6.2
     file: /ci/test/python-tests.yml
     inputs:
       tags: []
@@ -203,7 +203,7 @@ include:
   # `tags: []` moves the job off the privileged runner the nested GitLab-managed
   # template would otherwise land on, onto the shared tag-less tenant runner.
   - project: eric/weisssrv-lib
-    ref: v0.6.1
+    ref: v0.6.2
     file: /ci/security/secret-detection.yml
     inputs:
       tags: []
@@ -221,7 +221,7 @@ include:
   # `weisssrv-new-project prune image-build` to drop the Dockerfile. See
   # docs/CONSUMING.md ("Building the service image").
   - project: eric/weisssrv-lib
-    ref: v0.6.1
+    ref: v0.6.2
     file: /ci/build/docker-build.yml
     inputs:
       tags: ["infrastructure"]       # a PRIVILEGED runner (retag to yours)
@@ -242,7 +242,7 @@ include:
   # major_on_zero stays false: while the tag is 0.x a `feat!:` bumps MINOR, and
   # calling this 1.0.0 is a deliberate act (flip the input for that release).
   - project: eric/weisssrv-lib
-    ref: v0.6.1
+    ref: v0.6.2
     file: /ci/release/semantic-release.yml
     inputs:
       tags: []
@@ -254,7 +254,7 @@ include:
   # at job time, so 1Password users read the values into the CI variables when
   # they set them. See docs/CONSUMING.md ("Bring your own keys").
   - project: eric/weisssrv-lib
-    ref: v0.6.1
+    ref: v0.6.2
     file: /ci/review/pr-agent.yml
     inputs:
       tags: []
