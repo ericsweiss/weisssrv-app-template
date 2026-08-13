@@ -1,0 +1,129 @@
+---
+# Application workload. Hardened, non-root by default so it satisfies the
+# tenant namespace's Pod Security Admission (enforce: baseline / warn+audit:
+# restricted). Swap the image, probe paths and resources for your app.
+#
+# The image tag is a PLACEHOLDER no registry has, so the first reconcile
+# ImagePullBackOffs until you replace it{% if enable_image_build %} — normally with the `:<short-sha>`
+# the CI build just pushed{% endif %}. Tags are LITERAL pins (Flux postBuild `${var}`
+# substitution is cluster-internal and not available to tenants) and there is no
+# dependency bot, so bump the tag deliberately, in a reviewed change.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ app_slug }}
+  labels:
+    app.kubernetes.io/name: {{ app_slug }}
+spec:
+{%- if enable_hpa %}
+  # No `replicas:` — hpa.yaml owns the replica count, and Flux server-side apply
+  # would otherwise fight the HPA over the field on every reconcile.
+{%- else %}
+  # {{ replica_count }} replica{{ 's' if replica_count > 1 else '' }}{% if replica_count > 1 %}, so a rolling update never drops to zero{% endif %}.
+  replicas: {{ replica_count }}
+{%- endif %}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ app_slug }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ app_slug }}
+    spec:
+      automountServiceAccountToken: false
+{%- if secrets_backend != 'none' and enable_registry_pull_secret %}
+      # The registry is private; the credential comes from
+      # externalsecret-registry.yaml.
+      imagePullSecrets:
+        - name: {{ app_slug }}-registry
+{%- endif %}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # Soft NAS-avoidance: prefer the general compute agents over the storage
+      # node. To PIN to the storage node instead (zvol-backed data), replace
+      # this whole affinity block with a required hostname match plus a
+      # toleration for `{{ node_label_domain }}/nas=true:PreferNoSchedule` —
+      # see docs/ARCHITECTURE.md.
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: {{ node_label_domain }}/nas
+                    operator: DoesNotExist
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: {{ app_slug }}
+      containers:
+        - name: app
+          image: {{ registry_host }}/{{ git_namespace }}/{{ app_slug }}:REPLACE-ME
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: {{ app_port }}
+              protocol: TCP
+{%- if secrets_backend != 'none' %}
+          # Bind each secret key as its own env var: the ExternalSecret's keys
+          # are hyphenated per the homelab convention and hyphens are not valid
+          # env-var names, so `envFrom: secretRef` would silently SKIP them.
+          # `optional: true` lets the pod start before ESO wires the store.
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ app_slug }}-secrets
+                  key: api-key
+                  optional: true
+{%- endif %}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # Adjust paths to your app's health endpoints. The liveness grace on a
+          # slow boot is ~75s; for anything slower add a `startupProbe` with the
+          # same httpGet, since it holds liveness/readiness off until it passes
+          # and its failureThreshold*periodSeconds is the startup budget.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          # readOnlyRootFilesystem is on; give the app a writable scratch dir.
+          # Add more emptyDir mounts (cache, run dirs) as your image needs them.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

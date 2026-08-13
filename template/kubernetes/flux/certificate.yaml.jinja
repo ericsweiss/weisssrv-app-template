@@ -1,0 +1,23 @@
+---
+# Per-host TLS certificate issued by the platform's cert-manager ClusterIssuer
+# (Let's Encrypt production, DNS-01). It MUST live in the same namespace as the
+# IngressRoute that references its secret — Traefik reads the TLS secret only
+# from the route's own namespace.
+#
+# Per-host, NOT wildcard: Let's Encrypt caps duplicate certificates at 5 per
+# week and the platform already issues the shared wildcards, so a per-tenant
+# per-host cert avoids both sharing them and the rate limit. `renewBefore: 720h`
+# (30d) matches the cluster convention.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ app_slug }}-tls
+spec:
+  secretName: {{ app_slug }}-{{ external_domain.split('.')[0] }}-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  commonName: {{ app_slug }}.{{ external_domain }}
+  dnsNames:
+    - {{ app_slug }}.{{ external_domain }}
+  renewBefore: 720h

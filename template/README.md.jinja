@@ -1,0 +1,97 @@
+# {{ app_slug }}
+
+A service deployed to a homelab k3s cluster by **Flux**. You edit YAML, open a
+{{ change_request }}, and on merge to `main` the cluster reconciles this repo
+into the `{{ app_namespace }}` namespace. There is no `kubectl apply` in the
+normal flow.
+
+Generated from the **weisssrv-app-template** copier template. The template it
+came from is recorded as `_src_path` in `.copier-answers.yml`, alongside the
+answers `copier update` replays.
+
+## What ships
+
+| Path | What it is |
+|---|---|
+| `kubernetes/flux/` | everything Flux reconciles: Deployment, Service, routing, policy, alerts |
+| `docs/ONBOARDING.md` | the wiring the operator adds once, rendered with this repo's names |
+| `docs/ARCHITECTURE.md` | how this app rides the shared platform |
+| `docs/VERSIONING.md` | what the release job reads from commit subjects |
+{%- if enable_image_build %}
+| `Dockerfile` | placeholder service image — **replace it with your build** |
+{%- endif %}
+{%- if ci_shape == 'gitlab_selfhosted' %}
+| `.gitlab-ci.yml` | the pipeline, pulling its jobs from the shared CI library at a pinned tag |
+{%- elif ci_shape == 'github' %}
+| `.github/workflows/` | the pipeline (GitHub Actions), vendored from the shared library |
+{%- endif %}
+| `Taskfile.yml` | the local gates and the read-only cluster checks |
+
+Enabled components: routing on `{{ app_slug }}.{{ external_domain }}`
+{%- if enable_internal_ingress %} and `{{ app_slug }}.{{ internal_domain }}`{% endif %},
+{% if secrets_backend == 'none' %}no secret backend{% else %}the {{ secrets_backend }} secret backend{% endif %},
+{% if enable_servicemonitor %}metrics scraping{% else %}no metrics scraping{% endif %},
+{% if enable_hpa %}an HPA{% else %}a fixed {{ replica_count }} replica{{ 's' if replica_count > 1 else '' }}{% endif %},
+{% if enable_sso %}SSO forward-auth{% else %}no SSO{% endif %}.
+Adding one later is a manifest plus its line in
+`kubernetes/flux/kustomization.yaml` — or `copier update` with the answer
+flipped.
+
+## First steps
+
+1. **Set the image.** `kubernetes/flux/deployment.yaml` ships
+   `{{ registry_host }}/{{ git_namespace }}/{{ app_slug }}:REPLACE-ME` — a tag no
+   registry has, so the first reconcile `ImagePullBackOff`s.
+{%- if enable_image_build %}
+   The usual value is the `:<short-sha>` the CI build pushes. Replace the
+   placeholder `Dockerfile` with your service's real build, keeping it non-root
+   (UID 65532) and read-only-rootfs friendly.
+{%- else %}
+   Point it at the upstream image this service runs.
+{%- endif %}
+   Tags are **literal pins** — there is no dependency bot, so bump them in a
+   {{ change_request }}.
+2. **Get wired.** Hand your operator [`docs/ONBOARDING.md`](docs/ONBOARDING.md);
+   the namespace, secret store, Git source and Kustomization are one file on
+   their side.
+3. **Ship.** `task lint`, then branch → {{ change_request }}. Flux deploys on
+   merge.
+
+## Local development
+
+Needs `task` (go-task), plus `kustomize`, `kubeconform`, `yamllint` and `ruff`.
+
+```bash
+task lint            # every local gate
+task render          # print the manifests Flux will apply
+{% if enable_image_build %}task build           # docker build
+{% endif %}task flux:status     # reconcile state (read-only; needs a kubeconfig)
+```
+
+Install the pre-commit hooks (`pre-commit install`) to catch secrets and YAML
+problems before you push.
+{% if ci_shape == 'none' %}
+There is no pipeline in this repo (CI shape `none`), so `task lint` and the
+pre-commit hooks are the whole gate.
+{%- endif %}
+
+## Secrets
+{% if secrets_backend == 'none' %}
+This repo has no secret backend. If the app grows one, add an `ExternalSecret`
+referencing the `ClusterSecretStore` the operator provisions — never a value in
+git. [`docs/ONBOARDING.md`](docs/ONBOARDING.md) has both backends.
+{%- else %}
+Secret **values** never go in git. `kubernetes/flux/externalsecret.yaml`
+references the `ClusterSecretStore` `{{ secrets_backend }}-{{ app_slug }}`, which
+the operator creates.
+{%- if secrets_backend == 'onepassword' %}
+Items live in the shared vault prefixed with the slug, so `remoteRef.key` is
+`"{{ app_slug }}: <Item>"` and `remoteRef.property` is the field.
+{%- else %}
+Each masked CI/CD variable on this project maps across as a `remoteRef.key`.
+{%- endif %}
+{%- endif %}
+
+## License
+
+[MIT](LICENSE).

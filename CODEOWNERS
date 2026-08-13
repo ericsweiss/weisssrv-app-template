@@ -1,9 +1,0 @@
-# Code ownership for merge-request review routing.
-# Syntax: <path pattern>  @user-or-group
-# Replace @changeme-group with your GitLab username or group.
-
-* @changeme-group
-
-# Deployment surface — worth a closer look on every change.
-/kubernetes/  @changeme-group
-/.gitlab-ci.yml  @changeme-group

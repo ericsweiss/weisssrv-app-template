@@ -1,0 +1,18 @@
+# Cursor rules
+
+**Before making any change, read and follow
+`.claude/skills/project-development/SKILL.md`** — the authoritative workflow for
+this repo (also enforced by `.cursor/rules/project-development.mdc`,
+`alwaysApply: true`). [CLAUDE.md](CLAUDE.md) carries the standing rules and the
+doc index; it is the canonical agent doc.
+
+The rules that must hold in every change, restated here because they are the
+ones that cost real damage:
+
+- NEVER commit secrets — reference them from `ExternalSecret` manifests.
+- NEVER push to `main` — branch → {{ change_request }}, always.
+- NEVER `kubectl apply` / `helm upgrade` to deploy — Flux owns Kubernetes state;
+  preview with `kustomize build kubernetes/flux`, deploy by merging.
+- Containers stay non-root with a read-only root filesystem; no `latest` tags.
+- Stay within this repo's single namespace.
+- Run `task lint` before opening a {{ change_request }}.

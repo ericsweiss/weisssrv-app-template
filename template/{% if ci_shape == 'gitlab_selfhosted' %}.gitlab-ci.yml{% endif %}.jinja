@@ -1,0 +1,188 @@
+---
+# CI for {{ app_slug }} — a tenant repo Flux reconciles into namespace
+# {{ app_namespace }}. The pipeline never deploys; it gates.
+#
+# The generic lint / validate / security jobs are NOT defined here — they are
+# pulled from the shared library `{{ lib_project }}` at a pinned release tag, so
+# a tooling change is made once in the library and every consumer picks it up by
+# bumping the ref. Each template's inputs:
+# https://{{ git_host }}/{{ lib_project }}/-/blob/main/docs/INCLUDE-CONTRACT.md
+#
+# Runner: every job is TAG-LESS (`tags: []`) so it lands on the shared,
+# NON-privileged tenant runner — internet egress only, no LAN/tailnet, no SSH,
+# no Docker-in-Docker.
+{%- if enable_image_build %} The ONE exception is the image build, which
+# needs a privileged runner and is tagged `{{ privileged_runner_tag }}`.
+{%- endif %}
+# Deploys go through Flux, never a CI `kubectl apply`.
+#
+# Bumping the library: change `variables.WEISSSRV_LIB_REF`, run
+# `scripts/check-lib-pins.py --fix` to sync the literal `include: ref:` entries,
+# and re-vendor scripts/{% raw %}{check-lib-pins,check-doc-links,semantic-release}{% endraw %}.py
+# from the new tag in the same merge request. `lib-pin-check` enforces the pins.
+#
+# `release` is LAST on purpose: the semantic-release job sets no `needs:`, so
+# stage ordering is what gates the tag on every job above it having passed.
+stages:
+{%- if enable_image_build %}
+  - build
+{%- endif %}
+  - lint
+  - security
+  - ai-review
+  - release
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    # No `$CI_COMMIT_TAG` clause: no job below runs on a tag pipeline, so the
+    # clause could only ever ask GitLab for a pipeline with zero jobs.
+
+variables:
+  # Single source for the library pin. `include:` cannot read it (GitLab
+  # resolves includes before variables exist), so scripts/check-lib-pins.py
+  # keeps the literal `ref:` entries in step.
+  WEISSSRV_LIB_REF: "{{ lib_ref }}"
+
+include:
+  # -- yaml-lint: lint the whole tree against the repo-local .yamllint --------
+  - project: {{ lib_project }}
+    ref: {{ lib_ref }}
+    file: /ci/lint/yaml-lint.yml
+    inputs:
+      tags: []
+      config: "-c .yamllint"
+      targets: "."
+      changes:
+        - "**/*.yaml"
+        - "**/*.yml"
+        - ".yamllint"
+
+  # -- flux-lint: kustomize build + kubeconform (SIMPLE mode) ----------------
+  # substitute: false — a tenant pins literal image tags, so there is no
+  # cluster-versions ConfigMap and nothing to envsubst. The TOOL versions are
+  # library-owned; k8s_version is the cluster's Kubernetes minor, a per-consumer
+  # fact, so it is pinned here (and in Taskfile.yml, from the same answer).
+  - project: {{ lib_project }}
+    ref: {{ lib_ref }}
+    file: /ci/validate/flux-lint.yml
+    inputs:
+      tags: []
+      substitute: false
+      k8s_version: "{{ k8s_version }}"
+      changes:
+        - "kubernetes/**/*"
+
+  # -- python-lint: ruff over the vendored library helpers -------------------
+  # No `config:` input — ruff discovers the vendored ./ruff.toml, which is the
+  # same file `task python-lint` resolves, so both report identical findings.
+  - project: {{ lib_project }}
+    ref: {{ lib_ref }}
+    file: /ci/lint/python-lint.yml
+    inputs:
+      tags: []
+      targets: "scripts"
+      changes:
+        - "**/*.py"
+        - "ruff.toml"
+        - ".gitlab-ci.yml"
+
+  # -- docs-link-check: relative Markdown cross-links resolve -----------------
+  # The image is a deliberate interpreter bump, not a capability fix: the
+  # library already defaults to the FULL python:3.11, which carries the `git`
+  # the tracked-Markdown scan shells out to. Drop the override to take the
+  # library's Python. The checker does not degrade without git — it raises
+  # inside a checkout — so a missing binary is a red job, never a silent pass.
+  - project: {{ lib_project }}
+    ref: {{ lib_ref }}
+    file: /ci/lint/docs-link-check.yml
+    inputs:
+      tags: []
+      image: python:3.13
+      changes:
+        - "**/*.md"
+        - "scripts/check-doc-links.py"
+
+  # -- secret-detection: GitLab Secret Detection (gitleaks) ------------------
+  # Findings FAIL the job at the pinned ref, which is what makes this a merge
+  # block. Tuned by .gitleaks.toml via .gitlab/secret-detection-ruleset.toml.
+  # `tags: []` moves it off the privileged runner the nested GitLab-managed
+  # template would otherwise land on.
+  - project: {{ lib_project }}
+    ref: {{ lib_ref }}
+    file: /ci/security/secret-detection.yml
+    inputs:
+      tags: []
+{%- if enable_image_build %}
+
+  # -- build-image: build THIS service's container image ---------------------
+  # Builds the repo-root Dockerfile and pushes $CI_REGISTRY_IMAGE:<short-sha>
+  # (+ :latest on main); point deployment.yaml's `image:` at that tag. The ONE
+  # job needing a PRIVILEGED runner (Docker-in-Docker), hence the
+  # `{{ privileged_runner_tag }}` tag — retag it to your own.
+  - project: {{ lib_project }}
+    ref: {{ lib_ref }}
+    file: /ci/build/docker-build.yml
+    inputs:
+      tags: ["{{ privileged_runner_tag }}"]
+      dockerfile: "Dockerfile"
+{%- if ci_cpu_selector %}
+      # The runner validates this override against a
+      # `<node-label-domain>/cpu=(modern|legacy)` allowlist, so the library's
+      # empty default is rejected. Drop it if your runner has no such rule.
+      cpu_selector: "{{ ci_cpu_selector }}"
+{%- endif %}
+{%- endif %}
+
+  # -- semantic-release: tag + Release from the conventional commits ----------
+  # Merging to main reads the conventional commits since the last tag, decides
+  # the bump, and creates the tag AND the Release in one API call. Nothing
+  # releasable means no tag and a green pipeline. Runs the vendored, stdlib-only
+  # scripts/semantic-release.py. major_on_zero stays false: while the tag is 0.x
+  # a `feat!:` bumps MINOR.
+  - project: {{ lib_project }}
+    ref: {{ lib_ref }}
+    file: /ci/release/semantic-release.yml
+    inputs:
+      tags: []
+
+  # -- pr-agent AI review: optional, never blocks, BYO keys -------------------
+  # The job is CREATED only when both masked CI/CD variables are set, so a fork
+  # merge request has no AI review by design. Do NOT override
+  # openai_key/gitlab_token: the library already defaults them to $OPENAI__KEY /
+  # $GITLAB__PERSONAL_ACCESS_TOKEN, and a renamed variable means the job is
+  # never created and the pipeline goes green with no review.
+  - project: {{ lib_project }}
+    ref: {{ lib_ref }}
+    file: /ci/review/pr-agent.yml
+    inputs:
+      tags: []
+      gitlab_url: "https://{{ git_host }}"
+      gate: "$OPENAI__KEY && $GITLAB__PERSONAL_ACCESS_TOKEN"
+      needs:
+        - job: yaml-lint
+          optional: true
+        - job: flux-lint
+          optional: true
+        - job: secret_detection
+          optional: true
+
+# The library-pin gate: every include above must pin exactly
+# variables.WEISSSRV_LIB_REF, as a release tag.
+lib-pin-check:
+  stage: lint
+  image: python:3.13-slim
+  tags: []
+  needs: []
+  variables:
+    PYYAML_VERSION: "6.0.2"
+  script:
+    - pip install --quiet --no-cache-dir "pyyaml==$PYYAML_VERSION"
+    - python3 scripts/check-lib-pins.py --project {{ lib_project }}
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - ".gitlab-ci.yml"
+        - "scripts/check-lib-pins.py"
+    - if: '$CI_COMMIT_BRANCH == "main"'

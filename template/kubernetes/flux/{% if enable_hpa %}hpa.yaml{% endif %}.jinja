@@ -1,0 +1,27 @@
+---
+# Horizontal Pod Autoscaler on CPU. It owns the replica count, so
+# deployment.yaml ships none and vpa.yaml is memory-only. `minReplicas: 2`
+# keeps pdb.yaml (`minAvailable: 1`) satisfiable.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ app_slug }}
+  labels:
+    app.kubernetes.io/name: {{ app_slug }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ app_slug }}
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300

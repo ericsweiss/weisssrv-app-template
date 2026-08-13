@@ -1,0 +1,36 @@
+---
+# Vertical Pod Autoscaler. `updateMode: Initial` right-sizes the pod on its
+# natural restarts without evicting a running one — the safe default for a
+# stateless web app. Tune min/maxAllowed to the app's real footprint.
+#
+# A stateful/DB workload wants `updateMode: "Off"` (recommend-only, applied by
+# hand) so the VPA never evicts a pod holding open storage.
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ app_slug }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ app_slug }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: "*"
+        minAllowed:
+          cpu: 25m
+          memory: 64Mi
+        maxAllowed:
+          cpu: 1
+          memory: 512Mi
+        controlledResources:
+{%- if enable_hpa %}
+          # Memory only: hpa.yaml drives CPU, and two autoscalers on one
+          # resource fight.
+          - memory
+{%- else %}
+          - cpu
+          - memory
+{%- endif %}

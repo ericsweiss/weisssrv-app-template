@@ -1,0 +1,17 @@
+---
+# Certificate for the internal hostname. `{{ app_slug }}.{{ internal_domain }}`
+# resolves only on the LAN/tailnet, but cert-manager validates over public
+# DNS-01, so issuance works even though the name is internal.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ app_slug }}-tls-internal
+spec:
+  secretName: {{ app_slug }}-{{ internal_domain.split('.')[0] }}-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  commonName: {{ app_slug }}.{{ internal_domain }}
+  dnsNames:
+    - {{ app_slug }}.{{ internal_domain }}
+  renewBefore: 720h

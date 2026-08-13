@@ -1,0 +1,19 @@
+---
+# PodDisruptionBudget. Keeps at least one replica up during voluntary
+# disruptions (node-reboot drains, evictions): with more than one replica and
+# the soft podAntiAffinity that spreads them, `minAvailable: 1` stops both pods
+# being drained at once.
+#
+# Rendered only when the app has room for it — at a single replica
+# `minAvailable: 1` blocks every voluntary eviction and a node can never drain.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ app_slug }}
+  labels:
+    app.kubernetes.io/name: {{ app_slug }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ app_slug }}

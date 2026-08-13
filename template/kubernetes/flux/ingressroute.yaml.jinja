@@ -1,0 +1,39 @@
+---
+# Public route: {{ app_slug }}.{{ external_domain }}.
+#
+# external-dns watches IngressRoutes cluster-wide and, seeing the target
+# annotation below, creates the public DNS record automatically — no operator
+# action for a public hostname. The middlewares live in the platform `traefik`
+# namespace; cross-namespace references are enabled cluster-side
+# (`allowCrossNamespace: true`).
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ app_slug }}
+  annotations:
+    external-dns.alpha.kubernetes.io/target: {{ external_domain }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`{{ app_slug }}.{{ external_domain }}`)
+      kind: Rule
+      middlewares:
+        - name: hsts-header
+          namespace: traefik
+{%- if enable_sso %}
+        # Authentik forward-auth. The middleware alone authenticates nothing:
+        # the operator must create a proxy provider whose `external_host` is
+        # EXACTLY this route's hostname, an application, a group and a policy
+        # binding, and add the provider to the embedded outpost. A provider
+        # missing from the outpost answers every request with a 404 from the
+        # outpost; an `external_host` on the other split-horizon hostname breaks
+        # the redirect instead of erroring. See docs/ONBOARDING.md step O8.
+        - name: authentik-auth
+          namespace: authentik
+{%- endif %}
+      services:
+        - name: {{ app_slug }}
+          port: {{ app_port }}
+  tls:
+    secretName: {{ app_slug }}-{{ external_domain.split('.')[0] }}-tls

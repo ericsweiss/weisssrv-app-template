@@ -1,0 +1,21 @@
+---
+# The platform Prometheus discovers ServiceMonitors in EVERY namespace, so this
+# is picked up automatically. Adjust `port` (the named Service port) and `path`
+# to the app's real metrics endpoint — a ServiceMonitor pointed at an endpoint
+# that 404s scrapes `up == 0` and trips the platform's TargetDown alert in the
+# OPERATOR's Alertmanager. networkpolicy.yaml's scrape allow is rendered with
+# this file and must name the same port.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ app_slug }}
+  labels:
+    app.kubernetes.io/name: {{ app_slug }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ app_slug }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

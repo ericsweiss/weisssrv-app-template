@@ -1,0 +1,49 @@
+---
+# Down/stale alerts. The platform Prometheus discovers PrometheusRules in every
+# namespace, so these fire without any operator action. They read kube-state
+# metrics (always present), so they work even before the app exposes /metrics.
+#
+# Matches the platform rule style: a `homelab.<domain>` group name, CamelCase
+# alert names, and the for/severity/runbook_url shape. BOTH expressions pin
+# `namespace`: tenant rules are evaluated cluster-wide (Prometheus enforces no
+# namespace label on them), so without it AppDown fires on any namespace's
+# like-named Deployment — and absent() returns nothing the moment ANY namespace
+# has one, which would silently disarm AppAbsent for good.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ app_slug }}
+  labels:
+    app.kubernetes.io/name: {{ app_slug }}
+spec:
+  groups:
+    - name: homelab.{{ app_slug }}
+      rules:
+        # No ready replica for 10m — the app is serving nothing.
+        - alert: AppDown
+          expr: kube_deployment_status_replicas_available{namespace="{{ app_namespace }}", deployment="{{ app_slug }}"} < 1
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            runbook_url: '{{ runbook_url }}'
+            summary: '{{ app_slug }} has no available replicas'
+            description: >-
+              Deployment {{ app_slug }} has had zero available replicas for 10m
+              in namespace {% raw %}{{ $labels.namespace }}{% endraw %}.
+        # Metric absent for 15m — the Deployment was deleted, never created, or
+        # kube-state-metrics cannot see it (pruned by Flux unexpectedly).
+        - alert: AppAbsent
+          expr: absent(kube_deployment_status_replicas_available{namespace="{{ app_namespace }}", deployment="{{ app_slug }}"})
+          for: 15m
+          labels:
+            severity: warning
+            # absent() drops every label, so the alert carries no namespace of
+            # its own; pin it here as well as in the selector.
+            namespace: {{ app_namespace }}
+          annotations:
+            runbook_url: '{{ runbook_url }}'
+            summary: '{{ app_slug }} deployment metric is absent'
+            description: >-
+              No kube-state metric for Deployment {{ app_slug }} for 15m — it
+              may have been pruned or never reconciled.

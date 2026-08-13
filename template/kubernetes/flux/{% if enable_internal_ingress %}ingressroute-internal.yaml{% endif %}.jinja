@@ -1,0 +1,35 @@
+---
+# Internal route: {{ app_slug }}.{{ internal_domain }} (LAN + tailnet only).
+#
+# `lan-tailscale-only` restricts the source to the LAN, the tailnet and the pod
+# CIDR. The internal hostname is NOT auto-provisioned — external-dns manages the
+# external zone only — so the operator adds an internal DNS record
+# ({{ app_slug }}.{{ internal_domain }} -> {{ internal_vip }}); see
+# docs/ONBOARDING.md step O5.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ app_slug }}-internal
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`{{ app_slug }}.{{ internal_domain }}`)
+      kind: Rule
+      middlewares:
+        - name: lan-tailscale-only
+          namespace: traefik
+        - name: hsts-header
+          namespace: traefik
+{%- if enable_sso %}
+        # No forward-auth here on purpose, even with SSO on: a proxy provider
+        # pins ONE `external_host`, and the public route already claims it.
+        # Gating this hostname too means a SECOND provider (and outpost entry)
+        # for {{ app_slug }}.{{ internal_domain }} — add the middleware once the
+        # operator has created it.
+{%- endif %}
+      services:
+        - name: {{ app_slug }}
+          port: {{ app_port }}
+  tls:
+    secretName: {{ app_slug }}-{{ internal_domain.split('.')[0] }}-tls

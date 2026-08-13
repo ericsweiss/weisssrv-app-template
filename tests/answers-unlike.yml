@@ -1,0 +1,62 @@
+---
+# The CONTRAST fixture. answers-weisssrv-shaped.yml answers with the REFERENCE
+# CLUSTER's own values, which makes it blind to a whole class of defect: a value
+# hardcoded from that cluster renders byte-identical to a correct substitution,
+# so no assertion on that render alone can tell them apart.
+#
+# Every answer here is therefore deliberately UNLIKE its counterpart — different
+# domains, registry, VIP, namespace, port, forge — and every optional component
+# is OFF, which is the other half of the coverage (the `{% if not %}` branches
+# and the "component absent" paths the shaped fixture never takes).
+# test_render_b_carries_no_fixture_a_values asserts that nothing from fixture A
+# survives into this render.
+#
+# Every question in copier.yml must have an entry here too, including the ones
+# this fixture's own answers make copier skip.
+app_slug: tidepool
+# Deliberately NOT equal to app_slug: every manifest names one or the other, and
+# a fixture where they coincide cannot prove which one a given line used.
+app_namespace: tidepool-svc
+app_port: 9443
+replica_count: 1
+copyright_holder: Brinemoor Seaworks Cooperative
+
+external_domain: brinemoor.test
+internal_domain: internal.brinemoor.example
+node_label_domain: internal.brinemoor.example
+internal_vip: 10.77.4.8
+registry_host: harbor.brinemoor.test
+registry_pull_host: harbor.internal.brinemoor.example
+runbook_url: https://forge.brinemoor.test/seaworks/tidepool/-/blob/main/RUNBOOK.md
+
+# The GitHub shape, with no image build: the two conditional-path branches the
+# shaped fixture never renders.
+ci_shape: github
+# Computed from ci_shape (`when: false`); the value here is ignored, and the
+# render is what proves the GitHub shape says "pull request" throughout.
+change_request: pull request
+enable_image_build: false
+git_host: forge.brinemoor.test
+git_namespace: seaworks
+# Never asked here (both are gated on the GitLab shape plus an image build), but
+# answered anyway so the fixture covers the whole question set — and answered
+# UNLIKE fixture A's, like every other value in this file.
+privileged_runner_tag: tidal-privileged
+ci_cpu_selector: internal.brinemoor.example/cpu=modern
+k8s_version: "1.33.0"
+
+secrets_backend: gitlab
+# Never asked (the 1Password backend is not selected); answered for the same
+# reason as above.
+onepassword_vault: Saltworks
+secret_item: Ledger Keys
+
+enable_servicemonitor: false
+enable_internal_ingress: false
+enable_hpa: false
+enable_registry_pull_secret: false
+enable_sso: false
+
+# Never asked (the library is only included by the GitLab shape).
+lib_ref: v0.7.2
+lib_project: eric/weisssrv-lib

@@ -1,0 +1,23 @@
+---
+description: Always follow the app-template development rules.
+globs:
+alwaysApply: true
+---
+
+# Template development
+
+Before making any change in this repo, read and follow `CLAUDE.md` — the
+authoritative rules for the copier template that generates weisssrv tenant
+repositories. `docs/ARCHITECTURE.md` is the map of how the template is put
+together.
+
+The rules that must hold in every change:
+
+- Nothing here deploys; a change reaches every generated repo through
+  `copier update`.
+- Never hardcode site identity under `template/` — domains, registry hosts, node
+  labels, VIPs and runner tags are answers, and the contrast fixture will catch
+  a literal that slipped in.
+- Never edit a vendored library copy; fix it upstream and re-vendor.
+- `copier.yml` is API: renaming or removing a question is a breaking change.
+- Run `python3 -m pytest tests` before opening a merge request.

@@ -1,0 +1,130 @@
+# Architecture — how this app rides the platform
+
+This repo contributes **one namespace** of workloads to a shared k3s cluster.
+The platform (Traefik, cert-manager, external-dns, External Secrets Operator,
+Prometheus/Loki, MetalLB) is shared; this repo supplies the app and its
+per-namespace custom resources. Flux reconciles `kubernetes/flux/` into
+`{{ app_namespace }}`.
+
+## Request path
+
+```mermaid
+flowchart LR
+  user(["User"]) -->|"{{ app_slug }}.{{ external_domain }}"| edge["Public DNS + edge"]
+  edge --> lb["MetalLB VIP"]
+  lb --> traefik["Traefik IngressRoute<br/>+ hsts-header{% if enable_sso %}<br/>+ authentik-auth{% endif %}"]
+  traefik --> svc["Service :{{ app_port }}"]
+  svc --> pod["App pod<br/>non-root, read-only rootfs"]
+```
+
+- **Public** `{{ app_slug }}.{{ external_domain }}`: the `IngressRoute` carries
+  `external-dns.alpha.kubernetes.io/target: {{ external_domain }}`, so
+  external-dns creates the record automatically. No operator action.
+{%- if enable_internal_ingress %}
+- **Internal** `{{ app_slug }}.{{ internal_domain }}`: reached only on the
+  LAN/tailnet via the `lan-tailscale-only` middleware. The internal name is
+  **not** auto-provisioned — the operator adds the record (ONBOARDING step O5).
+{%- else %}
+- **Internal**: not published. `enable_internal_ingress` renders a second
+  IngressRoute and its Certificate, plus one operator DNS step.
+{%- endif %}
+- **TLS**: a per-host `Certificate` (ClusterIssuer `letsencrypt-prod`, DNS-01)
+  issues a Secret into this namespace, and Traefik terminates from it. Per-host
+  rather than wildcard: Let's Encrypt caps duplicate certificates at 5 per week
+  and the platform already issues the shared wildcards.
+- **Middlewares** live in the platform `traefik` namespace and are referenced
+  cross-namespace; the cluster enables `allowCrossNamespace`.
+
+## Secret flow
+{% if secrets_backend == 'none' %}
+This app declares no secrets. When it grows one, the shape is: an
+`ExternalSecret` in this repo referencing the operator-owned
+`ClusterSecretStore`, which pulls the value into a Kubernetes Secret that the
+Deployment binds with `secretKeyRef`. Values never enter git.
+{%- else %}
+```mermaid
+flowchart LR
+  backend["{{ 'Vault items, prefixed with the slug' if secrets_backend == 'onepassword' else 'GitLab CI/CD variables' }}"]
+  backend --> css["ClusterSecretStore<br/>{{ secrets_backend }}-{{ app_slug }}<br/>(operator-owned, namespace-scoped)"]
+  css --> es["ExternalSecret<br/>(this repo)"]
+  es --> sec[("Kubernetes Secret")]
+  sec -->|secretKeyRef| pod["App pod"]
+```
+
+- Secret **values** never enter git. This repo holds only the `ExternalSecret`.
+- The store is scoped to `{{ app_namespace }}` with `spec.conditions` — without
+  it a `ClusterSecretStore` is readable from every namespace in the cluster.
+{%- if secrets_backend == 'onepassword' %}
+- Items are prefixed with the slug in the shared vault
+  (`remoteRef.key: "{{ app_slug }}: <Item>"`), which isolates them from other
+  tenants' items.
+{%- endif %}
+- Keys are hyphenated, so the Deployment binds each one with `secretKeyRef`; an
+  `envFrom: secretRef` would silently skip them (hyphens are not valid env-var
+  names).
+{%- endif %}
+
+## Storage & scheduling
+
+The app is **stateless** as generated, and soft-avoids the storage node
+(`{{ node_label_domain }}/nas`). Persistent, zvol-backed data is an
+operator-assisted step: the operator provisions the volume and a matching PV,
+and the pod is pinned to the storage node with a required hostname affinity plus
+a toleration for `{{ node_label_domain }}/nas=true:PreferNoSchedule`. NFS-backed
+volumes mount **by hostname** (a wildcard certificate carries no IP SAN, so an
+IP mount fails the TLS handshake). See ONBOARDING step O6 — the details are
+cluster-specific and this template ships no PVC.
+
+## Autoscaling & resilience
+
+{% if enable_hpa -%}
+- **HPA** owns the replica count on CPU (`minReplicas: 2`), so the Deployment
+  ships no `replicas:` and the **VPA** is memory-only — two autoscalers on one
+  resource fight.
+{%- else -%}
+- **VPA** (`updateMode: Initial`) right-sizes the pod on natural restarts,
+  without evicting a running one. Set `updateMode: "Off"` for a stateful
+  workload.
+- Replicas are fixed at {{ replica_count }}.
+{%- endif %}
+{% if replica_count > 1 or enable_hpa -%}
+- **PDB** (`minAvailable: 1`) keeps a replica up across coordinated node-reboot
+  drains.
+{%- else -%}
+- **No PDB**: at a single replica `minAvailable: 1` blocks every voluntary
+  eviction, and a node could then never drain.
+{%- endif %}
+
+## Observability
+
+{% if enable_servicemonitor -%}
+- **Metrics**: the `ServiceMonitor` is discovered cluster-wide by the platform
+  Prometheus, and `networkpolicy.yaml` allows the scrape from the
+  `observability` namespace on the same port.
+{%- else -%}
+- **Metrics**: not scraped. `enable_servicemonitor` renders the ServiceMonitor
+  and the matching scrape NetworkPolicy together, once the app has a real
+  `/metrics`.
+{%- endif %}
+- **Alerts**: the `PrometheusRule` is likewise discovered cluster-wide. Both
+  expressions pin `namespace` and `deployment`, because tenant rules evaluate
+  across the whole cluster.
+- **Reachability**: those alerts read kube-state metrics, so they cover replica
+  availability, not end-to-end HTTP/TLS. A broken route, certificate or DNS
+  record does not fire them while the pod stays ready — that is an operator-added
+  blackbox target (ONBOARDING step O7).
+- **Logs**: container stdout/stderr ships to Loki via the platform's log agent.
+  Nothing to configure.
+
+## What the operator owns vs. what you own
+
+| Operator (cluster repo) | You (this repo) |
+|---|---|
+| The `Namespace` and its PSA labels | Everything under `kubernetes/flux/` |
+| The `GitRepository` + `Kustomization` wiring | Workload, Service, routing CRs |
+{%- if secrets_backend != 'none' %}
+| The `ClusterSecretStore` + bootstrap secret | The `ExternalSecret` reference |
+{%- endif %}
+| Internal DNS records | Public routing (external-dns) |
+| Platform middlewares, ClusterIssuer, VIPs | The per-host `Certificate` |
+| Volume provisioning | PVC references, if any |

@@ -1,19 +1,17 @@
 # Cursor rules
 
-This is a weisssrv cluster tenant repo. **Before making any change, read and
-follow `.claude/skills/project-development/SKILL.md`** — the authoritative
-workflow for this repo (also enforced by `.cursor/rules/project-development.mdc`,
-`alwaysApply: true`). See [CLAUDE.md](CLAUDE.md) for the standing rules and the
-doc index; it is the canonical agent doc.
+This is the **weisssrv-app-template** copier template — it generates tenant
+repositories, it does not deploy anything. Read [CLAUDE.md](CLAUDE.md) before
+making any change; it is the canonical agent doc (also enforced by
+`.cursor/rules/template-development.mdc`, `alwaysApply: true`).
 
-The rules that must hold in every change, restated here because they are the
-ones that cost real damage:
+The rules that must hold in every change:
 
-- NEVER commit secrets — use `ExternalSecret` manifests referencing 1Password or
-  GitLab CI/CD variables.
+- NEVER commit secrets, in the template or in a fixture.
 - NEVER push to `main` — branch → merge request, always.
-- NEVER `kubectl apply` / `helm upgrade` to deploy — Flux owns Kubernetes state;
-  preview with `kustomize build kubernetes/flux`, deploy by merging.
-- Containers stay non-root with a read-only root filesystem; no `latest` tags.
-- Run `task lint` before opening a merge request.
-- Stay within your single namespace.
+- NEVER hardcode site identity (domains, registry hosts, node labels, VIPs,
+  runner tags) under `template/` — they are copier answers.
+- NEVER edit a vendored library copy; fix it in weisssrv-lib and re-vendor.
+- Adding a component means the manifest, its conditional path, its
+  `kustomization.yaml` line, and a render assertion.
+- Run `python3 -m pytest tests` before opening a merge request.

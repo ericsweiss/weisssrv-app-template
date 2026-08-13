@@ -1,0 +1,105 @@
+---
+version: "3"
+
+# Small task runner for local development against the cluster.
+# `task --list` shows everything. Cluster-touching tasks need a kubeconfig on
+# KUBECONFIG (the operator provides one); they are read-only except
+# `flux:reconcile`, which only pokes the reconciler.
+
+vars:
+  APP: {{ app_slug }}
+  NAMESPACE: {{ app_namespace }}
+  KUSTOMIZATION: {{ app_slug }}
+  # The cluster's Kubernetes minor, for kubeconform.
+  K8S_VERSION: "{{ k8s_version }}"
+  CRD_CATALOG: 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{% raw %}{{`{{.Group}}`}}/{{`{{.ResourceKind}}`}}_{{`{{.ResourceAPIVersion}}`}}{% endraw %}.json'
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  lint:
+    desc: Run every local gate.
+    cmds:
+      - task: yaml-lint
+      - task: flux-lint
+      - task: python-lint
+      - task: doc-links
+{%- if ci_shape == 'gitlab_selfhosted' %}
+      - task: lib-pins
+{%- endif %}
+
+  yaml-lint:
+    desc: Lint YAML with the shared .yamllint config.
+    cmds:
+      - yamllint -c .yamllint .
+
+  flux-lint:
+    desc: kustomize build + kubeconform over the manifests Flux reconciles.
+    # pipefail: without it only kubeconform's status counts, and a FAILED
+    # `kustomize build` hands it empty stdin — which it accepts, exiting 0.
+{%- if ci_shape == 'none' %}
+    # This repo ships no pipeline, so this task is the whole manifest gate: a
+    # broken kustomization would otherwise reach the cluster reporting green.
+{%- else %}
+    # The pipeline runs the same two commands, so a green run here is the same
+    # answer CI gives.
+{%- endif %}
+    set: [pipefail]
+    cmds:
+      - >-
+        kustomize build kubernetes/flux |
+        kubeconform -strict -ignore-missing-schemas
+        -kubernetes-version {% raw %}{{.K8S_VERSION}}{% endraw %}
+        -schema-location default
+        -schema-location '{% raw %}{{.CRD_CATALOG}}{% endraw %}'
+        -summary
+
+  python-lint:
+    desc: Lint the repo's Python with ruff, using the vendored ./ruff.toml.
+    # ruff resolves ./ruff.toml itself, so no --config.
+    cmds:
+      - ruff check --no-cache --output-format concise scripts
+
+  doc-links:
+    desc: Resolve every relative Markdown cross-link (vendored, stdlib-only).
+    cmds:
+      - python3 scripts/check-doc-links.py
+{%- if ci_shape == 'gitlab_selfhosted' %}
+
+  lib-pins:
+    desc: "Every include ref matches variables.WEISSSRV_LIB_REF (needs pyyaml)."
+    cmds:
+      - python3 scripts/check-lib-pins.py --project {{ lib_project }}
+{%- endif %}
+
+  render:
+    desc: Print the rendered manifests kustomize will hand to Flux.
+    cmds:
+      - kustomize build kubernetes/flux
+{%- if enable_image_build %}
+
+  build:
+    desc: Build the container image locally.
+    cmds:
+      - docker build -t {% raw %}{{.APP}}{% endraw %}:dev .
+{%- endif %}
+
+  flux:status:
+    desc: Show the Kustomization's reconcile state (read-only; needs KUBECONFIG).
+    cmds:
+      - flux get kustomization {% raw %}{{.KUSTOMIZATION}}{% endraw %}
+
+  flux:reconcile:
+    desc: Force an immediate reconcile of the Kustomization (needs KUBECONFIG).
+    cmds:
+      - flux reconcile kustomization {% raw %}{{.KUSTOMIZATION}}{% endraw %} --with-source
+{%- if secrets_backend != 'none' %}
+
+  secrets:check:
+    desc: Check ExternalSecret sync status in the namespace (needs KUBECONFIG).
+    cmds:
+      - kubectl get externalsecret -n {% raw %}{{.NAMESPACE}}{% endraw %}
+{%- endif %}

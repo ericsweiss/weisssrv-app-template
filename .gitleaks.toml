@@ -1,15 +1,15 @@
-# gitleaks allowlist for a weisssrv tenant repo.
+# gitleaks allowlist for this template repository.
 #
 # Consumed by GitLab's secret_detection job (gitleaks under the hood) via the
-# passthrough in `.gitlab/secret-detection-ruleset.toml`, and by the local
-# pre-commit gitleaks hook.
+# passthrough in `.gitlab/secret-detection-ruleset.toml`. The copy under
+# template/ is the one a generated repo gets.
 #
 # `useDefault = true` is REQUIRED — without it gitleaks loads only the rules in
 # this file (none), disabling all detection. The allowlist below only silences
 # obvious non-secrets (1Password references, doc placeholders, anchored
 # test/fake fixtures); every real detector still runs.
 
-title = "tenant allowlist"
+title = "template allowlist"
 
 [extend]
 useDefault = true

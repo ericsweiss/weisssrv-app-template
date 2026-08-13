@@ -1,0 +1,55 @@
+---
+# Answer fixture A: the reference cluster's shape, with every optional component
+# ON. Those branches — HPA, internal route, metrics, pull credential, SSO — are
+# the ones a defaults-only render never reaches, and each of them also changes a
+# file the DEFAULT render ships (the Deployment loses `replicas:`, the VPA loses
+# CPU, the NetworkPolicy gains a scrape rule).
+#
+# Every question in copier.yml must have an entry: `copier copy --defaults`
+# would otherwise fall back to a default, and a question that gains one later
+# would silently stop being exercised.
+#
+# The values here are the reference cluster's, deliberately: they are the shape
+# a real tenant of it answers. They are no longer copier defaults — site
+# identity has none — so every one of them is supplied explicitly below, and
+# answers-unlike.yml is what proves they are substituted rather than hardcoded.
+app_slug: recipe-box
+app_namespace: recipe-box
+app_port: 8080
+replica_count: 2
+copyright_holder: Eric S. Weiss
+
+external_domain: ericsweiss.com
+internal_domain: esweiss.com
+node_label_domain: esweiss.com
+internal_vip: 192.168.0.101
+registry_host: registry.git.ericsweiss.com
+registry_pull_host: registry.git.esweiss.com
+runbook_url: https://git.ericsweiss.com/eric/weisssrv/-/blob/main/docs/29-flux-operations.md
+
+ci_shape: gitlab_selfhosted
+# Computed from ci_shape (`when: false`), so copier ignores the value here and
+# recomputes it; answered anyway because every question must appear.
+change_request: merge request
+enable_image_build: true
+git_host: git.ericsweiss.com
+git_namespace: eric
+privileged_runner_tag: infrastructure
+ci_cpu_selector: esweiss.com/cpu=modern
+k8s_version: "1.36.0"
+
+secrets_backend: onepassword
+onepassword_vault: Homelab
+secret_item: App Secrets
+
+enable_servicemonitor: true
+enable_internal_ingress: true
+enable_hpa: true
+enable_registry_pull_secret: true
+enable_sso: true
+
+# A RELEASE TAG, matching copier.yml's default: a fixture pinned to a branch
+# would exercise CI includes at a ref no real tenant gets, and break outright
+# the moment the branch is deleted.
+lib_ref: v0.7.2
+lib_project: eric/weisssrv-lib

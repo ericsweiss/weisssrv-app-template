@@ -1,0 +1,39 @@
+---
+# Tenant workload aggregate. Flux reconciles THIS directory (the cluster-side
+# wiring Kustomization sets `path: ./kubernetes/flux`).
+#
+# No `namespace:` is set here on purpose: the cluster-side Flux Kustomization
+# supplies `targetNamespace: {{ app_namespace }}`, and the operator owns the
+# Namespace object with its Pod Security Admission labels (docs/ONBOARDING.md).
+#
+# The resource list is what the template rendered. To add a component, add its
+# manifest and its line here; nothing is commented out and nothing inert ships.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+{%- if secrets_backend != 'none' %}
+  - externalsecret.yaml
+{%- endif %}
+{%- if secrets_backend != 'none' and enable_registry_pull_secret %}
+  - externalsecret-registry.yaml
+{%- endif %}
+  - certificate.yaml
+  - ingressroute.yaml
+{%- if enable_internal_ingress %}
+  - certificate-internal.yaml
+  - ingressroute-internal.yaml
+{%- endif %}
+  - networkpolicy.yaml
+{%- if enable_servicemonitor %}
+  - servicemonitor.yaml
+{%- endif %}
+  - prometheusrule.yaml
+  - vpa.yaml
+{%- if enable_hpa %}
+  - hpa.yaml
+{%- endif %}
+{%- if replica_count > 1 or enable_hpa %}
+  - pdb.yaml
+{%- endif %}

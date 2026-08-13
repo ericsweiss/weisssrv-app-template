@@ -1,0 +1,41 @@
+# Keep the build context small: exclude VCS, the deploy/CI surface, docs and
+# agent config. Add your build outputs as your app grows, and keep your
+# application source.
+.git/
+.gitignore
+.gitattributes
+
+# Deploy + CI surface (never needed inside the image).
+kubernetes/
+.gitlab/
+.gitlab-ci.yml
+.github/
+Taskfile.yml
+.yamllint
+.pre-commit-config.yaml
+.gitleaks.toml
+.editorconfig
+ruff.toml
+.copier-answers.yml
+
+# Docs + agent/editor guidance.
+docs/
+*.md
+.claude/
+.cursor/
+.cursorrules
+LICENSE
+CODEOWNERS
+
+# Tooling scripts (the vendored library helpers).
+scripts/
+
+# Common local build artifacts and tool caches.
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+node_modules/
+dist/
+target/

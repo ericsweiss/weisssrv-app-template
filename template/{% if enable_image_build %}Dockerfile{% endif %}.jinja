@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1
+# PLACEHOLDER service image — replace it with your application's real build.
+# Two invariants a replacement must keep, because deployment.yaml depends on
+# them: run NON-ROOT as UID 65532, and need no writes to the root filesystem
+# (`readOnlyRootFilesystem: true`).
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN printf '%s\n' \
+    '<!doctype html>' \
+    '<title>{{ app_slug }}</title>' \
+    '<h1>{{ app_slug }}</h1>' \
+    '<p>Placeholder image. Replace the Dockerfile with your app build.</p>' \
+    > /app/index.html
+
+USER 65532:65532
+
+# deployment.yaml's containerPort and probe paths.
+EXPOSE {{ app_port }}
+
+CMD ["python", "-m", "http.server", "{{ app_port }}", "--directory", "/app"]

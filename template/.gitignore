@@ -1,0 +1,35 @@
+# Secrets / local env — never commit these.
+.env
+.env.*
+*.env
+.tmp/
+
+# Kubeconfigs (bring your own; never commit)
+kubeconfig
+*.kubeconfig
+.kube/
+
+# Build output — anchored to the repo root so a `build/` inside the app source
+# tree is still tracked.
+/dist/
+/build/
+node_modules/
+target/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Agent tooling — keep the shared config, drop the per-machine overrides.
+.claude/settings.local.json
+
+# Editor / OS cruft
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

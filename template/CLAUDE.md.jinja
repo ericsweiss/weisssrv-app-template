@@ -1,0 +1,59 @@
+# CLAUDE.md
+
+> **Before making any change in this repo, invoke the `project-development`
+> skill** (`.claude/skills/project-development/SKILL.md`) and follow it.
+
+Guidance for Claude Code (and other agents) working in **{{ app_slug }}**, a
+tenant service of a shared k3s cluster.
+
+## What this repo is
+
+One service, deployed by **Flux**. Everything under `kubernetes/flux/` is
+reconciled into the `{{ app_namespace }}` namespace on merge to `main`; there is
+no `kubectl apply` / `helm upgrade` in the normal workflow.
+
+CI shape is **`{{ ci_shape }}`**{% if ci_shape == 'gitlab_selfhosted' %}: every job in `.gitlab-ci.yml` is included from
+`{{ lib_project }}` at a pinned tag. Do not re-inline one; change behaviour by
+bumping the `ref:` or adjusting the `inputs:`{% elif ci_shape == 'github' %}: `.github/workflows/` is a vendored copy of
+the shared library's workflows. Keep it byte-identical to the library and
+re-vendor on a bump — do not hand-edit a job{% else %}: there is no pipeline. `task lint` and the
+pre-commit hooks are the whole gate{% endif %}.
+
+The repo was generated from a copier template and records its answers in
+`.copier-answers.yml`. Structural changes — enabling an HPA, an internal route,
+metrics — are `copier update` with the answer flipped, not hand-assembly.
+
+## Hard rules
+
+- **Never push to `main`.** Every change ships via a branch +
+  {{ change_request }}, even one-liners.
+- **Never `kubectl apply` / `helm upgrade` to deploy.** Flux reverts drift.
+  Preview with `kustomize build kubernetes/flux`; deploy by merging.
+- **Never commit secrets.**
+{%- if secrets_backend == 'none' %}
+  This repo has no secret backend; if it grows one, it holds an `ExternalSecret`
+  reference and never a value.
+{%- else %}
+  Values live in the `{{ secrets_backend }}` backend; this repo holds only the
+  `ExternalSecret` referencing it.
+{%- endif %}
+- **Stay in namespace `{{ app_namespace }}`.** The Flux service account is
+  RBAC-scoped to it; a manifest targeting another namespace fails to apply.
+- **No `latest`/floating image tags, no privileged or root containers.** The
+  namespace enforces Pod Security Admission `baseline` and warns on
+  `restricted`: keep `runAsNonRoot`, dropped capabilities and a read-only root
+  filesystem.
+- **Register every new manifest** in `kubernetes/flux/kustomization.yaml`.
+- **Run `task lint` before opening a {{ change_request }}.**
+
+## Where things are documented
+
+Do not restate platform detail here; follow the pointer.
+
+| Question | Read |
+|---|---|
+| How the app rides the platform (routing, secrets, scaling, observability) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
+| The operator wiring this repo depends on | [`docs/ONBOARDING.md`](docs/ONBOARDING.md) |
+| What a release means, and the library pin | [`docs/VERSIONING.md`](docs/VERSIONING.md) |
+| The local loop and Flux debugging | `.claude/skills/project-development/SKILL.md` |
+| Multi-repo onboarding, Flux day-2 operations, runner limits | the CLUSTER repo's own docs — authoritative, and the only place they are maintained. Every alert this repo raises links [the Flux operations page]({{ runbook_url }}). |
