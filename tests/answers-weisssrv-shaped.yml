@@ -51,5 +51,5 @@ enable_sso: true
 # A RELEASE TAG, matching copier.yml's default: a fixture pinned to a branch
 # would exercise CI includes at a ref no real tenant gets, and break outright
 # the moment the branch is deleted.
-lib_ref: v0.7.3
+lib_ref: v0.7.4
 lib_project: eric/weisssrv-lib

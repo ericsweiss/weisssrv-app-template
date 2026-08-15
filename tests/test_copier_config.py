@@ -224,7 +224,7 @@ def test_onepassword_vault_rejects_names_the_store_cannot_carry(vault, rejected)
     assert bool(message) is rejected, message or "accepted, but should not be"
 
 
-@pytest.mark.parametrize("ref,rejected", [("v0.7.3", False), ("main", True), ("0.6.2", True)])
+@pytest.mark.parametrize("ref,rejected", [("v0.7.4", False), ("main", True), ("0.6.2", True)])
 def test_lib_ref_takes_release_tags_only(ref, rejected):
     assert bool(_validator_message("lib_ref", lib_ref=ref)) is rejected
 

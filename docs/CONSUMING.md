@@ -101,7 +101,7 @@ component is wired and a disabled one leaves nothing behind. There is no
 
 | Answer | Default | What it drives |
 |---|---|---|
-| `lib_ref` | `v0.7.3` | The tag every `include:` pins. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
+| `lib_ref` | `v0.7.4` | The tag every `include:` pins. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
 | `lib_project` | `eric/weisssrv-lib` | The library's project path. `include: project:` resolves instance-locally, so the library must live on the same GitLab as the repo. |
 
 ---
