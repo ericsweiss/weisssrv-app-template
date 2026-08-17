@@ -25,6 +25,7 @@ shape `github` does not.
 | yamllint | `yaml-lint` (library template) | `yaml-lint` job | `task yaml-lint` |
 | `kustomize build` + kubeconform | `flux-lint` (library template) | `flux-lint` job | `task flux-lint` |
 | ruff | `python-lint` (library template) | `python-lint` job | `task python-lint` |
+| shellcheck | n/a — no GitLab counterpart; a tenant with shell scripts adds the library's `shellcheck` template | `shellcheck` job, skipped when the repo has no `.sh` files | n/a |
 | Markdown link check | `docs-link-check` (library template) | `docs-link-check` job | `task doc-links` |
 | Secret scanning | GitLab Secret Detection (gitleaks under the hood), findings block | gitleaks directly, same `.gitleaks.toml`, findings block | pre-commit gitleaks hook |
 | Library pin gate | `lib-pin-check`, plus `task lib-pins` locally | n/a — no includes to pin | n/a |

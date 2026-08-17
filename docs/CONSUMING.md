@@ -57,9 +57,9 @@ is an example, not a value you can accept by pressing enter.
 | `external_domain` | — | The public hostname and the external-dns target annotation. |
 | `internal_domain` | — | The LAN/tailnet hostname. Must differ from `external_domain` **including its first label** — the two TLS Secrets are named after that label, and a collision puts two Certificates on one Secret. |
 | `node_label_domain` | `{{ internal_domain }}` | Node-label prefix (`<prefix>/nas`, `<prefix>/cpu`) for the scheduling affinity and the build's CPU selector. |
-| `internal_vip` | — | The address the operator points the internal hostname at. Documentation only; nothing dials it. |
-| `registry_host` | `registry.git.{{ external_domain }}` | Registry in the Deployment's `image:`. |
-| `registry_pull_host` | `registry.git.{{ internal_domain }}` | The name **nodes** pull from. Set it equal to `registry_host` when there is only one. Both are keyed into the pull credential: the kubelet matches a pull secret against the literal host in the image reference. |
+| `internal_vip` | — | The address the operator points the internal hostname at. Documentation only; nothing dials it — which is why it is asked further down, with `enable_internal_ingress`, and skipped entirely when that is off. |
+| `registry_host` | `registry.git.{{ external_domain }}` (or `ghcr.io`) | Registry in the Deployment's `image:`. |
+| `registry_pull_host` | `registry.git.{{ internal_domain }}` (or `ghcr.io`) | The name **nodes** pull from. Set it equal to `registry_host` when there is only one. Both are keyed into the pull credential: the kubelet matches a pull secret against the literal host in the image reference. |
 | `runbook_url` | — | The `runbook_url` annotation on every generated alert. Point it at the cluster repo's Flux day-2 operations page; a guessed one is a 404 delivered at 3am. |
 
 ### Forge and CI
@@ -72,7 +72,7 @@ is an example, not a value you can accept by pressing enter.
 | `git_host` | `git.{{ external_domain }}` (or `github.com`) | The forge this repo lives on: the library include host, the AI-review URL, the repo URL in the operator's wiring. |
 | `git_namespace` | — | The group/user path that owns the repo. Also the middle segment of the image path. |
 | `privileged_runner_tag` | `infrastructure` | Runner tag for the one job that needs a privileged runner (the image build); asked only for the GitLab shape with a build. |
-| `ci_cpu_selector` | `{{ node_label_domain }}/cpu=modern` | Node selector pinning that build to a modern CPU. Must satisfy the runner's `node_selector_overwrite_allowed` regex and name a label some node carries. |
+| `ci_cpu_selector` | `{{ node_label_domain }}/cpu=modern` | Node selector pinning the CPU-sensitive jobs — secret detection always, the image build when it exists — to a modern CPU. Asked for the whole GitLab shape, because the library defaults it to its own cluster's label domain and a selector no node carries leaves the job Pending. Required, and must match the runner's `node_selector_overwrite_allowed` regex `^[a-z0-9.-]+/cpu=(modern\|legacy)$`: the pipeline always passes the input, and an empty value fails that regex at pod creation rather than skipping the pin. |
 | `k8s_version` | `1.36.0` | The Kubernetes minor kubeconform validates against, in the pipeline and `Taskfile.yml`. |
 
 ### Secrets
@@ -82,6 +82,7 @@ is an example, not a value you can accept by pressing enter.
 | `secrets_backend` | `onepassword` | `onepassword`, `gitlab` or `none`. Chooses the ExternalSecret's store and `remoteRef` shape, and whether the Deployment gets a secret `env` block at all. Must match what the operator provisions. |
 | `onepassword_vault` | — | 1Password only: the vault the operator's `ClusterSecretStore` reads and the scoped Connect token is issued against. A store naming a vault that does not exist is accepted by the API server and then fails every fetch. |
 | `secret_item` | `App Secrets` | 1Password only: the item title, which renders as the prefixed `"<slug>: <item>"`. |
+| `gitlab_api_url` | `https://{{ git_host }}` | GitLab only: the instance holding the CI/CD variables. Separate from `git_host` because the variables need not live on the forge the code does — and because `ci_shape: github` defaults `git_host` to github.com, which is not a GitLab instance. The ESO provider's own default is `https://gitlab.com`, so the store always names it explicitly. |
 
 ### Optional components
 
@@ -94,7 +95,7 @@ component is wired and a disabled one leaves nothing behind. There is no
 | `enable_servicemonitor` | `false` | The ServiceMonitor and the matching scrape NetworkPolicy. **Off by default**: a ServiceMonitor pointed at an endpoint that does not exist yet scrapes `up == 0` and raises TargetDown in the *operator's* Alertmanager. Turn it on with the change that adds `/metrics`. |
 | `enable_internal_ingress` | `false` | The internal IngressRoute **and** its Certificate, together — one without the other serves from a TLS Secret that never exists. Needs one operator DNS step. |
 | `enable_hpa` | `false` | The HPA; the Deployment then ships no `replicas:` and the VPA becomes memory-only, so the two autoscalers never both drive CPU. |
-| `enable_registry_pull_secret` | `false` | The `dockerconfigjson` ExternalSecret **and** the pod's `imagePullSecrets:` entry. |
+| `enable_registry_pull_secret` | `{{ enable_image_build and secrets_backend != 'none' }}` | The `dockerconfigjson` ExternalSecret **and** the pod's `imagePullSecrets:` entry. Defaulted on for the combination that needs it — both forges publish privately by default (a GitLab project registry; a GHCR package, whose visibility does not follow the source repo's), so a repo that builds its own image cannot be pulled without it. No `ci_shape` term: nothing in the rendered chain is forge-shaped — the ExternalSecret keys on `registry_host`/`registry_pull_host` (both `ghcr.io` under the GitHub shape, deduplicated to one `auths` entry) and reads a username+token pair, which is what `docker login ghcr.io` takes. The backend term is not redundant with the `when:` that skips the question under `secrets_backend: none`: a skipped question still takes its default, and a `true` recorded there is a component no render site will produce. |
 | `enable_sso` | `false` | The Authentik forward-auth middleware on the public route. The middleware alone authenticates nothing — the operator's provider/application/outpost objects are what enforce it. |
 
 ### Library pin (GitLab shape only)
@@ -111,7 +112,7 @@ component is wired and a disabled one leaves nothing behind. There is no
 ```
 kubernetes/flux/     # everything Flux reconciles into the namespace
 docs/                # ONBOARDING (the operator's wiring, rendered), ARCHITECTURE, VERSIONING
-scripts/             # vendored library helpers (doc links, release, pin gate)
+scripts/             # vendored library helpers — see below; which ones ship depends on ci_shape
 Taskfile.yml         # the local gates and read-only cluster checks
 .copier-answers.yml  # the answers, replayed by `copier update`
 ```
@@ -138,8 +139,16 @@ Nothing stops you — it is your repository. Two things to know:
 `scripts/check-doc-links.py`, `scripts/check-lib-pins.py` and
 `scripts/semantic-release.py` are **byte-identical copies** of
 [`eric/weisssrv-lib`](https://git.ericsweiss.com/eric/weisssrv-lib)'s
-stdlib-only tools, in both this template and the repos it generates: the
-library's job templates run them from those paths, so the copy is what executes.
+stdlib-only tools: the library's job templates run them from those paths, so the
+copy is what executes. All three live here under `template/scripts/`; a
+generated repo gets only the ones its shape runs —
+
+| `ci_shape` | Ships |
+|---|---|
+| `gitlab_selfhosted` | all three |
+| `github` | `check-doc-links.py`, `semantic-release.py` (the pin gate has no includes to gate) |
+| `none` | `check-doc-links.py` only (`task doc-links` runs it with no pipeline at all) |
+
 The library owns the copy relationship in `scripts/vendored-paths.yml` and its
 `check-vendored-copies.py` gates it — fix a bug upstream and re-vendor, never in
 the copy, which the next re-vendor reverts.

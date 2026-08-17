@@ -2,14 +2,6 @@
 # CI for the template itself. The generic jobs come from the shared library, so
 # the template is linted by the same tooling it hands to a generated repo.
 #
-# The gate that matters is `render-validate`: it renders this template with BOTH
-# answer fixtures — the reference-shaped one and the deliberately unlike
-# contrast one — and runs the REAL toolchain over each output: yamllint,
-# kustomize + kubeconform, ruff, the doc-link checker and the generated repo's
-# own library-pin gate. A template change that produces an invalid repo fails
-# here rather than in someone's cluster, and a value copied from the reference
-# cluster fails on the contrast render rather than passing both.
-#
 # Every job is TAG-LESS and non-root safe (pip --user, workspace-local tool
 # downloads), so they land on the shared runner.
 #
@@ -37,7 +29,7 @@ variables:
   # a literal and scripts/check-lib-pins.py (vendored from the library) fails
   # the pipeline if they drift from it or pin a branch. Bump here, then
   # `scripts/check-lib-pins.py --fix`.
-  WEISSSRV_LIB_REF: "v0.7.4"
+  WEISSSRV_LIB_REF: "v0.8.0"
   COPIER_VERSION: "9.17.0"
   PYYAML_VERSION: "6.0.2"
   YAMLLINT_VERSION: "1.38.0"
@@ -53,7 +45,7 @@ include:
   # until they are rendered. render-validate yamllints the rendered tree, which
   # is where template/ actually gets covered.
   - project: eric/weisssrv-lib
-    ref: v0.7.4
+    ref: v0.8.0
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
@@ -67,13 +59,17 @@ include:
         - ".gitlab-ci.yml"
 
   - project: eric/weisssrv-lib
-    ref: v0.7.4
+    ref: v0.8.0
     file: /ci/lint/python-lint.yml
     inputs:
       tags: []
       image: python:3.13-slim
-      # `scripts` is this repository's OWN vendored tooling; `template/scripts`
-      # is payload, linted here as well as in every repo it ships to.
+      # `scripts` is this repository's OWN vendored tooling. `template/scripts`
+      # is on the target list, but ruff's walk only classifies
+      # check-doc-links.py there: the other two carry a conditional Jinja path
+      # as their filename, so they do not end in `.py`. They are byte-identical
+      # vendored copies, linted in the library and again in every render, so
+      # the coverage is real — it just does not come from this job.
       targets: "scripts tests template/scripts"
       changes:
         - "scripts/**/*.py"
@@ -85,7 +81,7 @@ include:
   # copier.yml schema checks + the render invariants. Everything in the
   # repository feeds a render, hence the catch-all `changes`.
   - project: eric/weisssrv-lib
-    ref: v0.7.4
+    ref: v0.8.0
     file: /ci/test/python-tests.yml
     inputs:
       tags: []
@@ -101,7 +97,7 @@ include:
   # TRACKED *.md, so `template/**/*.md` is listed too — the forge templates there
   # are tracked Markdown, and an edit to one must not skip the gate.
   - project: eric/weisssrv-lib
-    ref: v0.7.4
+    ref: v0.8.0
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
@@ -114,13 +110,13 @@ include:
         - "scripts/check-doc-links.py"
 
   - project: eric/weisssrv-lib
-    ref: v0.7.4
+    ref: v0.8.0
     file: /ci/security/secret-detection.yml
     inputs:
       tags: []
 
   - project: eric/weisssrv-lib
-    ref: v0.7.4
+    ref: v0.8.0
     file: /ci/review/pr-agent.yml
     inputs:
       tags: []
@@ -143,7 +139,7 @@ include:
   # in .copier-answers.yml. Untagged, copier falls back to HEAD, so every update
   # pulls unreleased work; see docs/VERSIONING.md.
   - project: eric/weisssrv-lib
-    ref: v0.7.4
+    ref: v0.8.0
     file: /ci/release/semantic-release.yml
     inputs:
       tags: []
@@ -220,29 +216,32 @@ render-validate:
         "$LIB_CHECKOUT"
   script:
     # ONE render per invocation, so every branch that changes the file SET needs
-    # a line of its own. The shaped fixture has the reference cluster's shape,
-    # which makes it blind to a value hardcoded FROM that cluster — it renders
-    # identically to a correct substitution. The contrast render is different in
-    # every field, with every optional component off and a different CI shape.
-    # The third is the pipeline-less shape, whose content (the Taskfile's
-    # flux-lint branch, the absence of the release script from the ruff surface)
-    # no other render produces. The fourth is the backend-less secret surface —
-    # no ExternalSecret, no secret env block, no ClusterSecretStore in the
-    # operator's wiring file; the pull credential is overridden with it because
-    # it is an ExternalSecret too, and copier takes a skipped question's value
-    # from the data file rather than from its default. pytest's own toolchain
-    # gates skip in this image, so without these lines those trees are linted
-    # nowhere.
+    # a line of its own. pytest's own toolchain gates skip in this image, so
+    # without these lines those trees are linted nowhere.
     #
-    # --lib-path adds the vendored-copy gate: the workflows and scripts here are
-    # byte-identical to the library's, and the registry that says so is
-    # library-owned, so it is checked against a real checkout at the pinned tag.
-    # It reads THIS repository, not the render, so one invocation carries it.
+    # Reference-shaped fixture. --lib-path adds the two gates that read the
+    # library rather than the render: the vendored-copy registry, and the
+    # include contract (every passed input exists, every job's stage is
+    # declared).
     - python3 tests/validate_render.py --lib-path "$LIB_CHECKOUT"
+    # Contrast fixture: different in every field, every optional component off,
+    # a different CI shape. A value hardcoded from the reference cluster renders
+    # identically to a correct substitution under the shaped fixture, and fails
+    # here.
     - python3 tests/validate_render.py --answers tests/answers-unlike.yml
+    # The pipeline-less shape: the Taskfile's flux-lint branch and the absence
+    # of the release script from the ruff surface exist in no other render.
     - python3 tests/validate_render.py --data ci_shape=none
+    # No secret surface at all. The pull credential is overridden with it
+    # because it is an ExternalSecret too, and copier takes a skipped question's
+    # value from the data file rather than from its default.
+    #
+    # --lib-path again: this render keeps the GitLab shape, and the rule is that
+    # every invocation rendering a pipeline gets the include-contract gate — the
+    # two that do not (the contrast fixture and ci_shape=none) ship no pipeline
+    # for it to read.
     - >-
-      python3 tests/validate_render.py
+      python3 tests/validate_render.py --lib-path "$LIB_CHECKOUT"
       --data secrets_backend=none --data enable_registry_pull_secret=false
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'

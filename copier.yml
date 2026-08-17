@@ -47,9 +47,13 @@ _message_after_copy: |
     2. Replace the placeholder image tag in
        kubernetes/flux/deployment.yaml — the shipped `:REPLACE-ME` is a tag no
        registry has, so the first reconcile ImagePullBackOffs.
-       {%- if enable_image_build %}
+       {%- if enable_image_build and ci_shape != 'none' %}
        The CI build pushes `<repo>:<short-sha>`; that is the usual value.
        Replace the placeholder Dockerfile with your service's real build.
+       {%- elif enable_image_build %}
+       There is no pipeline in this shape: `task build` builds the image
+       locally and you push it yourself. Replace the placeholder Dockerfile
+       with your service's real build.
        {%- endif %}
     3. Hand your operator docs/ONBOARDING.md — the wiring file in it is
        rendered with this repo's slug, namespace and secret backend.
@@ -88,6 +92,14 @@ app_namespace:
     {% if not (app_namespace | regex_search('^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$')) %}
     app_namespace must be a DNS label: lowercase letters, digits and hyphens,
     starting with a letter and ending with a letter or digit.
+    {% elif (app_namespace | regex_search('^kube-')) or app_namespace in
+    ['default', 'flux-system', 'traefik', 'observability', 'authentik',
+    'external-secrets', 'cert-manager'] %}
+    app_namespace '{{ app_namespace }}' is a cluster or platform namespace, not
+    a tenant one. A Kustomization targeting it would apply this repo's
+    manifests into shared infrastructure — and the operator's tenant
+    ServiceAccount is scoped to the tenant namespace, so the failure is either
+    a permission denial or, worse, not one. Pick a name of your own.
     {% endif %}
 
 app_port:
@@ -191,17 +203,10 @@ node_label_domain:
     e.g. {{ internal_domain }}
     {% endif %}
 
-internal_vip:
-  type: str
-  help: >-
-    Address the operator points the internal hostname at (the cluster's
-    LAN-only ingress VIP). Recorded in docs/ONBOARDING.md's DNS step; nothing
-    in kubernetes/ dials it.
-  placeholder: "192.168.1.101"
-  validator: >-
-    {% if not (internal_vip | regex_search('^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$')) %}
-    internal_vip must be an IPv4 address, e.g. 192.168.0.101
-    {% endif %}
+# internal_vip belongs to this block by subject, but it is asked further down,
+# with enable_internal_ingress: it is the only cluster fact that renders
+# nowhere unless that component is on, and it has no default, so asking it up
+# here makes every tenant look up a VIP the default answers then discard.
 
 # Asked before the registry questions: their defaults derive from the
 # shape (a GitHub build publishes to ghcr.io, not a self-hosted GitLab
@@ -259,6 +264,9 @@ runbook_url:
   validator: >-
     {% if not (runbook_url | regex_search('^https?://[^\\s]+$')) %}
     runbook_url must be an http(s) URL.
+    {% elif "'" in runbook_url %}
+    runbook_url must not contain a single quote: it renders inside the
+    single-quoted YAML scalar `runbook_url: '<url>'` on every generated alert.
     {% endif %}
 
 # --------------------------------------------------------------------------
@@ -331,17 +339,26 @@ privileged_runner_tag:
 
 ci_cpu_selector:
   type: str
-  when: "{{ ci_shape == 'gitlab_selfhosted' and enable_image_build }}"
+  when: "{{ ci_shape == 'gitlab_selfhosted' }}"
   help: >-
-    Node selector (label=value) pinning the image build to a modern CPU. It must
+    Node selector (label=value) pinning the CPU-sensitive jobs — secret
+    detection always, the image build when it exists — to a modern CPU. It must
     satisfy the runner's node_selector_overwrite_allowed regex
     (`^[a-z0-9.-]+/cpu=(modern|legacy)$`) and name a label a node actually
-    carries; a selector no node carries leaves the job Pending forever. Clear it
-    only if your runner has no such rule.
+    carries; a selector no node carries leaves the job Pending forever. It is
+    REQUIRED: the pipeline always passes the input, because the library's own
+    default names the reference cluster's label domain — and an empty value is
+    not a no-pin escape either, it fails the runner's regex at pod creation. A
+    runner with no such rule ignores the value entirely.
   default: "{{ node_label_domain }}/cpu=modern"
+  # The runners' node_selector_overwrite_allowed, spelled exactly as
+  # weisssrv-cluster-template's matching question spells it: anything looser is
+  # accepted here and refused at pod creation, where the job sits Pending with
+  # nothing naming the answer as the cause. An empty answer fails it too.
   validator: >-
-    {% if ci_cpu_selector and not (ci_cpu_selector | regex_search('^[^\\s=]+=[^\\s=]+$')) %}
-    ci_cpu_selector must be a single label=value pair, e.g.
+    {% if not (ci_cpu_selector | regex_search('^[a-z0-9.-]+/cpu=(modern|legacy)$')) %}
+    ci_cpu_selector must match the runners' node_selector_overwrite_allowed
+    regex ^[a-z0-9.-]+/cpu=(modern|legacy)$, e.g.
     {{ node_label_domain }}/cpu=modern
     {% endif %}
 
@@ -413,6 +430,33 @@ secret_item:
     {% if not secret_item.strip() %}
     secret_item is required — it is the second half of the item title every
     remoteRef resolves against.
+    {% elif '"' in secret_item or '\\' in secret_item %}
+    secret_item must not contain a double quote or a backslash: it renders
+    inside the double-quoted YAML scalar `key: "<slug>: <item>"`, where either
+    character breaks the ExternalSecret.
+    {% endif %}
+
+gitlab_api_url:
+  type: str
+  when: "{{ secrets_backend == 'gitlab' }}"
+  help: >-
+    Base URL of the GitLab instance holding the CI/CD variables. It defaults to
+    the forge this repo lives on, which is right whenever they are the same
+    instance — but they need not be: `ci_shape: github` defaults git_host to
+    github.com, and a GitLab secret store pointed there fails every fetch. The
+    ESO provider's own default is https://gitlab.com, so this is never omitted.
+  default: "https://{{ git_host }}"
+  validator: >-
+    {% if gitlab_api_url | regex_search('^http://') %}
+    gitlab_api_url must use https: ESO sends the GitLab access token to this
+    URL, and plain http exposes that credential on the wire.
+    {% elif not (gitlab_api_url | regex_search('^https://[a-z0-9.-]+(:[0-9]{1,5})?/?$')) %}
+    gitlab_api_url must be an https base URL with no path, e.g.
+    https://gitlab.example.com
+    {% elif gitlab_api_url | regex_search('^https?://github\\.com') %}
+    gitlab_api_url points at github.com, which is not a GitLab instance. The
+    GitLab secrets backend reads CI/CD variables over the GitLab API; name the
+    GitLab instance that holds them, or choose a different secrets_backend.
     {% endif %}
 
 # --------------------------------------------------------------------------
@@ -442,6 +486,21 @@ enable_internal_ingress:
     never exists. Needs one operator step (an internal DNS record).
   default: false
 
+# The cluster fact that internal DNS record points at. Asked here rather than
+# in the cluster block above because it is used only when the component is on.
+internal_vip:
+  type: str
+  when: "{{ enable_internal_ingress }}"
+  help: >-
+    Address the operator points the internal hostname at (the cluster's
+    LAN-only ingress VIP). Recorded in docs/ONBOARDING.md's DNS step; nothing
+    in kubernetes/ dials it.
+  placeholder: "192.168.1.101"
+  validator: >-
+    {% if not (internal_vip | regex_search('^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$')) %}
+    internal_vip must be an IPv4 address, e.g. 192.168.0.101
+    {% endif %}
+
 enable_hpa:
   type: bool
   help: >-
@@ -455,14 +514,27 @@ enable_registry_pull_secret:
   when: "{{ secrets_backend != 'none' }}"
   help: >-
     Pull credential for a PRIVATE image registry, as an ExternalSecret rendering
-    a dockerconfigjson Secret plus the Deployment's imagePullSecrets. A GitLab
-    project registry is private by default, so a repo that builds its own image
-    there normally needs this; a public package or a public upstream image does
-    not. Asked only when a secrets_backend is set: the credential is an
-    ExternalSecret, so it needs a ClusterSecretStore to read from — under
-    `none` copier does not ask, and every render site is guarded on the
-    backend too, so a value forced in with `--data` renders nothing.
-  default: false
+    a dockerconfigjson Secret plus the Deployment's imagePullSecrets. Both
+    forges publish privately by default — a GitLab project registry, and a GHCR
+    package, whose visibility does NOT follow the source repo's — so a repo
+    that builds its own image normally needs this; a public package or a public
+    upstream image does not. Asked only when a secrets_backend is set: the
+    credential is an ExternalSecret, so it needs a ClusterSecretStore to read
+    from — under `none` copier does not ask, and every render site is guarded on
+    the backend too, so a value forced in with `--data` renders nothing.
+  # The backend term repeats `when:` because a skipped question still takes its
+  # default: without it a `none` tenant records `true` for a component every
+  # render site refuses to produce, and the skill's `none` guidance never shows.
+  #
+  # Deliberately NOT gated on the forge. Nothing in the rendered chain is
+  # GitLab-shaped: the ExternalSecret keys the credential on
+  # registry_host/registry_pull_host (both `ghcr.io` under the GitHub shape,
+  # deduplicated to one auths entry) and reads a username+token pair, which is
+  # exactly what `docker login ghcr.io` takes. A `ci_shape` term would default
+  # the credential OFF for a GitHub tenant whose package is private anyway, and
+  # their first reconcile would ImagePullBackOff with nothing in the render to
+  # point at.
+  default: "{{ enable_image_build and secrets_backend != 'none' }}"
 
 enable_sso:
   type: bool
@@ -486,7 +558,7 @@ lib_ref:
     RELEASE TAG (vX.Y.Z): the library's include contract is explicit that a
     branch is never a valid pin, and a branch deleted after merge takes every
     include with it.
-  default: "v0.7.4"
+  default: "v0.8.0"
   validator: >-
     {% if not (lib_ref | regex_search('^v\\d+\\.\\d+\\.\\d+$')) %}
     lib_ref must be a release TAG of the form vX.Y.Z (e.g. v1.2.3). The

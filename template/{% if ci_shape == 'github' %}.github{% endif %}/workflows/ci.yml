@@ -47,6 +47,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Every pin below is held equal to its GitLab-side counterpart by
+  # tests/test_pin_parity.py — the two CI shapes gate on identical tools, so
+  # bump both sides together.
   # Matches the weisssrv-lib yaml-lint template default.
   YAMLLINT_VERSION: "1.38.0"
   # Matches the weisssrv-lib flux-lint template defaults (version + sha256).

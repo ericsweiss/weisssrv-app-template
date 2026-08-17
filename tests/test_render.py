@@ -37,6 +37,27 @@ FLUX = "kubernetes/flux"
 # read_text() decodes is scanned; the decode error is the filter.
 BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".gz", ".pyc"}
 
+# The RFC-reserved and private IPv4 space the public-egress rule must except.
+# Declared once here and asserted against the render: it is the same set the
+# cluster repo's netpol-egress-public component carries and its parity gate
+# enforces, and that gate cannot reach a tenant repo.
+RESERVED_FULL = [
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "0.0.0.0/8",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "100.64.0.0/10",
+    "192.0.0.0/24",
+    "192.0.2.0/24",
+    "198.51.100.0/24",
+    "203.0.113.0/24",
+    "198.18.0.0/15",
+    "224.0.0.0/4",
+    "240.0.0.0/4",
+]
+
 
 @pytest.fixture(scope="session")
 def answers() -> dict:
@@ -95,6 +116,45 @@ def rendered_no_secrets(tmp_path_factory) -> Path:
         tmp_path_factory.mktemp("render-no-secrets"),
         dest_name="render-no-secrets",
         data={"secrets_backend": "none", "enable_registry_pull_secret": "false"},
+    )
+
+
+# The library project the gitlab-unlike render answers. It must differ from BOTH
+# fixtures: `eric/weisssrv-lib` is copier's default AND the answer in both files,
+# so an `include: project:` written as a literal renders correctly everywhere
+# else in this suite. It is also the one answer fixture B is allowed to share
+# with fixture A (test_the_two_fixtures_answer_differently), which is exactly
+# what leaves it unproven without this render.
+ALT_LIB_PROJECT = "seaworks/brinemoor-lib"
+
+# Fixture B, moved onto the GitLab shape with the image build on. Overriding
+# rather than adding a third answers FILE is the idiom the other derived renders
+# use, and it is what keeps every other value unlike fixture A's for free.
+GITLAB_UNLIKE_OVERRIDES = {
+    "ci_shape": "gitlab_selfhosted",
+    "enable_image_build": "true",
+    "lib_project": ALT_LIB_PROJECT,
+}
+
+
+@pytest.fixture(scope="session")
+def rendered_gitlab_unlike(tmp_path_factory, answers, answers_b) -> Path:
+    """The GitLab pipeline, rendered from answers unlike the reference cluster's.
+
+    The anti-hardcode scan runs against `rendered_b`, which is GitHub-shaped and
+    therefore ships no `.gitlab-ci.yml` at all — so every reference-cluster
+    literal in `.gitlab-ci.yml.jinja` (the runner tag, the k8s version, the CPU
+    selector, the library project) survives that scan untouched. This is the
+    render in which the pipeline exists AND none of its answers are fixture A's.
+    """
+    assert ALT_LIB_PROJECT not in {answers["lib_project"], answers_b["lib_project"]}, (
+        "ALT_LIB_PROJECT now coincides with a fixture answer — pick one neither uses"
+    )
+    return render_app.render(
+        tmp_path_factory.mktemp("render-gitlab-unlike"),
+        answers=render_app.ANSWERS_B,
+        dest_name="render-gitlab-unlike",
+        data=GITLAB_UNLIKE_OVERRIDES,
     )
 
 
@@ -160,6 +220,18 @@ RENDERS = {
         {"secrets_backend": "none", "enable_registry_pull_secret": False},
     ),
     "github-image": ("rendered_image_github", "answers_b", {"enable_image_build": True}),
+    # The GitLab shape from unlike answers. Copier takes `--data` as strings,
+    # so the booleans and the computed `change_request` are restated here as the
+    # values the render actually resolved.
+    "gitlab-unlike": (
+        "rendered_gitlab_unlike",
+        "answers_b",
+        {
+            **GITLAB_UNLIKE_OVERRIDES,
+            "enable_image_build": True,
+            "change_request": "merge request",
+        },
+    ),
 }
 
 
@@ -304,6 +376,87 @@ def test_render_b_carries_no_fixture_a_values(rendered_b, answers, answers_b):
     )
 
 
+# Everything the GitLab shape renders as pipeline configuration.
+PIPELINE_PATHS = (".gitlab-ci.yml", ".gitlab")
+
+
+def _pipeline_files(root: Path):
+    for name in PIPELINE_PATHS:
+        target = root / name
+        if target.is_file():
+            yield target, target.read_text()
+        elif target.is_dir():
+            yield from _text_files(target)
+
+
+# Answers the gitlab-unlike render CANNOT answer differently, so their agreement
+# with fixture A is not evidence of anything. `change_request` is computed from
+# ci_shape (`when: false`), and this render is on the GitLab shape by
+# construction; `ci_shape` is the override itself.
+PIPELINE_UNPROVABLE = ("ci_shape", "change_request")
+
+
+def test_the_pipeline_carries_no_fixture_a_values(
+    rendered_gitlab_unlike, answers, answers_b
+):
+    """The anti-hardcode gate, applied where it was blind.
+
+    `test_render_b_carries_no_fixture_a_values` cannot see `.gitlab-ci.yml.jinja`:
+    fixture B is GitHub-shaped and the conversion drops the pipeline entirely, so
+    a reference-cluster literal written into it — `eric/weisssrv-lib`,
+    `esweiss.com/cpu=modern`, the k8s version, the runner tag — renders no output
+    for that scan to catch, and every OTHER render answers those values exactly
+    as fixture A does. Here the pipeline exists and every answer is unlike.
+
+    Note what this render also un-exempts: `privileged_runner_tag` and
+    `k8s_version` are in CROSS_RENDER_EXEMPT because of collisions elsewhere in
+    the tree (a Flux Kustomization named `infrastructure`, the vendored GitHub
+    workflows). Neither collision exists inside the pipeline, so both are held
+    to the full standard here — which is the coverage those exemptions gave up.
+    """
+    effective = {**answers_b, **GITLAB_UNLIKE_OVERRIDES}
+    leaks = []
+    for key, value in answers.items():
+        if key in PIPELINE_UNPROVABLE or not isinstance(value, str) or len(value) < 4:
+            continue
+        if value == str(effective.get(key)):
+            continue
+        needle = re.compile(rf"(?<![A-Za-z0-9]){re.escape(value)}(?![A-Za-z0-9])")
+        for path, text in _pipeline_files(rendered_gitlab_unlike):
+            for lineno, line in enumerate(text.splitlines(), 1):
+                if needle.search(line):
+                    leaks.append(
+                        f"{path.relative_to(rendered_gitlab_unlike)}:{lineno} {key}={value}"
+                    )
+    assert not leaks, (
+        "fixture A's answers appear in a pipeline rendered from unlike answers — "
+        "those values are hardcoded in .gitlab-ci.yml.jinja, not substituted:\n  "
+        + "\n  ".join(sorted(set(leaks)))
+    )
+
+
+# The answers the pipeline is REQUIRED to carry. Without this the test above
+# passes on an empty pipeline: absence of the wrong value is not presence of the
+# right one, and the two together are what prove substitution.
+PIPELINE_ANSWERS = (
+    "app_slug",
+    "app_namespace",
+    "git_host",
+    "k8s_version",
+    "ci_cpu_selector",
+    "privileged_runner_tag",
+    "lib_project",
+    "lib_ref",
+)
+
+
+@pytest.mark.parametrize("key", PIPELINE_ANSWERS)
+def test_the_pipeline_names_the_answered_value(rendered_gitlab_unlike, answers_b, key):
+    value = str({**answers_b, **GITLAB_UNLIKE_OVERRIDES}[key])
+    text = "\n".join(text for _, text in _pipeline_files(rendered_gitlab_unlike))
+    assert value in text, f"the rendered pipeline never names {key}={value}"
+
+
 # Byte-identical library copies. They cannot take an answer by construction, and
 # the GitHub workflows deliberately narrate the GitLab job's behaviour — so
 # "merge request" there is a description of another forge, not an instruction.
@@ -428,6 +581,23 @@ def test_scrape_policy_ships_with_the_servicemonitor(repo):
     ]
 
 
+def test_public_egress_excepts_the_whole_reserved_set(repo):
+    """The except list is a standards constant, and the platform namespaces use
+    the same one. A short list is not a syntax error — it silently lets the app
+    reach loopback, cloud-metadata or the LAN, and no render gate but this one
+    would notice."""
+    policies = {d["metadata"]["name"]: d for d in _docs(repo.path) if d["kind"] == "NetworkPolicy"}
+    egress = policies["allow-egress-public"]["spec"]["egress"]
+    public = [
+        entry["ipBlock"]
+        for rule in egress
+        for entry in rule.get("to", [])
+        if "ipBlock" in entry and entry["ipBlock"]["cidr"] == "0.0.0.0/0"
+    ]
+    assert len(public) == 1, "exactly one rule may open 0.0.0.0/0"
+    assert sorted(public[0]["except"]) == sorted(RESERVED_FULL)
+
+
 def test_ports_agree_across_the_manifests(repo):
     port = repo.answers["app_port"]
     service = yaml.safe_load((repo.path / FLUX / "service.yaml").read_text())
@@ -544,7 +714,7 @@ def test_wiring_store_scopes_itself_to_the_tenant(repo):
     )
 
 
-def test_gitlab_wiring_store_names_the_tenants_own_forge(rendered_b, answers_b):
+def test_gitlab_wiring_store_names_the_answered_instance(rendered_b, answers_b):
     """Two ESO-GitLab-provider details a paste-ready file cannot get wrong.
 
     `url` is optional and DEFAULTS to https://gitlab.com, so omitting it sends a
@@ -552,9 +722,17 @@ def test_gitlab_wiring_store_names_the_tenants_own_forge(rendered_b, answers_b):
     the capitalised `SecretRef`, so a lower-cased key is pruned as unknown and
     the store is left with no credential at all. Both failures surface as an
     ExternalSecret that never syncs, pointing nowhere near this file.
+
+    The url comes from `gitlab_api_url`, NOT `git_host`: the CI/CD variables
+    need not live on the forge the code does, and under `ci_shape: github`
+    git_host is github.com, which is not a GitLab instance at all. The fixture
+    answers the two differently so a reintroduced git_host would fail here.
     """
     provider = _onboarding_store(rendered_b)["spec"]["provider"]["gitlab"]
-    assert provider["url"] == f"https://{answers_b['git_host']}"
+    assert provider["url"] == answers_b["gitlab_api_url"]
+    assert answers_b["gitlab_api_url"] != f"https://{answers_b['git_host']}", (
+        "the fixture must answer the two differently, or this gate proves nothing"
+    )
     assert "SecretRef" in provider["auth"], f"auth keys: {sorted(provider['auth'])}"
 
 
@@ -623,6 +801,26 @@ def test_the_image_build_answer_governs_both_shapes(repo):
         assert ("/ci/build/docker-build.yml" in ci) is builds
 
 
+# "CI build" is one spelling of the claim; `:<short-sha>` is the OTHER, and the
+# one a manifest comment reaches for. Both are gated on the shape everywhere
+# they appear, so either surviving into the pipeline-less render is the bug.
+_CI_BUILD_CLAIM = re.compile(r"\bCI builds?\b|<short-sha>")
+
+
+def test_the_pipeline_less_shape_promises_no_ci_build(rendered_none, answers):
+    """`ci_shape: none` with `enable_image_build: true` is reachable and close to
+    the default answer set. Every prose site that describes where the image tag
+    comes from is gated on the build answer, so without this gate they all tell
+    the tenant a pipeline they do not have pushes their image."""
+    assert answers["enable_image_build"], "fixture A must build an image for this to bite"
+    offenders = [
+        str(path.relative_to(rendered_none))
+        for path, text in _text_files(rendered_none)
+        if _CI_BUILD_CLAIM.search(text)
+    ]
+    assert not offenders, f"pipeline-less render claims a CI build in: {offenders}"
+
+
 def test_manifests_are_identical_across_ci_shapes(rendered, rendered_none):
     """Flux deploys the repo in every shape, so the shape must not reach
     kubernetes/. These two renders differ in ci_shape and nothing else, so any
@@ -656,6 +854,20 @@ def test_build_job_carries_the_privileged_tag(rendered, answers):
     assert len(build) == 1, "the image build must be included exactly once"
     assert build[0]["inputs"]["tags"] == [answers["privileged_runner_tag"]]
     assert build[0]["inputs"]["cpu_selector"] == answers["ci_cpu_selector"]
+
+
+def test_secret_detection_carries_the_cpu_selector(rendered, answers):
+    """gitleaks is pinned to a modern-CPU node by a selector the LIBRARY
+    defaults to its own cluster's label domain. Unoverridden, the scan is
+    unschedulable here and sits Pending until the job times out — and unlike the
+    image build, this job exists in every gitlab_selfhosted repo."""
+    ci = render_app.load_ci(rendered / ".gitlab-ci.yml")
+    scan = [
+        i for i in ci["include"]
+        if isinstance(i, dict) and str(i.get("file", "")).endswith("secret-detection.yml")
+    ]
+    assert len(scan) == 1, "secret detection must be included exactly once"
+    assert scan[0]["inputs"]["cpu_selector"] == answers["ci_cpu_selector"]
 
 
 def test_k8s_version_reaches_the_gitlab_shape(rendered, answers):
@@ -820,3 +1032,101 @@ def test_forced_pull_secret_under_no_backend_renders_nothing(tmp_path_factory):
     assert not (flux / "externalsecret-registry.yaml").exists()
     assert "externalsecret-registry" not in (flux / "kustomization.yaml").read_text()
     assert "imagePullSecrets" not in (flux / "deployment.yaml").read_text()
+
+
+@pytest.mark.parametrize(
+    "fixture, shape",
+    [
+        (render_app.ANSWERS, "gitlab_selfhosted"),
+        (render_app.ANSWERS_B, "github"),
+    ],
+    ids=["gitlab-shape", "github-shape"],
+)
+def test_unasked_pull_secret_defaults_on_with_a_backend_and_an_image_build(
+    tmp_path_factory, fixture, shape
+):
+    """The ON half of the same default, and the half that carries the risk.
+
+    Its sibling below proves the backend term. This proves the default RESOLVES
+    at all: a tenant who builds their own image is answering a question whose
+    default is computed, never typed, and a default that quietly resolved false
+    would ship a Deployment that cannot pull its own image — `ImagePullBackOff`
+    on first reconcile, with nothing in the render to point at.
+
+    BOTH shapes, because the default carries no `ci_shape` term and must not
+    grow one: a GHCR package is private by default too (its visibility does not
+    follow the source repo's), and nothing in the rendered chain is
+    forge-shaped — the ExternalSecret keys on the two registry hostnames and
+    reads a username+token pair, which is what `docker login ghcr.io` takes.
+    A forge term here would default the credential off for exactly the GitHub
+    tenant who needs it.
+
+    So the answer is REMOVED rather than set: a data file answers it either way,
+    and only its absence leaves the default to decide.
+    """
+    scratch = tmp_path_factory.mktemp(f"render-default-pull-on-{shape}")
+    answers = yaml.safe_load(fixture.read_text())
+    del answers["enable_registry_pull_secret"]
+    # The default's two terms, both present, so what is under test is the
+    # default and not one of them being absent. Fixture B answers
+    # enable_image_build false (it covers the no-build paths), so this arm
+    # turns it on — the shape is what the parametrization varies.
+    answers["enable_image_build"] = True
+    assert answers["ci_shape"] == shape
+    assert answers["secrets_backend"] != "none"
+    answers_file = scratch / "answers-default-pull-on.yml"
+    answers_file.write_text(yaml.safe_dump(answers))
+
+    repo = render_app.render(
+        scratch, answers=answers_file, dest_name=f"render-default-pull-on-{shape}"
+    )
+
+    flux = repo / FLUX
+    recorded = yaml.safe_load((repo / ".copier-answers.yml").read_text())
+    assert recorded["enable_registry_pull_secret"] is True, (
+        "the computed default is what a `copier update` replays; a false here "
+        "means the tenant's own answers file disagrees with their manifests"
+    )
+
+    external_secret = yaml.safe_load((flux / "externalsecret-registry.yaml").read_text())
+    assert external_secret["kind"] == "ExternalSecret"
+    assert external_secret["spec"]["target"]["template"]["type"] == "kubernetes.io/dockerconfigjson"
+    assert "externalsecret-registry.yaml" in _kustomization(repo)["resources"]
+
+    deployment = yaml.safe_load((flux / "deployment.yaml").read_text())
+    pull_secrets = [
+        s["name"] for s in deployment["spec"]["template"]["spec"]["imagePullSecrets"]
+    ]
+    assert pull_secrets == [external_secret["spec"]["target"]["name"]], (
+        "the Deployment must name the Secret this ExternalSecret renders — a "
+        "credential the pod never references is a Secret that syncs and does "
+        "nothing"
+    )
+
+
+def test_unasked_pull_secret_defaults_off_without_a_backend(tmp_path_factory):
+    """The interactive `none` shape, which no fixture can reach: copier skips
+    the question and computes its DEFAULT, and a data file — every fixture here
+    is one — answers it either way. So the answer is removed rather than
+    overridden, leaving the default to decide.
+
+    It must decide `false`. On `true` the skill's guidance for getting a pull
+    credential (gated on the answer being off) disappears, while every render
+    site stays backend-guarded — the tenant is told nothing and gets nothing."""
+    scratch = tmp_path_factory.mktemp("render-default-pull")
+    answers = yaml.safe_load(render_app.ANSWERS.read_text())
+    del answers["enable_registry_pull_secret"]
+    answers["secrets_backend"] = "none"
+    # The other term must be the one that turns it ON, or a missing backend
+    # term would pass here.
+    assert answers["enable_image_build"] is True
+    answers_file = scratch / "answers-default-pull.yml"
+    answers_file.write_text(yaml.safe_dump(answers))
+
+    repo = render_app.render(scratch, answers=answers_file, dest_name="render-default-pull")
+
+    flux = repo / FLUX
+    assert not (flux / "externalsecret-registry.yaml").exists()
+    assert "imagePullSecrets" not in (flux / "deployment.yaml").read_text()
+    skill = (repo / ".claude/skills/project-development/SKILL.md").read_text()
+    assert "That credential is an `ExternalSecret`, so it needs a `ClusterSecretStore`" in skill

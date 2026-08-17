@@ -114,6 +114,11 @@ include:
     file: /ci/security/secret-detection.yml
     inputs:
       tags: []
+      # gitleaks needs POPCNT/SSE4.2 and SIGILLs on older CPUs, so the job
+      # always emits a CPU node selector. The library's default names ITS
+      # cluster's label domain, which no node here carries, so the input is
+      # always passed — omitting it leaves the job Pending.
+      cpu_selector: "{{ ci_cpu_selector }}"
 {%- if enable_image_build %}
 
   # -- build-image: build THIS service's container image ---------------------
@@ -127,12 +132,11 @@ include:
     inputs:
       tags: ["{{ privileged_runner_tag }}"]
       dockerfile: "Dockerfile"
-{%- if ci_cpu_selector %}
-      # The runner validates this override against a
-      # `<node-label-domain>/cpu=(modern|legacy)` allowlist, so the library's
-      # empty default is rejected. Drop it if your runner has no such rule.
+      # Same story as secret-detection: the library's default names its own
+      # cluster's label domain. The runner validates the override against a
+      # `<node-label-domain>/cpu=(modern|legacy)` allowlist, so `""` is not a
+      # no-pin escape — a runner with no such rule ignores the value instead.
       cpu_selector: "{{ ci_cpu_selector }}"
-{%- endif %}
 {%- endif %}
 
   # -- semantic-release: tag + Release from the conventional commits ----------

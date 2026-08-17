@@ -75,6 +75,35 @@ volumes mount **by hostname** (a wildcard certificate carries no IP SAN, so an
 IP mount fails the TLS handshake). See ONBOARDING step O6 — the details are
 cluster-specific and this template ships no PVC.
 
+## Network policy
+
+`networkpolicy.yaml` denies all ingress and egress, then opens Traefik to the
+app port{% if enable_servicemonitor %}, Prometheus to the metrics port{% endif %}, cluster DNS, and public HTTPS. The public rule's
+`except:` list is the RFC-reserved and private IPv4 space — a standards
+constant, not this cluster's addressing — so the app cannot reach LAN, tailnet,
+loopback or cloud-metadata addresses.
+
+Anything else needs its own egress rule. Three worked examples:
+
+```yaml
+# Other pods in THIS namespace (a database or cache beside the app). The pod
+# and Service CIDRs sit inside the 10.0.0.0/8 except above, so same-namespace
+# traffic is denied until this rule exists.
+- to:
+    - podSelector: {}
+
+# SMTP relay (submission).
+- to: [{ipBlock: {cidr: <relay-ip>/32}}]
+  ports: [{protocol: TCP, port: 587}]
+
+# kube-apiserver. kube-proxy DNATs the in-cluster VIP before NetworkPolicy is
+# evaluated, so the SERVER NODE IPs are the allowlist — the ClusterIP never
+# matches.
+- to:
+    - {ipBlock: {cidr: <server-node-ip>/32}}
+  ports: [{protocol: TCP, port: 6443}]
+```
+
 ## Autoscaling & resilience
 
 {% if enable_hpa -%}

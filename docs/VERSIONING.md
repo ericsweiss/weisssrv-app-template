@@ -42,7 +42,7 @@ test suite.
 
 | Level | Meaning here |
 |---|---|
-| **MAJOR** | A generated repo cannot take the change by running `copier update` and reviewing the diff. A question renamed or removed; a rendered file moved or renamed; a default that alters live behaviour on unchanged answers — a changed namespace, a NetworkPolicy that starts denying traffic it allowed, a Deployment field that forces a restart. |
+| **MAJOR** | A generated repo cannot take the change by running `copier update` and reviewing the diff. A question renamed or removed; a rendered file moved or renamed; a validator tightened to refuse an answer a repo already recorded, which copier raises on before it renders anything; a default that alters live behaviour on unchanged answers — a changed namespace, a NetworkPolicy that starts denying traffic it allowed, a Deployment field that forces a restart. |
 | **MINOR** | New capability an existing repo can adopt or ignore. A new question with a default that reproduces today's render; a new optional component (default off); a new Taskfile task; a library `ref:` bump inside the library's own back-compatible range. |
 | **PATCH** | A fix that changes no path, no resource name and no resolved behaviour: a corrected probe path, a typo, docs, comments. |
 

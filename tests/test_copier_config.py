@@ -236,6 +236,179 @@ def test_k8s_version_must_be_full(version, rejected):
     assert bool(_validator_message("k8s_version", k8s_version=version)) is rejected
 
 
+# One accept and one reject per validator no test above exercises. All of these
+# questions carry a DEFAULT, so test_a_defaults_only_render_is_refused does not
+# reach them either — that render fails on the site-identity questions, which
+# have none. Without a case here the validator runs nowhere.
+#
+# `context` supplies only the answers the validator itself reads.
+VALIDATOR_CASES = [
+    ("app_namespace", "recipe-box", None, {}),
+    ("app_namespace", "Recipe_Box", "not a DNS label", {}),
+    (
+        "app_namespace",
+        "flux-system",
+        "a platform namespace: the tenant ServiceAccount is not scoped to it",
+        {},
+    ),
+    (
+        "app_namespace",
+        "kube-future-system",
+        "a platform namespace: the tenant ServiceAccount is not scoped to it",
+        {},
+    ),
+    ("replica_count", 2, None, {}),
+    ("replica_count", 0, "a Deployment scaled to zero serves nothing the route points at", {}),
+    ("git_host", "git.example.com", None, {}),
+    ("git_host", "https://git.example.com", "a scheme is not a hostname", {}),
+    ("privileged_runner_tag", "infrastructure", None, {}),
+    (
+        "privileged_runner_tag",
+        "   ",
+        "blank lands the build on the shared non-privileged runner, where DinD cannot start",
+        {},
+    ),
+    (
+        "ci_cpu_selector",
+        "lan.example.com/cpu=modern",
+        None,
+        {"node_label_domain": "lan.example.com"},
+    ),
+    (
+        "ci_cpu_selector",
+        "",
+        "the pipeline always passes the input, and an empty value fails the runner's "
+        "allowlist regex at pod creation rather than skipping the pin",
+        {"node_label_domain": "lan.example.com"},
+    ),
+    (
+        "ci_cpu_selector",
+        "zone=fast",
+        "the runner's node_selector_overwrite_allowed regex refuses it at pod creation",
+        {"node_label_domain": "lan.example.com"},
+    ),
+    (
+        "ci_cpu_selector",
+        "lan.example.com/cpu=fast",
+        "only modern and legacy are allowed values",
+        {"node_label_domain": "lan.example.com"},
+    ),
+    ("secret_item", "App Secrets", None, {}),
+    ("secret_item", "   ", "blank is half of the item title every remoteRef resolves", {}),
+    ('secret_item', 'App "Secrets"', "a double quote breaks the quoted YAML scalar", {}),
+    ("gitlab_api_url", "https://gitlab.example.com", None, {}),
+    ("gitlab_api_url", "http://gitlab.example.com", "must use https", {}),
+    ("gitlab_api_url", "https://gitlab.example.com/api/v4", "a path is not a base URL", {}),
+    (
+        "gitlab_api_url",
+        "https://github.com",
+        "github.com is not a GitLab instance, and the store reads the GitLab API",
+        {},
+    ),
+    ("lib_project", "eric/weisssrv-lib", None, {}),
+    ("lib_project", "weisssrv-lib", "no namespace segment", {}),
+    ("copyright_holder", "Homelab Operator", None, {}),
+    ("copyright_holder", "   ", "blank is the name the shipped LICENSE carries", {}),
+    ("external_domain", "example.com", None, {}),
+    (
+        "external_domain",
+        "Example.COM",
+        "the zone is spelled into Host() rules and certificate names, which are lowercase",
+        {},
+    ),
+    ("git_namespace", "homelab/apps", None, {}),
+    ("git_namespace", "/homelab", "a leading slash doubles the separator in every clone URL", {}),
+    ("internal_vip", "192.168.1.101", None, {}),
+    (
+        "internal_vip",
+        "vip.example.com",
+        "the internal route targets an address, and a name here renders an invalid Service",
+        {},
+    ),
+    ("node_label_domain", "lan.example.com", None, {"internal_domain": "lan.example.com"}),
+    (
+        "node_label_domain",
+        "lan",
+        "a label prefix is a domain: a single segment matches no node label the cluster sets",
+        {"internal_domain": "lan.example.com"},
+    ),
+    ("registry_host", "registry.git.example.com", None, {}),
+    ("registry_host", "ghcr.io", None, {}),
+    (
+        "registry_host",
+        "registry.git.example.com/group",
+        "the path belongs to the image reference, not the host the pipeline logs into",
+        {},
+    ),
+    ("registry_pull_host", "registry.git.lan.example.com", None, {}),
+    (
+        "registry_pull_host",
+        "https://registry.git.lan.example.com",
+        "a scheme is not a hostname — the pull reference is host/path:tag",
+        {},
+    ),
+    (
+        "runbook_url",
+        "https://git.example.com/homelab/cluster/-/blob/main/docs/flux-operations.md",
+        None,
+        {},
+    ),
+    ("runbook_url", "git.example.com/docs", "no scheme, so the alert annotation is not a link", {}),
+    (
+        "runbook_url",
+        "https://git.example.com/it's",
+        "a single quote closes the quoted YAML scalar it renders into on every alert",
+        {},
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "name,answer,why,context",
+    VALIDATOR_CASES,
+    ids=[f"{case[0]}-{case[1]}" for case in VALIDATOR_CASES],
+)
+def test_validator_accepts_and_rejects(name, answer, why, context):
+    message = _validator_message(name, **{name: answer}, **context)
+    if why is None:
+        assert not message, f"{name}={answer!r} was rejected: {message}"
+    else:
+        assert message, f"{name}={answer!r} was accepted — {why}"
+
+
+# Validators with a test of their own above, which the table deliberately does
+# not duplicate — the value is in the reasoning those tests carry, not in a
+# second accept/reject pair.
+DEDICATED_VALIDATOR_TESTS = {
+    "app_slug": "test_app_slug_must_be_a_dns_label",
+    "app_port": "test_app_port_rejects_ports_the_pod_cannot_bind",
+    "internal_domain": "test_internal_domain_rejects_a_colliding_pair",
+    "onepassword_vault": "test_onepassword_vault_rejects_names_the_store_cannot_carry",
+    "lib_ref": "test_lib_ref_takes_release_tags_only",
+    "k8s_version": "test_k8s_version_must_be_full",
+}
+
+
+def test_every_validator_is_exercised():
+    """A validator no test exercises is one a regression could widen to accept
+    everything with the suite still green. Most of these questions carry a
+    default, so `test_a_defaults_only_render_is_refused` never reaches them
+    either — without a case here they run nowhere."""
+    declared = {
+        name
+        for name, question in QUESTIONS.items()
+        if isinstance(question, dict) and "validator" in question
+    }
+    covered = {case[0] for case in VALIDATOR_CASES} | set(DEDICATED_VALIDATOR_TESTS)
+    assert not declared - covered, (
+        "copier.yml validators no test exercises: " + ", ".join(sorted(declared - covered))
+    )
+    assert not covered - declared, (
+        "these names are listed as covered but declare no validator: "
+        + ", ".join(sorted(covered - declared))
+    )
+
+
 def test_copier_pin_is_the_same_in_both_places_this_pipeline_installs_it():
     """`variables.COPIER_VERSION` and the `pip_packages:` literal must agree.
 

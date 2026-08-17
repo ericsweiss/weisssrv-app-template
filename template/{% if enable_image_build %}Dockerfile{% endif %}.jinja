@@ -3,6 +3,12 @@
 # Two invariants a replacement must keep, because deployment.yaml depends on
 # them: run NON-ROOT as UID 65532, and need no writes to the root filesystem
 # (`readOnlyRootFilesystem: true`).
+#
+# The base below floats on patch releases, which is fine for a placeholder that
+# builds a static page. A real build pins the base by digest
+# (`python:3.11-slim@sha256:...`) — the same no-floating-tags rule CLAUDE.md
+# states for the Deployment's image, and what the rest of this family does for
+# every downloaded artefact.
 FROM python:3.11-slim
 
 WORKDIR /app

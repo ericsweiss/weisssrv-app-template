@@ -61,7 +61,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-{{ app_slug }}
+  name: allow-egress-public
 spec:
   podSelector:
     matchLabels:
@@ -82,28 +82,40 @@ spec:
         - protocol: TCP
           port: 53
     - to:
+        # The except list is the RFC-reserved and private IPv4 space — a
+        # standards constant, not this cluster's addressing — and it is the same
+        # set the platform namespaces use. Keep it whole when you add rules.
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
+              # RFC1918 private LAN.
               - 10.0.0.0/8
               - 172.16.0.0/12
               - 192.168.0.0/16
-              - 100.64.0.0/10
+              # "This network" / unspecified (RFC 1122).
+              - 0.0.0.0/8
+              # Loopback (RFC 1122).
+              - 127.0.0.0/8
+              # Link-local (RFC 3927) — incl. 169.254.169.254 cloud-metadata.
               - 169.254.0.0/16
+              # Tailscale / CGNAT (RFC 6598) — same trust boundary as the LAN.
+              - 100.64.0.0/10
+              # IETF protocol assignments (RFC 6890).
+              - 192.0.0.0/24
+              # TEST-NET-1/2/3 documentation (RFC 5737).
+              - 192.0.2.0/24
+              - 198.51.100.0/24
+              - 203.0.113.0/24
+              # Benchmarking (RFC 2544).
+              - 198.18.0.0/15
+              # Multicast (RFC 5771) — HTTPS is unicast.
+              - 224.0.0.0/4
+              # Reserved / future use (RFC 1112) — incl. 255.255.255.255.
+              - 240.0.0.0/4
       ports:
         - protocol: TCP
           port: 443
-    # Other pods in THIS namespace (a database or cache you add beside the app).
-    # The pod and Service CIDRs sit inside the 10.0.0.0/8 except above, so
-    # same-namespace traffic is denied until its own rule exists.
-    # - to:
-    #     - podSelector: {}
-    # SMTP relay (submission) — uncomment if the app sends mail.
-    # - to: [{ipBlock: {cidr: <relay-ip>/32}}]
-    #   ports: [{protocol: TCP, port: 587}]
-    # kube-apiserver — uncomment only if the app talks to the Kubernetes API.
-    # kube-proxy DNATs the in-cluster VIP before NetworkPolicy is evaluated, so
-    # the SERVER NODE IPs are the allowlist (the ClusterIP never matches).
-    # - to:
-    #     - {ipBlock: {cidr: <server-node-ip>/32}}
-    #   ports: [{protocol: TCP, port: 6443}]
+    # Add egress rules as the app needs them — same-namespace pods, an SMTP
+    # relay and the kube-apiserver are worked examples in docs/ARCHITECTURE.md.
+    # The apiserver case needs the SERVER NODE IPs: kube-proxy DNATs the VIP
+    # before NetworkPolicy is evaluated, so the ClusterIP never matches.

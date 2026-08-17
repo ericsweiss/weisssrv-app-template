@@ -88,7 +88,13 @@ short version, for editing:
 ## The image
 {% if enable_image_build %}
 `{{ registry_host }}/{{ git_namespace }}/{{ app_slug }}` is this repo's image.
+{% if ci_shape != 'none' -%}
 The build pushes `:<short-sha>`; point `deployment.yaml`'s `image:` at it
+{%- else -%}
+There is no pipeline in this shape: `task build` produces `{{ app_slug }}:dev`
+locally and you tag and push it yourself, then point `deployment.yaml`'s
+`image:` at that tag
+{%- endif %}
 (literal tag — bump it yourself in a {{ change_request }}, there is no
 dependency bot). Replace the placeholder `Dockerfile` with the real build,
 keeping it non-root (UID 65532) and read-only-rootfs friendly.
@@ -104,9 +110,9 @@ a build is `copier update` with `enable_image_build: true`.
 {%- if secrets_backend == 'none' %}
 A **private** registry additionally needs a pull credential in the namespace.
 That credential is an `ExternalSecret`, so it needs a `ClusterSecretStore`
-first: `enable_registry_pull_secret` is gated on `secrets_backend`, and copier
-skips it — silently keeping the default — while the backend is `none`. Change
-the backend in the same `copier update`, or make the registry public.
+first: `enable_registry_pull_secret` is gated on `secrets_backend` and stays
+off while the backend is `none`. Change the backend in the same
+`copier update`, or make the registry public.
 {%- else %}
 A **private** registry additionally needs a pull credential in the namespace —
 `copier update` with `enable_registry_pull_secret: true`, plus the operator step

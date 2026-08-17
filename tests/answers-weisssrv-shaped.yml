@@ -41,6 +41,9 @@ k8s_version: "1.36.0"
 secrets_backend: onepassword
 onepassword_vault: Homelab
 secret_item: App Secrets
+# Never asked (the GitLab backend is not selected); answered so the fixture
+# covers the whole question set.
+gitlab_api_url: https://git.ericsweiss.com
 
 enable_servicemonitor: true
 enable_internal_ingress: true

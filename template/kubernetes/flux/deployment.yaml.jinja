@@ -1,13 +1,14 @@
 ---
-# Application workload. Hardened, non-root by default so it satisfies the
-# tenant namespace's Pod Security Admission (enforce: baseline / warn+audit:
+# Application workload. Hardened, non-root so it satisfies the tenant
+# namespace's Pod Security Admission (enforce: baseline / warn+audit:
 # restricted). Swap the image, probe paths and resources for your app.
 #
 # The image tag is a PLACEHOLDER no registry has, so the first reconcile
-# ImagePullBackOffs until you replace it{% if enable_image_build %} — normally with the `:<short-sha>`
-# the CI build just pushed{% endif %}. Tags are LITERAL pins (Flux postBuild `${var}`
-# substitution is cluster-internal and not available to tenants) and there is no
-# dependency bot, so bump the tag deliberately, in a reviewed change.
+# ImagePullBackOffs until you replace it{% if enable_image_build %} — with a tag this repo's own image
+# build publishes. Which tag that is follows from the CI shape, so it is named
+# in README.md's first step rather than here, where the shape is not known{% endif %}.
+# Tags are LITERAL pins: Flux postBuild `${var}` substitution is
+# cluster-internal and not available to tenants.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -49,11 +50,8 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
-      # Soft NAS-avoidance: prefer the general compute agents over the storage
-      # node. To PIN to the storage node instead (zvol-backed data), replace
-      # this whole affinity block with a required hostname match plus a
-      # toleration for `{{ node_label_domain }}/nas=true:PreferNoSchedule` —
-      # see docs/ARCHITECTURE.md.
+      # Soft NAS-avoidance. To PIN to the storage node instead (zvol-backed
+      # data), see docs/ARCHITECTURE.md § Storage & scheduling.
       affinity:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -97,10 +95,8 @@ spec:
             capabilities:
               drop:
                 - ALL
-          # Adjust paths to your app's health endpoints. The liveness grace on a
-          # slow boot is ~75s; for anything slower add a `startupProbe` with the
-          # same httpGet, since it holds liveness/readiness off until it passes
-          # and its failureThreshold*periodSeconds is the startup budget.
+          # Adjust to your app's health endpoints. The liveness grace on a slow
+          # boot is ~75s — anything slower needs a startupProbe.
           readinessProbe:
             httpGet:
               path: /
@@ -119,8 +115,7 @@ spec:
               memory: 64Mi
             limits:
               memory: 256Mi
-          # readOnlyRootFilesystem is on; give the app a writable scratch dir.
-          # Add more emptyDir mounts (cache, run dirs) as your image needs them.
+          # readOnlyRootFilesystem is on; add emptyDir mounts as the app needs.
           volumeMounts:
             - name: tmp
               mountPath: /tmp

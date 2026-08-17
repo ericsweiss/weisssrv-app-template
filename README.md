@@ -81,17 +81,22 @@ python3 tests/validate_render.py --lib-path ../weisssrv-lib   # + vendored copie
 `tests/validate_render.py` renders ONE answer set per invocation and puts
 yamllint, `kustomize build`, kubeconform, ruff and the generated repo's own
 doc-link and library-pin gates over the result. CI's `render-validate` job runs
-all four invocations above, which is what the local loop has to repeat: a
+every invocation above — four answer sets, with `--lib-path` folded into the
+first — which is what the local loop has to repeat: a
 template change that produces an invalid repo fails there rather than in
 someone's cluster, and a value copied from the reference cluster fails on the
 contrast render rather than passing both.
 
-`--lib-path` adds the gate that cannot run from a render: the library's
-`check-vendored-copies.py` over this repository, comparing every byte-identical
-copy (the root helpers, the same helpers under `template/scripts/`, the three
-GitHub workflows) and every declared fork against a real checkout. CI passes it
-a clone at `copier.yml`'s `lib_ref` default, so the tag the gate reads is the
-tag a generated repo inherits.
+`--lib-path` adds the two gates that cannot run from a render alone. The
+library's `check-vendored-copies.py` over this repository compares every
+byte-identical copy (the root helpers, the same helpers under
+`template/scripts/`, the three GitHub workflows) and every declared fork against
+a real checkout. The **include contract** gate reads the generated pipeline
+against the library templates it pins: every `inputs:` key must exist in the
+template's `spec.inputs`, and every job's resolved stage must be in the
+rendered `stages:` — the two failures GitLab reports only when a tenant pushes.
+CI passes both a clone at `copier.yml`'s `lib_ref` default, so the tag the gates
+read is the tag a generated repo inherits.
 
 Changes ship by merge request; releases are cut from conventional commits
 ([`docs/VERSIONING.md`](docs/VERSIONING.md)).

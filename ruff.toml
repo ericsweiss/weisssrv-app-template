@@ -1,8 +1,12 @@
-# Vendored from weisssrv-lib `lint/ruff.toml`. The `python-lint` CI job and the
-# `github` shape's `python-lint` step both use ruff's own config discovery, so
-# this file at the repo root is what makes them agree with a local
-# `task python-lint` — and without it ruff's built-in defaults would flag style
-# rules the vendored library scripts deliberately do not follow.
+# Forked from weisssrv-lib `lint/ruff.toml`: the same rule selection under a
+# header written for this repository. What THIS file lints is the template
+# itself — `scripts/`, `tests/` and `template/scripts/`. The `python-lint` job
+# in .gitlab-ci.yml passes no `config:` input and a local `ruff check` passes no
+# `--config`, so both resolve it by discovery from the repo root and cannot
+# disagree; without it ruff's built-in defaults would flag style rules the
+# vendored library scripts deliberately do not follow. Copy the `[lint]` block
+# and `target-version` on a library bump; this header is local. The tenant's
+# own copy is template/ruff.toml.
 #
 # `target-version` must not exceed the lowest Python this repo's scripts support
 # (the vendored helpers are stdlib-only and 3.9-compatible).

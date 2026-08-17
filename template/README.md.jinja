@@ -42,10 +42,16 @@ flipped.
 1. **Set the image.** `kubernetes/flux/deployment.yaml` ships
    `{{ registry_host }}/{{ git_namespace }}/{{ app_slug }}:REPLACE-ME` — a tag no
    registry has, so the first reconcile `ImagePullBackOff`s.
-{%- if enable_image_build %}
+{%- if enable_image_build and ci_shape != 'none' %}
    The usual value is the `:<short-sha>` the CI build pushes. Replace the
    placeholder `Dockerfile` with your service's real build, keeping it non-root
    (UID 65532) and read-only-rootfs friendly.
+{%- elif enable_image_build %}
+   This repo has no pipeline, so the image is yours to build and push:
+   `task build` produces `{{ app_slug }}:dev` locally, and you tag and push it
+   to `{{ registry_host }}/{{ git_namespace }}/{{ app_slug }}` yourself. Replace
+   the placeholder `Dockerfile` with your service's real build, keeping it
+   non-root (UID 65532) and read-only-rootfs friendly.
 {%- else %}
    Point it at the upstream image this service runs.
 {%- endif %}
@@ -59,7 +65,8 @@ flipped.
 
 ## Local development
 
-Needs `task` (go-task), plus `kustomize`, `kubeconform`, `yamllint` and `ruff`.
+Needs `task` (go-task), plus `kustomize`, `kubeconform`, `yamllint`, `ruff`,
+`python3` ({% if ci_shape == 'gitlab_selfhosted' %}with `pyyaml`, for the library-pin gate{% else %}for the doc-link check{% endif %}) and `pre-commit`.
 
 ```bash
 task lint            # every local gate
