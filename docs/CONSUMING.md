@@ -102,7 +102,7 @@ component is wired and a disabled one leaves nothing behind. There is no
 
 | Answer | Default | What it drives |
 |---|---|---|
-| `lib_ref` | `v0.7.4` | The tag every `include:` pins. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
+| `lib_ref` | `v0.9.5` | The tag every `include:` pins. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
 | `lib_project` | `eric/weisssrv-lib` | The library's project path. `include: project:` resolves instance-locally, so the library must live on the same GitLab as the repo. |
 
 ---
@@ -149,9 +149,9 @@ generated repo gets only the ones its shape runs —
 | `github` | `check-doc-links.py`, `semantic-release.py` (the pin gate has no includes to gate) |
 | `none` | `check-doc-links.py` only (`task doc-links` runs it with no pipeline at all) |
 
-The library owns the copy relationship in `scripts/vendored-paths.yml` and its
-`check-vendored-copies.py` gates it — fix a bug upstream and re-vendor, never in
-the copy, which the next re-vendor reverts.
+This repository owns the copy relationship in `scripts/vendored-manifest.yml`
+and the library's `check-vendored-copies.py` gates it — fix a bug upstream and
+re-vendor, never in the copy, which the next re-vendor reverts.
 
 The lint profiles are **forks** of library files rather than copies: the same
 rules with per-repo paths. They come in two sets, registered separately because

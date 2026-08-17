@@ -88,13 +88,14 @@ someone's cluster, and a value copied from the reference cluster fails on the
 contrast render rather than passing both.
 
 `--lib-path` adds the two gates that cannot run from a render alone. The
-library's `check-vendored-copies.py` over this repository compares every
-byte-identical copy (the root helpers, the same helpers under
-`template/scripts/`, the three GitHub workflows) and every declared fork against
-a real checkout. The **include contract** gate reads the generated pipeline
-against the library templates it pins: every `inputs:` key must exist in the
-template's `spec.inputs`, and every job's resolved stage must be in the
-rendered `stages:` — the two failures GitLab reports only when a tenant pushes.
+library's `check-vendored-copies.py` reads this repository's
+`scripts/vendored-manifest.yml` and compares every byte-identical copy it lists
+(the root helpers, the same helpers under `template/scripts/`, the three GitHub
+workflows) and every declared fork against a real checkout. The **include
+contract** gate reads the generated pipeline against the library templates it
+pins: every `inputs:` key must exist in the template's `spec.inputs`, and every
+job's resolved stage must be in the rendered `stages:` — the two failures
+GitLab reports only when a tenant pushes.
 CI passes both a clone at `copier.yml`'s `lib_ref` default, so the tag the gates
 read is the tag a generated repo inherits.
 

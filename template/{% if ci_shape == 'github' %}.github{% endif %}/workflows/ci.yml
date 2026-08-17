@@ -25,9 +25,9 @@
 # Tool versions are pinned, and every downloaded binary is sha256-verified
 # against the value the GitLab library template uses, so both shapes gate on
 # byte-identical tools. This file is itself vendored byte-identically from the
-# library — registered in its scripts/vendored-paths.yml and gated by its
-# scripts/check-vendored-copies.py — so a library bump that moves a pin arrives
-# here as a re-vendor, never as a hand edit.
+# library — listed in the consumer's scripts/vendored-manifest.yml and gated
+# by the library's scripts/check-vendored-copies.py — so a library bump that
+# moves a pin arrives here as a re-vendor, never as a hand edit.
 name: ci
 
 # Quoted: unquoted `on` is a YAML 1.1 boolean, which yamllint's truthy rule

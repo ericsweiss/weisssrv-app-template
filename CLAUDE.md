@@ -27,9 +27,10 @@ file under `template/`, the four seams, and what the render suite holds.
   implies (a paired Certificate, a NetworkPolicy, an `imagePullSecrets:` entry).
   Add the render assertion in the same change.
 - **Never edit a vendored copy.** `scripts/*.py`, `template/scripts/*.py` and
-  `template/.github/workflows/*.yml` are byte-identical to weisssrv-lib, which
-  owns the registry (`scripts/vendored-paths.yml` there). Fix upstream and
-  re-vendor; a local edit is reverted by the next re-vendor and fails the gate.
+  `template/.github/workflows/*.yml` are byte-identical to weisssrv-lib, and
+  `scripts/vendored-manifest.yml` here records every copy and every declared
+  fork. Fix upstream and re-vendor; a local edit is reverted by the next
+  re-vendor and fails the gate.
 - **`copier.yml` is API.** Renaming or removing a question breaks every
   generated repo's `copier update` — that is a MAJOR
   ([`docs/VERSIONING.md`](docs/VERSIONING.md)).

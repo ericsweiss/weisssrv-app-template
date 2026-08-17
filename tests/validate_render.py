@@ -46,8 +46,8 @@ CATALOG = (
 )
 REQUIRED_TOOLS = ("yamllint", "kustomize", "kubeconform", "ruff")
 
-# Key under `consumers:` in the library's scripts/vendored-paths.yml.
-CONSUMER = "weisssrv-app-template"
+# This repository's vendored-copy manifest, read by the library's engine.
+VENDORED_MANIFEST = "scripts/vendored-manifest.yml"
 
 
 class Runner:
@@ -106,32 +106,34 @@ def validate(root: Path, answers: dict) -> list[str]:
 
 
 def check_registered_copies(lib_path: Path) -> list[str]:
-    """Run the library's registry-driven gate over THIS repository.
+    """Run the library's comparison engine over THIS repository's manifest.
 
     The copies are here, not in the render: the workflows and scripts under
     `template/` are rendered into a tenant, and the ones at the root are what
-    this repo runs on itself. Both are byte-identical to the library, and the
-    registry (weisssrv-lib/scripts/vendored-paths.yml) is the only place that
-    relationship is written down — including the lint profiles this repo
-    deliberately FORKS, where the drift is silent in the other direction (the
-    library moves and the fork never absorbs it).
+    this repo runs on itself. Both are byte-identical to the library, and
+    `scripts/vendored-manifest.yml` is where that relationship is written down —
+    including the lint profiles this repo deliberately FORKS, where the drift is
+    silent in the other direction (the library moves and the fork never absorbs
+    it).
 
-    Declared in the library rather than here so a file it starts or stops
-    shipping reaches every consumer's gate at the next bump.
+    The manifest is OWNED HERE, so moving a copy inside this repository is a
+    local change rather than a library release event. What stays library-side is
+    the engine and the offer list (`scripts/vendorable-paths.yml`): every `lib:`
+    path in the manifest must be a path the library supports vendoring at the
+    pinned ref.
     """
     checker = lib_path / "scripts" / "check-vendored-copies.py"
-    registry = lib_path / "scripts" / "vendored-paths.yml"
-    if not checker.is_file() or not registry.is_file():
+    if not checker.is_file():
         return [
-            f"{lib_path} ships no scripts/check-vendored-copies.py + vendored-paths.yml "
-            "— the registry gate cannot run, and it must not silently skip"
+            f"{lib_path} ships no scripts/check-vendored-copies.py — the vendored-copy "
+            "gate cannot run, and it must not silently skip"
         ]
     result = subprocess.run(
         [
             sys.executable,
             str(checker),
-            "--consumer",
-            CONSUMER,
+            "--manifest",
+            str(render_app.REPO_ROOT / VENDORED_MANIFEST),
             "--repo-root",
             str(render_app.REPO_ROOT),
             "--lib-path",

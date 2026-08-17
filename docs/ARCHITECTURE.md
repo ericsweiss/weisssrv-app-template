@@ -98,14 +98,17 @@ The vendored copies live in this repository, not in a generated one: the helpers
 at the root are what this repo runs on itself, the same helpers under
 `template/scripts/` and the three GitHub workflows are what it hands to a
 tenant, and all of them are byte-identical to weisssrv-lib. That relationship is
-recorded in the library (`scripts/vendored-paths.yml`) and checked from here by
-its `check-vendored-copies.py`, which `tests/validate_render.py --lib-path`
-runs against a checkout at `copier.yml`'s `lib_ref` default.
+recorded HERE, in `scripts/vendored-manifest.yml`, and checked by the library's
+`check-vendored-copies.py`, which `tests/validate_render.py --lib-path` runs
+against a checkout at `copier.yml`'s `lib_ref` default.
 
-Registering the copy in the library rather than here is what makes the gate hold
-in both directions: a file the library starts or stops shipping — and a
-deliberate fork that quietly converges — reaches this gate at the next bump,
-with nothing to maintain on this side.
+Listing the fork alongside the copy is what makes the gate hold in both
+directions: a deliberate fork that quietly converges fails, and a fork whose
+library side moved fails on its `reconciled_sha256` until the change is
+absorbed. The library's half is the engine plus its offer list
+(`scripts/vendorable-paths.yml`) — a manifest entry naming a path the library
+does not offer fails, so this repository cannot grow a dependency on a library
+internal no release contract covers.
 
 ## What this template does not do
 

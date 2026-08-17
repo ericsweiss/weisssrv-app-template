@@ -1,0 +1,109 @@
+---
+# This repository's vendored-copy manifest — the consumer side of the contract.
+#
+# The library no longer knows its consumers: it publishes an OFFER list
+# (weisssrv-lib/scripts/vendorable-paths.yml) of the paths it supports vendoring
+# and the engine that compares them (its scripts/check-vendored-copies.py, run
+# from here by `tests/validate_render.py --lib-path` against a checkout at
+# `copier.yml`'s `lib_ref` default). WHAT this repo copies is recorded here,
+# where the copies live — so moving a file inside this repo is a local change,
+# and a fork's `reconciled_sha256` is re-taken where the fork is.
+#
+# Two relationships, both checked:
+#   vendored — byte-identical. Drift in either direction fails.
+#   forked   — deliberately divergent. The check asserts the file still differs
+#              (a converged fork belongs under `vendored`) and, when
+#              `reconciled_sha256` is set, that the LIBRARY side has not moved
+#              since the fork was last reconciled. That is the half a
+#              documentation-only fork list cannot catch.
+#
+# Entry forms: a bare string when both repos use the same path, or a mapping
+# with `lib:` and `consumer:` when they differ. `reason:` is required on forks.
+# Every `lib:` path must appear in the library's offer list at the pinned ref.
+#
+# This is a copier template: `_subdirectory: template`, so every file RENDERED
+# INTO a tenant lives under `template/`, and the directory names carry the jinja
+# conditionals that switch a component on or off (`ci_shape`,
+# `enable_image_build`). Those literal names are part of the path. Copies this
+# template runs on ITSELF (its own scripts/, its own lint profiles at the root)
+# stay unprefixed. BOTH sets are registered — they are separate files that drift
+# separately, so a re-vendor of one is not a re-vendor of the other.
+
+vendored:
+  # The root copies are what this repo runs on ITSELF …
+  - scripts/check-doc-links.py
+  - scripts/check-lib-pins.py
+  - scripts/semantic-release.py
+  # … and the template/ copies are the same files rendered into a tenant.
+  # Both are registered: a re-vendor that touched only the root pair would
+  # otherwise ship a stale script to every repo generated afterwards.
+  - lib: scripts/check-doc-links.py
+    consumer: template/scripts/check-doc-links.py
+  - lib: scripts/check-lib-pins.py
+    consumer: "template/scripts/{% if ci_shape == 'gitlab_selfhosted' %}check-lib-pins.py{% endif %}"
+  - lib: scripts/semantic-release.py
+    consumer: "template/scripts/{% if ci_shape != 'none' %}semantic-release.py{% endif %}"
+  # The check-lib-pins suite is canonical in the library: a consumer that
+  # vendors the script vendors its tests and adds only its own smoke test.
+  - tests/test_check_lib_pins.py
+  - lib: ci/release/github-release-workflow.example.yml
+    consumer: "template/{% if ci_shape == 'github' %}.github{% endif %}/workflows/release.yml"
+  - lib: ci/github/ci.example.yml
+    consumer: "template/{% if ci_shape == 'github' %}.github{% endif %}/workflows/ci.yml"
+  # Gated on `enable_image_build` as well as the shape, because the GitLab
+  # shape gates its own build job on that answer: without the conditional
+  # the two shapes disagree about what `enable_image_build: false` means,
+  # and a tenant that never builds an image still gets a `packages: write`
+  # workflow firing on every push to main. It renders alongside the
+  # `{% if enable_image_build %}Dockerfile{% endif %}` the same answer
+  # controls. One line, quoted — see the note under `forked:`.
+  - lib: ci/github/build-image.example.yml
+    consumer: "template/{% if ci_shape == 'github' %}.github{% endif %}/workflows/{% if enable_image_build %}build-image.yml{% endif %}"
+
+forked:
+  - lib: lint/ruff.toml
+    consumer: ruff.toml
+    reason: Narrower target set than the library profile.
+    reconciled_sha256: ccf4e857a9d7e20039ef8f68be7080210e6703d1400c23586ec6f5679e2fbfb2
+  - lib: lint/gitleaks.toml
+    consumer: .gitleaks.toml
+    reason: Allowlist paths and fixture anchors are per-repo.
+    reconciled_sha256: bffbe70c94436f4442aaeecc1f1f5715315fc5908b1486b2198796b9e097ff0d
+  # The root ruleset, the one this template's OWN pipeline loads. A separate
+  # file from the tenant copy below and it drifts separately, so both are
+  # registered — the same split the scripts and lint profiles get.
+  - lib: lint/secret-detection-ruleset.toml
+    consumer: .gitlab/secret-detection-ruleset.toml
+    reason: Ruleset overrides name this repo's own scanned paths.
+    reconciled_sha256: d6413e69a2d8a6f7d0c468d4370a406299894ad9e3fe274eb7f69eb30a7c936d
+  # One line, quoted, however long: a folded scalar reconstructs the literal
+  # filename only if the wrap lands on a space, so re-wrapping it silently
+  # produces a different path.
+  - lib: lint/secret-detection-ruleset.toml
+    consumer: "template/{% if ci_shape != 'github' %}.gitlab{% endif %}/{% if ci_shape == 'gitlab_selfhosted' %}secret-detection-ruleset.toml{% endif %}"
+    reason: Ruleset overrides name the rendered tenant's scanned paths.
+    reconciled_sha256: d6413e69a2d8a6f7d0c468d4370a406299894ad9e3fe274eb7f69eb30a7c936d
+  - lib: lint/editorconfig
+    consumer: .editorconfig
+    reason: Per-repo file-type sections on a shared base.
+    reconciled_sha256: 911171d9f26ba0bb47300c97a9e46b078d48eb852dfe9a050fbc3c8e41cc2944
+  - lib: lint/pre-commit-config.yaml
+    consumer: template/.pre-commit-config.yaml
+    reason: Per-repo hook set on a shared base.
+    reconciled_sha256: 39e7c3a5fbc7d2185ad73c436cbba736cae1e2b2b88f7f50387f041cbd87323c
+  # The tenant-side lint profiles, the same split as the scripts above: the
+  # root three are what this repo lints ITSELF with, these three are what a
+  # generated tenant gets. Registering only one half left the other
+  # unguarded.
+  - lib: lint/ruff.toml
+    consumer: template/ruff.toml
+    reason: Tenant target set, narrower than the library profile.
+    reconciled_sha256: ccf4e857a9d7e20039ef8f68be7080210e6703d1400c23586ec6f5679e2fbfb2
+  - lib: lint/gitleaks.toml
+    consumer: template/.gitleaks.toml
+    reason: Allowlist paths and fixture anchors are per-tenant.
+    reconciled_sha256: bffbe70c94436f4442aaeecc1f1f5715315fc5908b1486b2198796b9e097ff0d
+  - lib: lint/editorconfig
+    consumer: template/.editorconfig
+    reason: Tenant file-type sections on a shared base.
+    reconciled_sha256: 911171d9f26ba0bb47300c97a9e46b078d48eb852dfe9a050fbc3c8e41cc2944

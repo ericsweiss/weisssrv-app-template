@@ -489,3 +489,35 @@ def test_conditional_paths_name_declared_questions():
             for token in unknown:
                 offenders.append(f"{path.relative_to(REPO_ROOT)}: unknown name {token!r}")
     assert not offenders, "\n  ".join(["conditional paths reference unknown answers:"] + offenders)
+
+
+_TAG_LITERAL = re.compile(r"\bv\d+\.\d+\.\d+\b")
+
+
+def test_docs_quote_only_the_current_library_tag():
+    """The docs name the library tag as a literal (docs/CONSUMING.md's answer
+    table). Nothing else ties them to the answer default, so a bump that
+    misses one keeps advertising a superseded release as the default a tenant
+    inherits — which is exactly how the table sat at v0.7.4 through two
+    releases. `_commit:` markers in .copier-answers.yml examples name
+    superseded tags on purpose and stay exempt.
+    """
+    want = CONFIG["lib_ref"]["default"]
+    stale = []
+    found = 0
+    for path in [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").glob("*.md"))]:
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if line.strip().startswith("_commit:"):
+                continue
+            for tag in _TAG_LITERAL.findall(line):
+                found += 1
+                if tag != want:
+                    stale.append(f"{path.relative_to(REPO_ROOT)}:{lineno} {tag}")
+    # Non-vacuity: the docs are expected to advertise the default at least
+    # once (docs/CONSUMING.md's answer table); zero literals means the scan
+    # lost its subject, not that nothing drifted.
+    assert found, "no library tag literal found in the docs — the guard has no subject"
+    assert not stale, (
+        f"docs quote a library tag other than copier.yml's lib_ref default ({want}):\n  "
+        + "\n  ".join(stale)
+    )
