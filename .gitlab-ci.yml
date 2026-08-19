@@ -29,7 +29,7 @@ variables:
   # a literal and scripts/check-lib-pins.py (vendored from the library) fails
   # the pipeline if they drift from it or pin a branch. Bump here, then
   # `scripts/check-lib-pins.py --fix`.
-  WEISSSRV_LIB_REF: "v0.9.8"
+  WEISSSRV_LIB_REF: "v0.10.0"
   COPIER_VERSION: "9.17.0"
   PYYAML_VERSION: "6.0.2"
   YAMLLINT_VERSION: "1.38.0"
@@ -45,7 +45,7 @@ include:
   # until they are rendered. render-validate yamllints the rendered tree, which
   # is where template/ actually gets covered.
   - project: eric/weisssrv-lib
-    ref: v0.9.8
+    ref: v0.10.0
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
@@ -60,7 +60,7 @@ include:
         - "scripts/vendored-manifest.yml"
 
   - project: eric/weisssrv-lib
-    ref: v0.9.8
+    ref: v0.10.0
     file: /ci/lint/python-lint.yml
     inputs:
       tags: []
@@ -82,7 +82,7 @@ include:
   # copier.yml schema checks + the render invariants. Everything in the
   # repository feeds a render, hence the catch-all `changes`.
   - project: eric/weisssrv-lib
-    ref: v0.9.8
+    ref: v0.10.0
     file: /ci/test/python-tests.yml
     inputs:
       tags: []
@@ -98,7 +98,7 @@ include:
   # TRACKED *.md, so `template/**/*.md` is listed too — the forge templates there
   # are tracked Markdown, and an edit to one must not skip the gate.
   - project: eric/weisssrv-lib
-    ref: v0.9.8
+    ref: v0.10.0
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
@@ -111,13 +111,13 @@ include:
         - "scripts/check-doc-links.py"
 
   - project: eric/weisssrv-lib
-    ref: v0.9.8
+    ref: v0.10.0
     file: /ci/security/secret-detection.yml
     inputs:
       tags: []
 
   - project: eric/weisssrv-lib
-    ref: v0.9.8
+    ref: v0.10.0
     file: /ci/review/pr-agent.yml
     inputs:
       tags: []
@@ -140,7 +140,7 @@ include:
   # in .copier-answers.yml. Untagged, copier falls back to HEAD, so every update
   # pulls unreleased work; see docs/VERSIONING.md.
   - project: eric/weisssrv-lib
-    ref: v0.9.8
+    ref: v0.10.0
     file: /ci/release/semantic-release.yml
     inputs:
       tags: []
