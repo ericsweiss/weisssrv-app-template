@@ -1,16 +1,12 @@
 """Render this template into a throwaway directory.
 
-Shared by the pytest suite and tests/validate_render.py so both exercise the
-same invocation.
-
-The template source is COPIED to a scratch directory first, with .git left
-behind: copier treats a git checkout as a VCS source and renders its committed
-HEAD, which would silently test the last commit instead of the working tree
-every reviewer and CI job is actually looking at.
+Shared by the pytest suite and tests/validate_render.py. The source is copied
+without .git, so copier renders the working tree rather than committed HEAD.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import shutil
 import subprocess
 import sys
@@ -22,8 +18,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ANSWERS = REPO_ROOT / "tests" / "answers-weisssrv-shaped.yml"
 ANSWERS_B = REPO_ROOT / "tests" / "answers-unlike.yml"
 
+# `.tmp` and `.bin` are what CI's render-validate job creates inside the project
+# directory: a full library clone and the extracted kustomize/kubeconform
+# tarballs. Copying either into the template source is pointless I/O.
 _IGNORED = shutil.ignore_patterns(
-    ".git", "__pycache__", "*.pyc", ".pytest_cache", ".ruff_cache", ".render"
+    ".git", "__pycache__", "*.pyc", ".pytest_cache", ".ruff_cache", ".render", ".tmp", ".bin"
 )
 
 
@@ -49,6 +48,15 @@ def load_ci(path: Path) -> dict:
     return yaml.load(path.read_text(), Loader=CILoader)
 
 
+def load_gate(name: str, directory: str):
+    """Import a hyphenated gate from `directory` by path."""
+    path = REPO_ROOT / directory / name
+    spec = importlib.util.spec_from_file_location(path.stem.replace("-", "_"), path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def copy_source(scratch: Path) -> Path:
     src = scratch / "template-src"
     shutil.copytree(REPO_ROOT, src, ignore=_IGNORED)
@@ -63,8 +71,7 @@ def render(
 ) -> Path:
     """Render the working tree with `answers`; return the generated repo root.
 
-    `data` overrides individual answers on top of the file, which is how the
-    third CI shape is covered without a third full fixture.
+    `data` overrides individual answers, reaching branches neither fixture answers.
     """
     src = copy_source(scratch)
     dest = scratch / dest_name

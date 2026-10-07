@@ -4,14 +4,3 @@ This is the **weisssrv-app-template** copier template — it generates tenant
 repositories, it does not deploy anything. Read [CLAUDE.md](CLAUDE.md) before
 making any change; it is the canonical agent doc (also enforced by
 `.cursor/rules/template-development.mdc`, `alwaysApply: true`).
-
-The rules that must hold in every change:
-
-- NEVER commit secrets, in the template or in a fixture.
-- NEVER push to `main` — branch → merge request, always.
-- NEVER hardcode site identity (domains, registry hosts, node labels, VIPs,
-  runner tags) under `template/` — they are copier answers.
-- NEVER edit a vendored library copy; fix it in weisssrv-lib and re-vendor.
-- Adding a component means the manifest, its conditional path, its
-  `kustomization.yaml` line, and a render assertion.
-- Run `python3 -m pytest tests` before opening a merge request.

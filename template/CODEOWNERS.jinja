@@ -1,4 +1,8 @@
 # Code ownership for {{ change_request }} review routing.
+{%- if forge == 'github' %}
+# GitHub accepts only a user (@name) or a team (@org/team) here. Retarget both
+# rules if {{ git_namespace }} is an organisation: a bare org name is dropped.
+{%- endif %}
 * @{{ git_namespace }}
 
 # Deployment surface — retarget these to a stricter reviewer group if you have one.

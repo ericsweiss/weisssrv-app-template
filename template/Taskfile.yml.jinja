@@ -1,10 +1,9 @@
 ---
 version: "3"
 
-# Small task runner for local development against the cluster.
-# `task --list` shows everything. Cluster-touching tasks need a kubeconfig on
-# KUBECONFIG (the operator provides one); they are read-only except
-# `flux:reconcile`, which only pokes the reconciler.
+# Task runner for local development. `task --list` shows everything.
+# Cluster-touching tasks need a kubeconfig on KUBECONFIG; all are read-only
+# except `flux:reconcile`, which only pokes the reconciler.
 
 vars:
   APP: {{ app_slug }}
@@ -12,7 +11,22 @@ vars:
   KUSTOMIZATION: {{ app_slug }}
   # The cluster's Kubernetes minor, for kubeconform.
   K8S_VERSION: "{{ k8s_version }}"
-  CRD_CATALOG: 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{% raw %}{{`{{.Group}}`}}/{{`{{.ResourceKind}}`}}_{{`{{.ResourceAPIVersion}}`}}{% endraw %}.json'
+  # The datreeio CRD-catalog revision kubeconform reads CR schemas from.
+  # Pinned to a sha: a catalog rewrite must not change what this gate accepts.
+  CRD_CATALOG_REF: "ad3b08c5045129d7bb1eeffd8e61719b2c8dd1e2"
+  # Resources kubeconform may validate against no schema. Raise it for a CR
+  # the public catalog does not carry; see docs/ARCHITECTURE.md.
+  ALLOWED_SKIPS: "0"
+  CRD_CATALOG: 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/{% raw %}{{.CRD_CATALOG_REF}}/{{`{{.Group}}`}}/{{`{{.ResourceKind}}`}}_{{`{{.ResourceAPIVersion}}`}}{% endraw %}.json'
+
+# Precondition anchors aliased by the gates below.
+x-preconditions:
+  needs_pyyaml: &needs_pyyaml
+    sh: python3 -c "import yaml" 2>/dev/null
+    msg: "PyYAML not installed (pip install pyyaml)"
+  needs_python3: &needs_python3
+    sh: command -v python3
+    msg: "python3 not installed"
 
 tasks:
   default:
@@ -27,6 +41,9 @@ tasks:
       - task: flux-lint
       - task: python-lint
       - task: doc-links
+      - task: netpol
+      - task: scrape-wiring
+      - task: kustomization
 {%- if ci_shape == 'gitlab_selfhosted' %}
       - task: lib-pins
 {%- endif %}
@@ -38,39 +55,91 @@ tasks:
 
   flux-lint:
     desc: kustomize build + kubeconform over the manifests Flux reconciles.
-    # pipefail: without it only kubeconform's status counts, and a FAILED
-    # `kustomize build` hands it empty stdin — which it accepts, exiting 0.
+    # CRITICAL: kubeconform exits 0 on empty input and on a resource it skipped
+    # for want of a schema, so the size check and the skip count are the gate.
 {%- if ci_shape == 'none' %}
-    # This repo ships no pipeline, so this task is the whole manifest gate: a
-    # broken kustomization would otherwise reach the cluster reporting green.
+    # No pipeline here, so this task is the whole manifest gate.
 {%- else %}
-    # The pipeline runs the same two commands, so a green run here is the same
-    # answer CI gives.
+    # The pipeline runs the same two commands without these guards, so a green
+    # `task lint` is stricter than a green pipeline.
 {%- endif %}
-    set: [pipefail]
     cmds:
-      - >-
-        kustomize build kubernetes/flux |
-        kubeconform -strict -ignore-missing-schemas
-        -kubernetes-version {% raw %}{{.K8S_VERSION}}{% endraw %}
-        -schema-location default
-        -schema-location '{% raw %}{{.CRD_CATALOG}}{% endraw %}'
-        -summary
+      - |
+        out="$(mktemp -d)"
+        trap 'rm -rf "$out"' EXIT
+        kustomize build kubernetes/flux >"$out/render.yaml"
+        if [ ! -s "$out/render.yaml" ]; then
+          echo 'kustomize build produced no resources' >&2
+          exit 1
+        fi
+        if ! summary="$(kubeconform -strict -ignore-missing-schemas \
+          -kubernetes-version {% raw %}{{.K8S_VERSION}}{% endraw %} \
+          -schema-location default \
+          -schema-location '{% raw %}{{.CRD_CATALOG}}{% endraw %}' \
+          -summary "$out/render.yaml")"; then
+          echo "$summary" >&2
+          exit 1
+        fi
+        echo "$summary"
+        skipped="$(printf '%s\n' "$summary" | sed -n 's/.*Skipped: \([0-9][0-9]*\).*/\1/p')"
+        if [ -z "$skipped" ] || [ "$skipped" -gt {% raw %}"{{.ALLOWED_SKIPS}}"{% endraw %} ]; then
+          echo "kubeconform validated ${skipped:-?} resources against no schema: the" >&2
+          echo "catalog at {% raw %}{{.CRD_CATALOG_REF}}{% endraw %} was unreachable or moved, or the CR has none" >&2
+          echo 'add a -schema-location for them, or raise ALLOWED_SKIPS in Taskfile.yml' >&2
+          exit 1
+        fi
 
   python-lint:
-    desc: Lint the repo's Python with ruff, using the vendored ./ruff.toml.
-    # ruff resolves ./ruff.toml itself, so no --config.
+    desc: Lint the helper scripts in scripts/ with ruff, using ./ruff.toml.
+    # ruff resolves ./ruff.toml itself, so no --config. Add your own source
+    # directories here once the app carries Python{% if ci_shape == 'gitlab_selfhosted' %}, and in the CI job's
+    # `targets:` and `changes:`{% endif %}.
     cmds:
+      - |
+        # ruff exits 0 on a target holding no Python, so the floor is the gate.
+        if [ -z "$(find scripts -name '*.py' -type f -print -quit)" ]; then
+          echo 'ruff matched no Python file under scripts/' >&2
+          exit 1
+        fi
       - ruff check --no-cache --output-format concise scripts
 
   doc-links:
     desc: Resolve every relative Markdown cross-link (vendored, stdlib-only).
+    preconditions:
+      - *needs_python3
     cmds:
       - python3 scripts/check-doc-links.py
+
+  netpol:
+    desc: "No fenced pod has unrestricted egress (needs pyyaml)."
+    # networkpolicy.yaml's except-list is the only thing keeping this pod off
+    # the LAN, the tailnet and the cloud-metadata address.
+    preconditions:
+      - *needs_pyyaml
+    cmds:
+      - python3 scripts/check-netpol-except-parity.py kubernetes/flux
+
+  scrape-wiring:
+    desc: "The scrape allow admits observability on the monitor's port (needs pyyaml)."
+    preconditions:
+      - *needs_pyyaml
+    cmds:
+      - python3 scripts/check-scrape-wiring.py kubernetes/flux
+
+  kustomization:
+    desc: "kustomization.yaml lists every manifest, and lists at least one (needs pyyaml)."
+    # CRITICAL: kustomize renders only what is listed, so an unlisted manifest
+    # is inert and an emptied list renders nothing the cluster then prunes.
+    preconditions:
+      - *needs_pyyaml
+    cmds:
+      - python3 scripts/check-kustomization.py kubernetes/flux
 {%- if ci_shape == 'gitlab_selfhosted' %}
 
   lib-pins:
     desc: "Every include ref matches variables.WEISSSRV_LIB_REF (needs pyyaml)."
+    preconditions:
+      - *needs_pyyaml
     cmds:
       - python3 scripts/check-lib-pins.py --project {{ lib_project }}
 {%- endif %}

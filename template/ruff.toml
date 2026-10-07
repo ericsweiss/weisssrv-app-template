@@ -1,18 +1,9 @@
-# Forked from weisssrv-lib `lint/ruff.toml`: the same rule selection, a narrower
-# target set. The pipeline's python-lint job and `task python-lint` both use
-# ruff's own config discovery, so this file at the repo root is what makes them
-# agree — and without it ruff's built-in defaults would flag style rules the
-# vendored library scripts deliberately do not follow. Copy the `[lint]` block
-# and `target-version` on a library bump; this header is local.
-#
-# `target-version` must not exceed the lowest Python this repo's scripts support
-# (the vendored helpers are stdlib-only and 3.9-compatible).
+# Forked from weisssrv-lib lint/ruff.toml: header comments only, the rule
+# selection is the library's. Dropped at the repo root so `task python-lint`
+# and any CI ruff run resolve one profile by discovery.
 target-version = "py39"
 
 [lint]
-# Correctness-first selection: pyflakes (F), the pycodestyle subsets that flag
-# real errors rather than layout (E4 imports, E7 statements, E9 syntax/IO), W
-# (invalid escapes, trailing whitespace), and bugbear (B). Formatting-only rules
-# (line length, quote style, import order) are deliberately OUT — the family has
-# no formatter and churning them would bury the findings that matter.
+# Correctness rules only: pyflakes, the error-level pycodestyle subsets, W and
+# bugbear. Formatting-only rules stay out; the family has no formatter.
 select = ["E4", "E7", "E9", "F", "W", "B"]

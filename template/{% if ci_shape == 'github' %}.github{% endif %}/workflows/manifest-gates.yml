@@ -1,0 +1,46 @@
+---
+# Three manifest gates: the egress fence, the scrape wiring and the
+# kustomization resource list. Template-owned, since no library workflow runs
+# them. Why each gate exists: docs/CI-SHAPES.md in the app template.
+name: manifest-gates
+
+# Quoted: unquoted `on` is a YAML 1.1 boolean, which yamllint's truthy rule
+# flags. GitHub reads the quoted key identically.
+"on":
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manifest-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Held equal to the GitLab pipeline's .pyyaml-gate pin, so both shapes gate on
+  # one PyYAML.
+  PYYAML_VERSION: "6.0.2"
+
+jobs:
+  manifest-gates:
+    name: manifest-gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          # These jobs execute PR-controlled repository content (the gate
+          # scripts), and nothing here pushes.
+          persist-credentials: false
+      - name: Install PyYAML
+        # Ubuntu's system Python is externally managed (PEP 668) and the gates
+        # need PyYAML as a library, which pipx cannot provide.
+        run: pip install --user --break-system-packages "pyyaml==${PYYAML_VERSION}"
+      - name: Egress fence parity
+        run: python3 scripts/check-netpol-except-parity.py kubernetes/flux
+      - name: Scrape wiring
+        run: python3 scripts/check-scrape-wiring.py kubernetes/flux
+      - name: Kustomization completeness
+        run: python3 scripts/check-kustomization.py kubernetes/flux

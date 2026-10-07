@@ -27,14 +27,21 @@ file under `template/`, the four seams, and what the render suite holds.
   implies (a paired Certificate, a NetworkPolicy, an `imagePullSecrets:` entry).
   Add the render assertion in the same change.
 - **Never edit a vendored copy.** `scripts/*.py`, `template/scripts/*.py` and
-  `template/.github/workflows/*.yml` are byte-identical to weisssrv-lib, and
+  the `ci.yml`, `release.yml` and `build-image.yml` workflows under
+  `template/.github/workflows/` are byte-identical to weisssrv-lib, and
   `scripts/vendored-manifest.yml` here records every copy and every declared
   fork. Fix upstream and re-vendor; a local edit is reverted by the next
-  re-vendor and fails the gate.
+  re-vendor and fails the gate. `template/scripts/check-kustomization.py`,
+  `template/scripts/check-scrape-wiring.py` and the `manifest-gates.yml`
+  workflow are this template's own gates, deliberately unregistered: fix them
+  here.
 - **`copier.yml` is API.** Renaming or removing a question breaks every
   generated repo's `copier update` — that is a MAJOR
   ([`docs/VERSIONING.md`](docs/VERSIONING.md)).
 - **Run the suite before opening the merge request:** `python3 -m pytest tests`.
+  `pre-commit install` once, and gitleaks plus the YAML and whitespace hooks run
+  on every commit; the render suite and the doc-link and lib-pin gates only run
+  under `pytest`.
 
 ## Conventions
 
@@ -42,9 +49,11 @@ file under `template/`, the four seams, and what the render suite holds.
   `validator`). Copier fills the answer map in question order, so a forward
   reference is undefined interactively and defined in `--data` mode — a check
   that reads as enforcement and enforces nothing. A test holds this.
-- A conditional path (`{% if enable_x %}file.yaml{% endif %}.jinja`) with a typo
-  does not fail — the file is silently skipped. Add the answer to `copier.yml`
-  first; the path scan checks the rest.
+- A conditional path (`{% if enable_x %}file.yaml{% endif %}.jinja`) naming an
+  undeclared answer fails the render: `_envops.undefined: jinja2.StrictUndefined`
+  raises and copier prints the offending path. Declare the answer in `copier.yml`
+  first; `test_conditional_paths_name_declared_questions` names the path without
+  needing a render.
 - Both answer fixtures must answer **every** question, including ones their own
   answers make copier skip: `--defaults` otherwise falls back silently.
 - Site identity — the app's names AND the cluster's — carries a `placeholder:`
@@ -58,6 +67,21 @@ file under `template/`, the four seams, and what the render suite holds.
 - Keep the tenant-facing docs and agent files (under `template/`) as pointers,
   not procedure copies. The generated repo's `CLAUDE.md` is the standing rules;
   its `docs/` carry the detail.
+
+## Comments
+
+Comments state the current constraint and why it exists, in the present tense.
+They carry no history: no dates, no merge-request or pipeline numbers, no "this
+used to", no incident narration, no site hostnames. Longer rationale belongs in
+`docs/` or the nearest README, not in a header above five lines of code.
+
+A comment block runs to three content lines. A block guarding a trap that causes
+an outage may open `CRITICAL:` and run to eight. That marker is for outages, not
+for emphasis and not for a long file header.
+
+A comment inside a Jinja template is rendered into the tenant's own file, so
+write it for the app owner who reads it there — same three-line ceiling, and no
+reference to this template's own files unless it says `in the app template`.
 
 ## Docs
 

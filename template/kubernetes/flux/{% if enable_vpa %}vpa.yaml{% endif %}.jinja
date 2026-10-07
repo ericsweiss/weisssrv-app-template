@@ -1,0 +1,37 @@
+---
+# Vertical Pod Autoscaler. `updateMode: Initial` right-sizes the pod on natural
+# restarts without evicting a running one; a workload holding open storage wants
+# `updateMode: "Off"`. Tune min/maxAllowed to the app's real footprint.
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ app_slug }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ app_slug }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: "*"
+        minAllowed:
+          cpu: 25m
+          memory: 64Mi
+        # CRITICAL: the cap equals the container's `limits.memory` in
+        # deployment.yaml, under RequestsOnly so only requests move. A cap above
+        # that limit recommends a request pod validation refuses at creation; raise both together.
+        maxAllowed:
+          cpu: 1
+          memory: 256Mi
+        controlledValues: RequestsOnly
+        controlledResources:
+{%- if enable_hpa %}
+          # Memory only. Adding `- cpu` here puts this VPA and hpa.yaml on
+          # one resource: replica thrash and eviction churn, no gate red.
+          - memory
+{%- else %}
+          - cpu
+          - memory
+{%- endif %}

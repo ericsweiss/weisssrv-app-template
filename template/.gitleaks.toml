@@ -1,18 +1,11 @@
-# gitleaks allowlist for a cluster tenant repo.
-#
-# Consumed by whichever secret scan this repo's CI shape runs — GitLab's
-# Secret-Detection analyzer through the passthrough in
-# `.gitlab/secret-detection-ruleset.toml`, or gitleaks invoked directly by the
-# GitHub workflow — and by the local pre-commit hook in every shape.
-#
-# `useDefault = true` is REQUIRED — without it gitleaks loads only the rules in
-# this file (none), disabling all detection. The allowlist below only silences
-# obvious non-secrets (1Password references, doc placeholders, anchored
-# test/fake fixtures); every real detector still runs.
+# gitleaks allowlist for a cluster tenant repo. Consumed by whichever secret
+# scan this repo's CI shape runs, and by the local pre-commit hook.
 
 title = "tenant allowlist"
 
 [extend]
+# CRITICAL: useDefault = true is required. Without it gitleaks loads only this
+# file's rules (none) and all secret detection is disabled.
 useDefault = true
 
 [[allowlists]]

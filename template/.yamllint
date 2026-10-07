@@ -1,7 +1,7 @@
 ---
-# Shared by pre-commit, the CI yaml-lint job, and `task lint` so all three
-# agree. `relaxed` keeps line-length/comment rules as warnings; line-length is
-# disabled outright because inline documentation comments run long.
+# Shared by pre-commit, the CI yaml-lint job and `task lint` so all three agree.
+# `relaxed` keeps line-length at warning level and disables the comment rules;
+# this file disables line-length outright and re-enables document-start as a warning.
 extends: relaxed
 
 rules:

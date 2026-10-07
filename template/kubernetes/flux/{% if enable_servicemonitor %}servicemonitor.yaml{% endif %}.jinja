@@ -1,10 +1,7 @@
 ---
-# The platform Prometheus discovers ServiceMonitors in EVERY namespace, so this
-# is picked up automatically. Adjust `port` (the named Service port) and `path`
-# to the app's real metrics endpoint — a ServiceMonitor pointed at an endpoint
-# that 404s scrapes `up == 0` and trips the platform's TargetDown alert in the
-# OPERATOR's Alertmanager. networkpolicy.yaml's scrape allow is rendered with
-# this file and must name the same port.
+# Point `port` (the named Service port) and `path` at the app's real metrics
+# endpoint: one that 404s scrapes `up == 0` and trips the platform's TargetDown
+# alert. networkpolicy.yaml's scrape allow must name the same port.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -16,6 +13,9 @@ spec:
     matchLabels:
       app.kubernetes.io/name: {{ app_slug }}
   endpoints:
+    # `http` is the port the public IngressRoute backends, so /metrics served
+    # there is reachable from the internet. Serve it on a second containerPort
+    # instead: docs/ARCHITECTURE.md, Observability.
     - port: http
       path: /metrics
       interval: 30s

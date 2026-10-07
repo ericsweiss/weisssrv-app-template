@@ -1,7 +1,7 @@
 ---
-# Horizontal Pod Autoscaler on CPU. It owns the replica count, so
-# deployment.yaml ships none and vpa.yaml is memory-only. `minReplicas: 2`
-# keeps pdb.yaml (`minAvailable: 1`) satisfiable.
+# Horizontal Pod Autoscaler on CPU. It owns the replica count, so the
+# Deployment ships no `replicas:`.{% if enable_vpa %} vpa.yaml is memory-only.{% endif %}
+# Utilisation is relative to `requests.cpu`, so raise it with the image.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

@@ -1,36 +1,11 @@
 ---
-# This repository's vendored-copy manifest — the consumer side of the contract.
-#
-# The library no longer knows its consumers: it publishes an OFFER list
-# (weisssrv-lib/scripts/vendorable-paths.yml) of the paths it supports vendoring
-# and the engine that compares them (its scripts/check-vendored-copies.py, run
-# from here by `tests/validate_render.py --lib-path` against a checkout at
-# `copier.yml`'s `lib_ref` default). WHAT this repo copies is recorded here,
-# where the copies live — so moving a file inside this repo is a local change,
-# and a fork's `reconciled_sha256` is re-taken where the fork is.
-#
-# Two relationships, both checked:
-#   vendored — byte-identical. Drift in either direction fails.
-#   forked   — deliberately divergent. The check asserts the file still differs
-#              (a converged fork belongs under `vendored`) and, when
-#              `reconciled_sha256` is set, that the LIBRARY side has not moved
-#              since the fork was last reconciled. That is the half a
-#              documentation-only fork list cannot catch.
-#
-# Entry forms: a bare string when both repos use the same path, or a mapping
-# with `lib:` and `consumer:` when they differ. `reason:` is required on forks.
-# Every `lib:` path must appear in the library's offer list at the pinned ref.
-#
-# This is a copier template: `_subdirectory: template`, so every file RENDERED
-# INTO a tenant lives under `template/`, and the directory names carry the jinja
-# conditionals that switch a component on or off (`ci_shape`,
-# `enable_image_build`). Those literal names are part of the path. Copies this
-# template runs on ITSELF (its own scripts/, its own lint profiles at the root)
-# stay unprefixed. BOTH sets are registered — they are separate files that drift
-# separately, so a re-vendor of one is not a re-vendor of the other.
+# The consumer side of the vendored-copy contract: what this repo copies from
+# weisssrv-lib, and where each copy lives. Entry forms, the `forked:` rules and
+# the `template/` path prefix are in docs/VERSIONING.md, Vendored copies.
 
 vendored:
-  # The root copies are what this repo runs on ITSELF …
+  # The root copies are what this repo lints and, where it has the tree for
+  # them, runs on ITSELF …
   - scripts/check-doc-links.py
   - scripts/check-lib-pins.py
   - scripts/semantic-release.py
@@ -39,6 +14,10 @@ vendored:
   # otherwise ship a stale script to every repo generated afterwards.
   - lib: scripts/check-doc-links.py
     consumer: template/scripts/check-doc-links.py
+  - lib: scripts/check-netpol-except-parity.py
+    consumer: template/scripts/check-netpol-except-parity.py
+  # check-lib-pins.py needs scripts/ci_yaml.py beside both of its copies from
+  # library v0.18.0: docs/VERSIONING.md, Pending at the next library bump.
   - lib: scripts/check-lib-pins.py
     consumer: "template/scripts/{% if ci_shape == 'gitlab_selfhosted' %}check-lib-pins.py{% endif %}"
   - lib: scripts/semantic-release.py
@@ -50,20 +29,15 @@ vendored:
     consumer: "template/{% if ci_shape == 'github' %}.github{% endif %}/workflows/release.yml"
   - lib: ci/github/ci.example.yml
     consumer: "template/{% if ci_shape == 'github' %}.github{% endif %}/workflows/ci.yml"
-  # Gated on `enable_image_build` as well as the shape, because the GitLab
-  # shape gates its own build job on that answer: without the conditional
-  # the two shapes disagree about what `enable_image_build: false` means,
-  # and a tenant that never builds an image still gets a `packages: write`
-  # workflow firing on every push to main. It renders alongside the
-  # `{% if enable_image_build %}Dockerfile{% endif %}` the same answer
-  # controls. One line, quoted — see the note under `forked:`.
+  # Gated on `enable_image_build` as well as the shape, so both shapes agree
+  # on what `enable_image_build: false` means.
   - lib: ci/github/build-image.example.yml
     consumer: "template/{% if ci_shape == 'github' %}.github{% endif %}/workflows/{% if enable_image_build %}build-image.yml{% endif %}"
 
 forked:
   - lib: lint/ruff.toml
     consumer: ruff.toml
-    reason: Narrower target set than the library profile.
+    reason: Header comments only; the rule selection is the library's.
     reconciled_sha256: ccf4e857a9d7e20039ef8f68be7080210e6703d1400c23586ec6f5679e2fbfb2
   - lib: lint/gitleaks.toml
     consumer: .gitleaks.toml
@@ -74,30 +48,49 @@ forked:
   # registered — the same split the scripts and lint profiles get.
   - lib: lint/secret-detection-ruleset.toml
     consumer: .gitlab/secret-detection-ruleset.toml
-    reason: Ruleset overrides name this repo's own scanned paths.
+    reason: >-
+      Header comments and the ruleset description string; the passthrough is
+      the library's.
     reconciled_sha256: d6413e69a2d8a6f7d0c468d4370a406299894ad9e3fe274eb7f69eb30a7c936d
   # One line, quoted, however long: a folded scalar reconstructs the literal
   # filename only if the wrap lands on a space, so re-wrapping it silently
   # produces a different path.
   - lib: lint/secret-detection-ruleset.toml
-    consumer: "template/{% if ci_shape != 'github' %}.gitlab{% endif %}/{% if ci_shape == 'gitlab_selfhosted' %}secret-detection-ruleset.toml{% endif %}"
-    reason: Ruleset overrides name the rendered tenant's scanned paths.
+    consumer: "template/{% if forge == 'gitlab' %}.gitlab{% endif %}/{% if ci_shape == 'gitlab_selfhosted' %}secret-detection-ruleset.toml{% endif %}"
+    reason: >-
+      Header comments and the ruleset description string; the passthrough is
+      the library's.
     reconciled_sha256: d6413e69a2d8a6f7d0c468d4370a406299894ad9e3fe274eb7f69eb30a7c936d
+  # The family spells the profile at this path, not the root `.yamllint` that
+  # ansible-lint discovers and lets override its own yaml rule. Callers pass `-c`.
+  - lib: lint/yamllint-relaxed.yml
+    consumer: lint/yamllint-relaxed.yml
+    reason: Header comments only; the rules are the library's.
+    reconciled_sha256: 7fcb8f02aadf68b97cd334a69a889c8cd87ac4796927c086bf77702a247ae2d5
   - lib: lint/editorconfig
     consumer: .editorconfig
     reason: Per-repo file-type sections on a shared base.
     reconciled_sha256: 911171d9f26ba0bb47300c97a9e46b078d48eb852dfe9a050fbc3c8e41cc2944
   - lib: lint/pre-commit-config.yaml
-    consumer: template/.pre-commit-config.yaml
-    reason: Per-repo hook set on a shared base.
+    consumer: .pre-commit-config.yaml
+    reason: >-
+      Template-repo hook set on a shared base: the template/ tree is excluded
+      from the YAML hooks.
     reconciled_sha256: 39e7c3a5fbc7d2185ad73c436cbba736cae1e2b2b88f7f50387f041cbd87323c
-  # The tenant-side lint profiles, the same split as the scripts above: the
-  # root three are what this repo lints ITSELF with, these three are what a
-  # generated tenant gets. Registering only one half left the other
-  # unguarded.
+  - lib: lint/pre-commit-config.yaml
+    consumer: template/.pre-commit-config.yaml
+    reason: >-
+      The library's hook set plus four local hooks: the egress fence, the
+      scrape-wiring check, the kustomization check and the doc-link check, so a
+      tenant with no pipeline still runs them. The header also drops the
+      library's copy instruction.
+    reconciled_sha256: 39e7c3a5fbc7d2185ad73c436cbba736cae1e2b2b88f7f50387f041cbd87323c
+  # Tenant-side lint profiles, the same split as the scripts above: the root
+  # copies lint this repo, these ship to a generated tenant. Both halves are
+  # registered.
   - lib: lint/ruff.toml
     consumer: template/ruff.toml
-    reason: Tenant target set, narrower than the library profile.
+    reason: Header comments only; the rule selection is the library's.
     reconciled_sha256: ccf4e857a9d7e20039ef8f68be7080210e6703d1400c23586ec6f5679e2fbfb2
   - lib: lint/gitleaks.toml
     consumer: template/.gitleaks.toml
@@ -107,3 +100,9 @@ forked:
     consumer: template/.editorconfig
     reason: Tenant file-type sections on a shared base.
     reconciled_sha256: 911171d9f26ba0bb47300c97a9e46b078d48eb852dfe9a050fbc3c8e41cc2944
+  # Still the root name, unlike the copy above: the vendored GitHub workflow
+  # lints with `-c .yamllint`, so this path moves when the library's does.
+  - lib: lint/yamllint-relaxed.yml
+    consumer: template/.yamllint
+    reason: Header comments only; the rules are the library's.
+    reconciled_sha256: 7fcb8f02aadf68b97cd334a69a889c8cd87ac4796927c086bf77702a247ae2d5
