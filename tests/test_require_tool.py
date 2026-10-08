@@ -44,7 +44,7 @@ def test_a_missing_binary_fails_when_ci_is_set(ambient_ci):
 
 def test_a_ci_optional_gate_skips_in_ci(ambient_ci):
     assert _outcome(ci_optional=True) == "skipped", (
-        "a ci_optional gate went red in CI instead of deferring to render-validate"
+        "a ci_optional gate went red in CI instead of deferring to validate-rendered-app"
     )
 
 

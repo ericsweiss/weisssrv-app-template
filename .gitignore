@@ -4,7 +4,7 @@
 *.env
 .tmp/
 
-# CI scratch — render-validate installs kustomize/kubeconform here.
+# CI scratch — validate-rendered-app installs kustomize/kubeconform here.
 .bin/
 
 # Rendered template instances (`tests/render_app.py --out`, local copier runs).

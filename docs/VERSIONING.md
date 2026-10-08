@@ -152,7 +152,7 @@ at the pinned `lib_ref` and waiting on their own change.
 
 `lib_ref` is an answer, so a generated repo can pin any library tag it likes.
 Exactly one pair per template release is proved to work: the one
-`render-validate` runs, which clones the library at `copier.yml`'s `lib_ref`
+`validate-rendered-app` runs, which clones the library at `copier.yml`'s `lib_ref`
 default and runs the real toolchain over the render against it.
 
 | Template release | Rendered and validated against |
@@ -168,7 +168,7 @@ Rules that keep the table meaningful:
 
 - The `lib_ref` default in `copier.yml` and this repository's own `include:`
   refs move together, in one merge request. `scripts/check-lib-pins.py --fix`
-  syncs the includes and `render-validate` clones at the default, so the
+  syncs the includes and `validate-rendered-app` clones at the default, so the
   default is the tag actually proved. The test suite compares the two.
 - Add the row in that same merge request, labelled `main` until the tag exists,
   then relabel it when the release is cut. The release notes are generated from
@@ -183,5 +183,5 @@ Rules that keep the table meaningful:
 
 `release` is the LAST stage on purpose: the semantic-release job sets no
 `needs:`, so stage ordering gates the tag on every job above it — including
-`render-validate`. A template tag is what a generated repo's `copier update`
+`validate-rendered-app`. A template tag is what a generated repo's `copier update`
 resolves to, so it must never be cut from a tree that does not render.

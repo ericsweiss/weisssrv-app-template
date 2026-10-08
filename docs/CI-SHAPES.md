@@ -37,7 +37,7 @@ including the deploy-notes prompt about new secrets and cluster-side wiring.
 | `kustomize build` + kubeconform | `flux-lint` (library template) | `flux-lint` job | `task flux-lint` |
 | ruff | `python-lint` (library template) | `python-lint` job | `task python-lint` |
 | shellcheck | n/a — no GitLab counterpart; a tenant with shell scripts adds the library's `shellcheck` template | `shellcheck` job, skipped when the repo has no `.sh` files | n/a |
-| Markdown link check | `docs-link-check` (library template) | `docs-link-check` job | `task doc-links` |
+| Markdown link check | `lint-docs-links` (library template, renamed via the `job_name` input) | `docs-link-check` job — the vendored `ci.yml` carries the library's job id and takes the name in the library release that changes the default | `task doc-links` |
 | Comment convention (`check-comment-length.py`) | `comment-length` (library template), plus `task comment-length` locally | n/a — the vendored `ci.yml` carries no counterpart; `task comment-length` locally | `task comment-length` |
 | Secret scanning | GitLab Secret Detection (gitleaks under the hood), findings block | gitleaks directly, same `.gitleaks.toml`, findings block | pre-commit gitleaks hook |
 | Library pin gate | `lib-pin-check`, plus `task lib-pins` locally | n/a — no includes to pin | n/a |
@@ -116,7 +116,7 @@ workflow holding `packages: write` must never run on one.
 The rendered `.gitlab-ci.yml` keeps its comments to the trap each block guards.
 The reasoning behind them lives here.
 
-**`docs-link-check` image.** The library already defaults to the full
+**`lint-docs-links` image.** The library already defaults to the full
 `python:3.11`, which carries the `git` the tracked-Markdown scan shells out to.
 The `python:3.13` input is an interpreter bump, not a capability fix, and the
 checker raises rather than degrading when `git` is missing.

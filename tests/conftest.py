@@ -20,7 +20,7 @@ def require_tool(
     """Stop a binary-driven gate that has no binary instead of skipping in CI.
 
     Under $CI a missing tool means the job never installed it, so the gate would
-    certify a check it never ran. ci_optional defers to render-validate instead.
+    certify a check it never ran. ci_optional defers to validate-rendered-app instead.
     """
     if shutil.which(name):
         return
@@ -30,7 +30,7 @@ def require_tool(
                 f"{name} is not on PATH — the {gate_name} gate cannot run. "
                 + (install_hint or "Install it in the job.")
             )
-        pytest.skip(f"{name} not on PATH — render-validate runs the {gate_name} gate")
+        pytest.skip(f"{name} not on PATH — validate-rendered-app runs the {gate_name} gate")
     pytest.skip(f"{name} not on PATH")
 
 

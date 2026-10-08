@@ -48,7 +48,7 @@ variables:
 
 include:
   # Only genuine YAML: .jinja files under template/ are Jinja sources and the
-  # conditional paths are not valid names until rendered. render-validate
+  # conditional paths are not valid names until rendered. validate-rendered-app
   # yamllints the rendered tree, which is where template/ gets covered.
   - project: eric/weisssrv-lib
     ref: v0.18.0
@@ -119,6 +119,7 @@ include:
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
+      job_name: lint-docs-links
       changes:
         - "docs/**/*"
         - "README.md"
@@ -152,7 +153,7 @@ include:
           optional: true
         - job: python-tests
           optional: true
-        - job: render-validate
+        - job: validate-rendered-app
           optional: true
 
   # Cuts this template's tag from the conventional commits merged to main: the
@@ -183,7 +184,7 @@ lib-pin-check:
         - "scripts/check-lib-pins.py"
     - if: '$CI_COMMIT_BRANCH == "main"'
 
-render-validate:
+validate-rendered-app:
   stage: test
   image: python:3.13
   tags: []

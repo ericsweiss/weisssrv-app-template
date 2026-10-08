@@ -60,7 +60,7 @@ file under `template/`, the four seams, and what the render suite holds.
   fine: they compose from an answer already given and name no site of their own.
 - A Markdown file under `template/` that links to a **rendered** sibling
   (`CLAUDE.md`, not `CLAUDE.md.jinja`) needs the `.jinja` suffix itself, or this
-  repo's own `docs-link-check` resolves the link here, where the target does not
+  repo's own `lint-docs-links` resolves the link here, where the target does not
   exist yet.
 - Keep the tenant-facing docs and agent files (under `template/`) as pointers,
   not procedure copies. The generated repo's `CLAUDE.md` is the standing rules;

@@ -77,13 +77,13 @@ WEISSSRV_LIB_PATH=../weisssrv-lib python3 -m pytest tests   # + this repo's own 
 ```
 
 The schema fetch is opt-in so a plain `pytest` run touches no network. It is a
-local duplicate of what `render-validate` already enforces:
+local duplicate of what `validate-rendered-app` already enforces:
 `tests/validate_render.py` is the schema gate of record, and it fails on a
 skipped or empty render. The `WEISSSRV_LIB_PATH` checkout must be at
 `.gitlab-ci.yml`'s `WEISSSRV_LIB_REF`.
 `tests/validate_render.py`'s own flags are in
 [`docs/ARCHITECTURE.md` § Running the real toolchain](docs/ARCHITECTURE.md), and
-the `render-validate` script block in `.gitlab-ci.yml` is the full answer-set
+the `validate-rendered-app` script block in `.gitlab-ci.yml` is the full answer-set
 matrix.
 
 Changes ship by merge request; releases are cut from conventional commits

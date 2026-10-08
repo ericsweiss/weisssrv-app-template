@@ -106,7 +106,7 @@ include:
       changes:
         - "**/*"
 
-  # -- docs-link-check: relative Markdown cross-links resolve -----------------
+  # -- lint-docs-links: relative Markdown cross-links resolve -----------------
   # python:3.13 overrides the library's python:3.11; drop the input to take the
   # library's interpreter.
   - project: {{ lib_project }}
@@ -114,6 +114,7 @@ include:
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
+      job_name: lint-docs-links
       image: python:3.13
       changes:
         - "**/*.md"

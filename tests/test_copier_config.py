@@ -181,7 +181,7 @@ def test_answer_fixtures_pin_the_default_library_tag():
 
 def test_library_pin_is_the_same_in_the_pipeline_and_the_answer_default():
     """This repo's own `include:` refs and what a fresh render pins move
-    together: render-validate clones at the answer default, so a partial bump
+    together: validate-rendered-app clones at the answer default, so a partial bump
     lints the template with one library and hands tenants another."""
     ci = render_app.load_ci(REPO_ROOT / ".gitlab-ci.yml")
     pinned = ci["variables"]["WEISSSRV_LIB_REF"]

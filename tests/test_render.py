@@ -197,7 +197,7 @@ def rendered_forge_other(tmp_path_factory) -> Path:
 
 
 # Kept out of RENDERS: it proves one filter, not a file set, so it needs no
-# render-validate line of its own.
+# validate-rendered-app line of its own.
 MIXED_CASE_GIT_NAMESPACE = "BrineMoor-Works"
 
 
@@ -1728,10 +1728,10 @@ def test_the_tenant_gitleaks_config_extends_the_default_rules(repo):
 # --------------------------------------------------------------------------
 
 
-# Hint for the binaries no pip install provides. The render-validate job
+# Hint for the binaries no pip install provides. The validate-rendered-app job
 # fetches them with sha256 verification and runs these same gates, so the
 # test job skips them instead of failing.
-_TOOLCHAIN_HINT = "Install it in the test job the way render-validate does."
+_TOOLCHAIN_HINT = "Install it in the test job the way validate-rendered-app does."
 
 
 def _run(repo_path: Path, *command: str) -> subprocess.CompletedProcess:
@@ -1791,7 +1791,7 @@ def test_generated_manifests_validate(repo):
     if not os.environ.get("WEISSSRV_SCHEMA_NETWORK"):
         pytest.skip(
             "set WEISSSRV_SCHEMA_NETWORK=1 to fetch CRD schemas; "
-            "render-validate runs this gate in CI"
+            "validate-rendered-app runs this gate in CI"
         )
     built = _run(repo.path, "kustomize", "build", FLUX)
     # Read from the render, so this test and `task flux-lint` cannot resolve
@@ -1997,7 +1997,7 @@ def test_the_image_repository_is_lowercase(repo):
     assert repository == repository.lower(), f"the image repository is not lowercase: {repository}"
 
 
-# answers fixture name -> the file render-validate names with --answers.
+# answers fixture name -> the file validate-rendered-app names with --answers.
 _ANSWERS_FILES = {"answers": render_app.ANSWERS.name, "answers_b": render_app.ANSWERS_B.name}
 
 
@@ -2011,7 +2011,7 @@ def _answer_set(answers_file: str, data: dict) -> tuple:
     return (answers_file, frozenset(normalised.items()))
 
 
-# The answers file each render-validate line names, by basename.
+# The answers file each validate-rendered-app line names, by basename.
 _ANSWERS_PATHS = {
     render_app.ANSWERS.name: render_app.ANSWERS,
     render_app.ANSWERS_B.name: render_app.ANSWERS_B,
@@ -2021,7 +2021,7 @@ _ANSWERS_PATHS = {
 def _render_validate_lines() -> list[tuple[str, dict[str, str], bool]]:
     """One entry per validate_render.py line: (answers file, its --data
     overrides, whether --lib-path rides with it)."""
-    job = render_app.load_ci(REPO_ROOT / ".gitlab-ci.yml")["render-validate"]
+    job = render_app.load_ci(REPO_ROOT / ".gitlab-ci.yml")["validate-rendered-app"]
     lines = []
     for command in job["script"]:
         if "tests/validate_render.py" not in command:
@@ -2048,7 +2048,7 @@ def test_every_pipeline_render_gets_the_include_contract_gate():
     the gate returns [] for a render with no pipeline — so a GitLab-shape line
     without the flag skips it rather than failing."""
     lines = _render_validate_lines()
-    assert lines, "render-validate runs no validate_render.py invocation"
+    assert lines, "validate-rendered-app runs no validate_render.py invocation"
     unguarded = []
     for answers_file, data, has_lib_path in lines:
         answers = yaml.safe_load(_ANSWERS_PATHS[answers_file].read_text())
@@ -2057,7 +2057,7 @@ def test_every_pipeline_render_gets_the_include_contract_gate():
         if not has_lib_path:
             unguarded.append(f"{answers_file} {sorted(data.items())}")
     assert not unguarded, (
-        "these render-validate lines render a GitLab pipeline with no --lib-path, "
+        "these validate-rendered-app lines render a GitLab pipeline with no --lib-path, "
         "so the include-contract gate silently skips:\n  " + "\n  ".join(unguarded)
     )
 
@@ -2073,7 +2073,7 @@ def test_every_render_overrides_a_question_copier_declares():
     questions = _copier_questions()
     invocations = _render_validate_invocations()
     assert questions, "copier.yml declared no questions"
-    assert invocations, "render-validate runs no validate_render.py invocation"
+    assert invocations, "validate-rendered-app runs no validate_render.py invocation"
     unknown = {key for _, _, overrides in RENDERS.values() for key in overrides} - questions
     for _, data in invocations:
         unknown |= {key for key, _ in data} - questions
@@ -2094,7 +2094,7 @@ def test_every_render_reaches_the_real_toolchain():
         if wanted not in covered:
             missing.append(f"{label}: {wanted[0]} {sorted(wanted[1])}")
     assert not missing, (
-        "render-validate renders no tree with these answers:\n  " + "\n  ".join(missing)
+        "validate-rendered-app renders no tree with these answers:\n  " + "\n  ".join(missing)
     )
 
 

@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ANSWERS = REPO_ROOT / "tests" / "answers-weisssrv-shaped.yml"
 ANSWERS_B = REPO_ROOT / "tests" / "answers-unlike.yml"
 
-# What CI's render-validate job creates inside the project directory: a full
+# What CI's validate-rendered-app job creates inside the project directory: a full
 # library clone and the extracted kustomize/kubeconform tarballs. Copying
 # either into the template source is pointless I/O.
 _EXTRA_IGNORE = (".tmp", ".bin")
