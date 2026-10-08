@@ -17,11 +17,23 @@ is `{{ secrets_backend }}`.
 
 1. **Set the image** in `kubernetes/flux/deployment.yaml`. The shipped value is a
    **placeholder no registry has**
-   (`{{ registry_host }}/{{ git_namespace }}/{{ app_slug }}:REPLACE-ME`) — leave
+   (`{{ registry_host }}/{{ git_namespace | lower }}/{{ app_slug }}:REPLACE-ME`) — leave
    it and the first reconcile `ImagePullBackOff`s.
 {%- if enable_image_build and ci_shape != 'none' %}
    CI builds the repo-root `Dockerfile` and pushes `:<short-sha>`, so that tag
    is the usual first edit.
+{%- if ci_shape == 'github' and registry_host != 'ghcr.io' %}
+   The vendored build workflow publishes to `ghcr.io/<owner>/<repo>` from its
+   own literals, so it does NOT push to `{{ registry_host }}`. Point `image:`
+   at the GHCR path, or change the workflow's login step and its
+   `REGISTRY`/`IMAGE_NAME`.
+{%- endif %}
+{%- if ci_shape == 'gitlab_selfhosted' and not (registry_host.split(':')[0] == git_host or registry_host.split(':')[0].endswith('.' ~ git_host)) %}
+   The build job pushes `$CI_REGISTRY_IMAGE:<short-sha>` — this project's GitLab
+   registry, not `{{ registry_host }}`. Point `image:` at the project registry,
+   or pass `registry:`, `login_registry:`, `login_user:` and `login_password:`
+   to the `docker-build` include.
+{%- endif %}
 {%- elif enable_image_build %}
    This repo has no pipeline: `task build` builds the repo-root `Dockerfile`
    locally and you push the tag yourself, then point `image:` at it.
@@ -43,6 +55,9 @@ is `{{ secrets_backend }}`.
    ExternalSecret, so a private registry needs a `secrets_backend` first. Make
    the package public, or add a backend and the credential in one
    `copier update`.
+{%- elif secrets_backend != 'none' and enable_registry_pull_secret %}
+   The upstream registry is private, so the namespace still needs a pull
+   credential — step O2b below.
 {%- endif %}
 2. **Check the hostnames.** Public `{{ app_slug }}.{{ external_domain }}` is
    ready in `ingressroute.yaml` and needs no operator action.
@@ -62,6 +77,16 @@ is `{{ secrets_backend }}`.
 3. **Wire the secrets** in `kubernetes/flux/externalsecret.yaml`. It references
    the `ClusterSecretStore` `{{ secrets_backend }}-{{ app_slug }}`, which is what
    the operator creates in step O3 — the two names must match.
+{%- if secrets_backend == 'onepassword' %}
+   The item must carry a field named exactly as `property` spells it (`api-key`
+   as shipped).
+{%- else %}
+   The project must carry a masked CI/CD variable named exactly as
+   `remoteRef.key` spells it (`APP_API_KEY` as shipped); GitLab variable names
+   allow only letters, digits and `_`.
+{%- endif %}
+   The Deployment's env binding is not `optional:`, so until the ExternalSecret
+   syncs, the pod stays in `CreateContainerConfigError`.
 {%- endif %}
 {%- if enable_servicemonitor %}
 4. **Point observability** at the app's real metrics endpoint in
@@ -77,13 +102,26 @@ is `{{ secrets_backend }}`.
 {%- if ci_shape == 'none' %}
    There is no pipeline here, so `task lint` and the pre-commit hooks are the
    whole gate.
+{%- elif ci_shape == 'github' %}
+   CI must be green. The workflows are byte-identical library copies, so they
+   cannot take an answer: set repository variable `K8S_VERSION` to
+   `{{ k8s_version }}` under Settings > Secrets and variables > Actions. Until
+   it is set, `flux-lint` warns and validates the manifests against the
+   library's own fallback minor.
 {%- else %}
    CI must be green.
+{%- endif %}
+{%- if forge == 'gitlab' %}
+   Optional: create the project labels you want (Settings > Labels), then add a
+   `/label ~<name>` line to the templates under `.gitlab/` to tag new issues and
+   {{ change_request }}s automatically.
 {%- endif %}
 6. **Request wiring** from the operator: hand them this page. They need the slug
    (`{{ app_slug }}`), the namespace (`{{ app_namespace }}`), the secret backend
    (`{{ secrets_backend }}`), this repo's URL, whether an internal hostname is
    needed{% if secrets_backend != 'none' and enable_registry_pull_secret %}, the registry pull credential (O2b){% endif %}{% if enable_sso %} and the SSO objects (O8){% endif %}.
+   Replace the `:REPLACE-ME` image tag first: the placeholder leaves the
+   Deployment at zero available replicas and pages the operator.
 7. After the operator merges the wiring, merge your `main`. Verify with
    `task flux:status` and `kubectl get pods -n {{ app_namespace }}` (kubeconfig
    from the operator).
@@ -92,6 +130,23 @@ is `{{ secrets_backend }}`.
 
 ## Operator checklist (performed in the cluster repo)
 
+**Before the first tenant.** A cluster that has never onboarded a tenant may
+still carry platform settings that were safe only while every route and every
+ExternalSecret was operator-authored. Cross-namespace Traefik routing and the
+Flux agent's RBAC are the usual two. Work the cluster repo's pre-onboarding
+checklist first; its lint can fail on the first tenant entry until that is done.
+The cluster-side objects this repo binds to are listed in `ARCHITECTURE.md`
+under Platform contract. Merge the wiring only once the tenant repo carries a
+real image tag: the shipped `:REPLACE-ME` placeholder holds the Deployment at
+zero available replicas and `AppDown` (critical) fires in your Alertmanager ten
+minutes later.
+{%- if secrets_backend != 'none' %}
+
+A backend item missing the field the `ExternalSecret` names pages you the same
+way: the pod's env binding is not `optional:`, so it never starts. Merge the
+wiring once the item carries that field.
+{%- endif %}
+
 ### O1 — Prepare the secret backend
 {% if secrets_backend == 'onepassword' %}
 Create the items this tenant reads in the `{{ onepassword_vault }}` vault,
@@ -99,32 +154,45 @@ titled `"{{ app_slug }}: <Item>"`, and a scoped Connect token for them (find the
 server ID with `op connect server list`, then `op connect token create
 {{ app_slug }}-eso --server <ID> --vaults "{{ onepassword_vault }}"`).
 {%- elif secrets_backend == 'gitlab' %}
-Have the tenant create a project access token (Reporter, `read_api`) and set the
-masked CI/CD variables this repo's ExternalSecret reads.
+Have the tenant create a project access token with the **Maintainer** role and
+the `api` scope, on the GitLab project that holds these variables:
+`{{ gitlab_api_url }}`. That project's numeric ID is the `projectID` in the store
+below. Reading project CI/CD variables is a Maintainer-level operation, and the
+ESO GitLab provider requires `api`, not `read_api`. Then set the masked CI/CD
+variables this repo's ExternalSecret reads on that same project.
 {%- else %}
 Nothing to prepare — this tenant declares no secret backend. Skip O1, O2 and the
 `ClusterSecretStore` in O3.
 {%- endif %}
-{% if secrets_backend != 'none' %}
+{%- if secrets_backend != 'none' %}
+
 ### O2 — Bootstrap the namespace secret
 
-One-time, not Flux-managed:
+One-time, not Flux-managed, and re-runnable for a rotated token:
 
 ```bash
-kubectl create namespace {{ app_namespace }}
+kubectl create namespace {{ app_namespace }} --dry-run=client -o yaml | kubectl apply -f -
 {%- if secrets_backend == 'onepassword' %}
 kubectl -n {{ app_namespace }} create secret generic onepassword-connect-token \
-  --from-literal=token=<CONNECT_TOKEN>
+  --from-literal=token=<CONNECT_TOKEN> --dry-run=client -o yaml | kubectl apply -f -
 {%- else %}
 kubectl -n {{ app_namespace }} create secret generic gitlab-api-token \
-  --from-literal=token=<PROJECT_ACCESS_TOKEN>
+  --from-literal=token=<PROJECT_ACCESS_TOKEN> --dry-run=client -o yaml | kubectl apply -f -
 {%- endif %}
 ```
+
+The pod reads the synced value into its environment at container start, so a
+rotation also needs
+`kubectl delete pod -n {{ app_namespace }} -l app.kubernetes.io/name={{ app_slug }}`.
+A `rollout restart` is not a substitute: it writes a pod-template annotation the
+cluster's kustomize-controller reverts on its next reconcile. The
+`ExternalSecret` reports Ready either way.
 {%- endif %}
-{% if secrets_backend != 'none' and enable_registry_pull_secret %}
+{%- if secrets_backend != 'none' and enable_registry_pull_secret %}
+
 ### O2b — Registry pull credential
 
-{% if ci_shape == 'github' -%}
+{% if registry_pull_host == 'ghcr.io' or registry_host == 'ghcr.io' -%}
 A GHCR package is private by default and its visibility does **not** follow its
 source repository's, so the kubelet cannot pull this tenant's image without a
 credential.
@@ -138,7 +206,7 @@ credential.
    in the tenant's secret backend under the fields
    `kubernetes/flux/externalsecret-registry.yaml` reads. The username is half
    of what `docker login ghcr.io` takes, so it must be stored, not assumed.
-{%- else -%}
+{%- elif forge == 'gitlab' and (registry_host.split(':')[0] == git_host or registry_host.split(':')[0].endswith('.' ~ git_host)) -%}
 A project registry is private by default, so the kubelet cannot pull this
 tenant's image without a credential.
 
@@ -148,15 +216,40 @@ tenant's image without a credential.
    fields `kubernetes/flux/externalsecret-registry.yaml` reads — the forge
    generates the username (e.g. `gitlab+deploy-token-N`), so it must be stored,
    not assumed.
+{%- else -%}
+A private registry means the kubelet cannot pull this tenant's image without a
+credential.
+
+1. On `{{ registry_host }}`, create a read-only credential for this image — a
+   robot account, deploy token or pull-scoped token, whatever the registry
+   calls it.
+2. Store the token and the **username it belongs to** in the tenant's secret
+   backend under the fields
+   `kubernetes/flux/externalsecret-registry.yaml` reads. The username is half of
+   what `docker login` takes, so it must be stored, not assumed.
 {%- endif %}
 
-Nodes pull over `{{ registry_pull_host }}`; the manifest keys the credential on
-both that and `{{ registry_host }}`, because the kubelet matches a pull secret
-against the literal host in the image reference. Making the package registry
-public avoids this step entirely.
+The image reference names `{{ registry_host }}`, and `{{ registry_pull_host }}`
+is keyed into the same credential so the pull still authenticates on a cluster
+whose nodes resolve that name to an internal registry. The kubelet matches a
+pull secret against the literal host in the image reference, so if your nodes
+must pull a different hostname, edit `image:` in
+`kubernetes/flux/deployment.yaml` — nothing rewrites it. Making the {% if registry_pull_host == 'ghcr.io' or registry_host == 'ghcr.io' %}package{% else %}registry{% endif %}
+repository public avoids this step entirely.
 {%- endif %}
 
 ### O3 — Add the wiring file
+
+The file binds two roles to the tenant's ServiceAccount. `admin` normally covers
+external-secrets.io and cert-manager.io through their aggregated `*-edit` roles;
+`tenant-crd-editor` covers those two as well, so a cluster missing an aggregated
+role still applies them. A RoleBinding naming a ClusterRole the cluster does not
+have applies without error and grants nothing, so create that role first on a
+cluster with no tenants yet. A cluster repo generated from
+weisssrv-cluster-template ships it at
+`kubernetes/clusters/<cluster>/tenants/tenant-crd-editor.yaml`. On any other
+cluster, create a ClusterRole granting edit on the API groups listed in
+`ARCHITECTURE.md` § Platform contract.
 
 `kubernetes/clusters/<cluster>/tenants/{{ app_slug }}.yaml`:
 
@@ -173,11 +266,43 @@ metadata:
     pod-security.kubernetes.io/enforce: baseline
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/audit: restricted
-    # DELIBERATELY ABSENT: the cluster's `<domain>/cluster-secrets: "true"`
-    # label. It is what the PLATFORM ClusterSecretStore's spec.conditions admit,
-    # so adding it here hands this tenant every item in the platform vault — CI
-    # tokens, IdP keys, SMTP credentials. The tenant gets its own scoped store
-    # instead; the cluster repo's tenants/README carries the exact label.
+    # CRITICAL: no platform-store membership label here. It is what the
+    # platform ClusterSecretStore admits, and it would hand this tenant every
+    # item in the platform vault.{% if secrets_backend != 'none' %} This tenant gets its own store below.{% endif %}
+---
+# Cap the namespace: `admin` places no ceiling on what a tenant may request.
+# `pods:` is the replica count plus the rollout surge, floored at 10;
+# `limits.memory` must cover that many per-pod memory limits{% if enable_vpa %} at the VPA's maxAllowed{% endif %}.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ app_slug }}-quota
+  namespace: {{ app_namespace }}
+spec:
+  hard:
+    pods: "{{ [replica_count | int + 2, 10] | max }}"
+    requests.cpu: "5"
+    requests.memory: 4Gi
+    limits.memory: 12Gi
+---
+# Defaults and per-container ceilings, so a pod with no resources block cannot
+# land unbounded inside the quota. A `max:` key with no matching `default:` key
+# becomes the default limit, so CPU is left to the quota's requests.cpu.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: {{ app_slug }}-limits
+  namespace: {{ app_namespace }}
+spec:
+  limits:
+    - type: Container
+      default:
+        memory: 512Mi
+      defaultRequest:
+        cpu: 50m
+        memory: 128Mi
+      max:
+        memory: 2Gi
 {%- if secrets_backend == 'onepassword' %}
 ---
 apiVersion: external-secrets.io/v1
@@ -193,9 +318,10 @@ spec:
         - {{ app_namespace }}
   provider:
     onepassword:
+      # The cluster's 1Password Connect Service; change it if yours differs.
       connectHost: http://onepassword-connect.external-secrets.svc.cluster.local:8080
       vaults:
-        {{ onepassword_vault }}: 1
+        "{{ onepassword_vault }}": 1
       auth:
         secretRef:
           connectTokenSecretRef:
@@ -211,8 +337,7 @@ metadata:
 spec:
   # A ClusterSecretStore is cluster-scoped: without `conditions`, ANY namespace
   # can reference it by name and read this store's variables. Scope every tenant
-  # store to its own namespace. The block is mandatory for EVERY provider — it
-  # is not a 1Password-only control.
+  # store to its own namespace, for every provider.
   conditions:
     - namespaces:
         - {{ app_namespace }}
@@ -220,8 +345,7 @@ spec:
     gitlab:
       # `url` is optional and DEFAULTS TO https://gitlab.com — omitting it sends
       # a self-hosted project token to the wrong instance, and the 401/404 that
-      # follows names nothing in this file. It is the `gitlab_api_url` answer,
-      # not git_host: the variables need not live on the forge the code does.
+      # follows names nothing in this file. It is the `gitlab_api_url` answer.
       url: {{ gitlab_api_url }}
       projectID: "<tenant project id>"
       auth:
@@ -273,13 +397,11 @@ roleRef:
   name: admin
   apiGroup: rbac.authorization.k8s.io
 ---
-# `admin` does NOT aggregate three platform CRD groups this repo uses —
-# traefik.io (IngressRoute), monitoring.coreos.com (ServiceMonitor,
-# PrometheusRule) and autoscaling.k8s.io (VPA). It normally DOES cover
-# external-secrets.io and cert-manager.io through their aggregated *-edit
-# roles, but the shared `tenant-crd-editor` ClusterRole covers those two as
-# well, so a cluster missing an aggregated role still applies them. Bind it, or
-# the tenant Kustomization goes NotReady on the first IngressRoute.
+# CRITICAL: `admin` does not aggregate traefik.io (IngressRoute) or
+# monitoring.coreos.com (ServiceMonitor, PrometheusRule){% if enable_vpa %},
+# nor autoscaling.k8s.io (VPA){% endif %}.
+# Bind `tenant-crd-editor` as well, or the tenant Kustomization goes NotReady
+# on the first IngressRoute.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -303,9 +425,9 @@ spec:
   interval: 10m
   retryInterval: 1m
   timeout: 10m
-  # Wait for the platform CRD chain (sources -> controllers -> configs) so a
-  # fresh bootstrap does not apply this tenant's CRs before the ESO,
-  # cert-manager and Traefik CRDs exist.
+  # Wait for the platform CRD chain so a fresh bootstrap does not apply this
+  # tenant's CRs before the ESO, cert-manager and Traefik CRDs exist. Retarget
+  # it at your own stage; docs/ARCHITECTURE.md, Platform contract.
   dependsOn:
     - name: infrastructure-configs
   serviceAccountName: {{ app_slug }}-flux
@@ -318,6 +440,13 @@ spec:
   wait: true
 ```
 
+No `postBuild` block: nothing under `kubernetes/flux/` spells `${var}`, so this
+repo needs no substitution. Add `postBuild.substituteFrom` only alongside a
+placeholder that needs it, and write a literal dollar-brace as `$${var}`.
+kustomize-controller usually runs with strict substitution, so one unresolvable
+`${var}` fails the whole tenant reconcile. See `ARCHITECTURE.md`
+§ Platform contract.
+
 ### O4 — Register it
 
 Kustomize does not auto-discover, so add the file to the tenants
@@ -325,7 +454,7 @@ Kustomize does not auto-discover, so add the file to the tenants
 
 ```yaml
 resources:
-  - tenant-crd-editor.yaml   # shared ClusterRole (already present)
+  - tenant-crd-editor.yaml   # shipped by the cluster repo (see O3)
   - {{ app_slug }}.yaml      # add this line
 ```
 {% if enable_internal_ingress %}
@@ -343,22 +472,40 @@ Not needed: this tenant publishes only the public hostname, which external-dns
 provisions on its own.
 {%- endif %}
 
-### O6 — Persistent storage (only if the tenant needs a zvol-backed volume)
+### O6 — Persistent storage (only if the tenant needs a volume)
 
-Add the zvol to the storage node's `vm_additional_disks` in the cluster
-inventory, re-run the k3s play for that host, and hand the tenant the PV/PVC and
-node-pin pattern. This app is stateless as generated.
+This template ships no PVC by design. Supply the StorageClass the cluster
+offers, or provision the volume and a matching PV yourself, and hand the tenant
+the PVC name. The tenant then adds the volume and its mount to
+`deployment.yaml`{% if enable_vpa %} and sets `vpa.yaml` `updateMode: "Off"`{% endif %}.
+
+On a Proxmox/ZFS cluster: add the zvol to the storage node's
+`vm_additional_disks` in the cluster inventory, re-run the k3s play for that
+host, and hand the tenant the PV/PVC plus the node-pin and NAS-toleration
+pattern. NFS-backed volumes mount by hostname there, because the wildcard
+certificate carries no IP SAN.
+
+This app is stateless as generated. A volume provisioned here sits outside
+every backup set until the operator adds it, and the operator owns its snapshot
+and backup schedule.
 
 ### O7 — Reachability probe (recommended for user-facing routes)
 
-This repo's `PrometheusRule` alerts on replica availability only. To also alert
-on end-to-end HTTP/TLS reachability — a broken IngressRoute, certificate or DNS
-record while replicas stay ready — add `{{ app_slug }}.{{ external_domain }}` to
-the cluster's static blackbox target list
-({% if enable_sso %}`module: http_sso` for this SSO-gated route{% else %}`module: http_2xx`{% endif %}).
-{% if enable_sso %}
+This repo's `PrometheusRule` covers replica availability only. The platform
+alerts cluster-wide on certificate expiry and on a `Certificate` that never
+goes Ready. To also alert on end-to-end HTTP/TLS reachability, such as a broken
+IngressRoute, certificate or DNS record while replicas stay ready, add
+`{{ app_slug }}.{{ external_domain }}` to the cluster's static blackbox target
+list ({% if enable_sso %}`module: http_sso` for this SSO-gated route{% else %}`module: http_2xx`{% endif %}).
+{%- if enable_internal_ingress %}
+Add `{{ app_slug }}.{{ internal_domain }}` with `module: http_2xx` too. It
+carries its own IngressRoute, its own certificate and the DNS record from O5,
+and the external probe covers none of them.
+{%- endif %}
+
 ### O8 — SSO objects
 
+{% if enable_sso -%}
 This repo's route references the forward-auth middleware, which does nothing on
 its own. In the cluster's Authentik Terraform, add: a **proxy** provider whose
 `external_host` is EXACTLY `https://{{ app_slug }}.{{ external_domain }}`, the
@@ -369,6 +516,17 @@ Two failure modes worth knowing first: a provider missing from the outpost's
 list answers every request with a 404 from the outpost, and an `external_host`
 set to the other split-horizon hostname breaks the redirect loop rather than
 erroring.
+{%- if enable_internal_ingress %}
+
+The middleware is on the public route only. `{{ app_slug }}.{{ internal_domain }}`
+stays source-filtered to the LAN and tailnet rather than authenticated, because
+a proxy provider pins one `external_host`. Gating it too means a second provider
+and a second outpost entry.
+{%- endif %}
+{%- else -%}
+Not needed: SSO is off for this tenant and its route carries no forward-auth
+middleware. `copier update --data enable_sso=true` renders the middleware
+reference and brings this step back.
 {%- endif %}
 
 ### O9 — Branch → {{ change_request }} → merge

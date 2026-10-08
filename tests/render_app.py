@@ -1,30 +1,29 @@
 """Render this template into a throwaway directory.
 
-Shared by the pytest suite and tests/validate_render.py so both exercise the
-same invocation.
-
-The template source is COPIED to a scratch directory first, with .git left
-behind: copier treats a git checkout as a VCS source and renders its committed
-HEAD, which would silently test the last commit instead of the working tree
-every reviewer and CI job is actually looking at.
+The copier invocation is the library's vendored tests/copier_render.py; what
+stays here is this repository's own.
 """
 
 from __future__ import annotations
 
-import shutil
-import subprocess
+import importlib.util
 import sys
 from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import copier_render
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ANSWERS = REPO_ROOT / "tests" / "answers-weisssrv-shaped.yml"
 ANSWERS_B = REPO_ROOT / "tests" / "answers-unlike.yml"
 
-_IGNORED = shutil.ignore_patterns(
-    ".git", "__pycache__", "*.pyc", ".pytest_cache", ".ruff_cache", ".render"
-)
+# What CI's validate-rendered-app job creates inside the project directory: a full
+# library clone and the extracted kustomize/kubeconform tarballs. Copying
+# either into the template source is pointless I/O.
+_EXTRA_IGNORE = (".tmp", ".bin")
 
 
 class CILoader(yaml.SafeLoader):
@@ -49,10 +48,17 @@ def load_ci(path: Path) -> dict:
     return yaml.load(path.read_text(), Loader=CILoader)
 
 
+def load_gate(name: str, directory: str):
+    """Import a hyphenated gate from `directory` by path."""
+    path = REPO_ROOT / directory / name
+    spec = importlib.util.spec_from_file_location(path.stem.replace("-", "_"), path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def copy_source(scratch: Path) -> Path:
-    src = scratch / "template-src"
-    shutil.copytree(REPO_ROOT, src, ignore=_IGNORED)
-    return src
+    return copier_render.copy_source(REPO_ROOT, scratch, extra_ignore=_EXTRA_IGNORE)
 
 
 def render(
@@ -61,54 +67,16 @@ def render(
     dest_name: str = "render",
     data: dict[str, str] | None = None,
 ) -> Path:
-    """Render the working tree with `answers`; return the generated repo root.
-
-    `data` overrides individual answers on top of the file, which is how the
-    third CI shape is covered without a third full fixture.
-    """
-    src = copy_source(scratch)
-    dest = scratch / dest_name
-    overrides: list[str] = []
-    for key, value in (data or {}).items():
-        overrides += ["--data", f"{key}={value}"]
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "copier",
-            "copy",
-            "--defaults",
-            "--overwrite",
-            "--trust",
-            "--data-file",
-            str(answers),
-            *overrides,
-            str(src),
-            str(dest),
-        ],
-        check=True,
+    """Render the working tree with `answers`; return the generated repo root."""
+    return copier_render.render(
+        REPO_ROOT,
+        scratch,
+        answers=answers,
+        dest_name=dest_name,
+        data=data,
+        extra_ignore=_EXTRA_IGNORE,
     )
-    return dest
-
-
-def main() -> int:
-    import argparse
-    import tempfile
-
-    parser = argparse.ArgumentParser(description="Render the template for inspection.")
-    parser.add_argument("--out", type=Path, help="Directory to render into (must not exist).")
-    parser.add_argument("--answers", type=Path, default=ANSWERS)
-    args = parser.parse_args()
-
-    scratch = Path(tempfile.mkdtemp(prefix="app-template-"))
-    dest = render(scratch, answers=args.answers)
-    if args.out:
-        shutil.copytree(dest, args.out)
-        shutil.rmtree(scratch, ignore_errors=True)
-        dest = args.out
-    print(dest)
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(copier_render.cli_main(REPO_ROOT, ANSWERS, "app-template-"))

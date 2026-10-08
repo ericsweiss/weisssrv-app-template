@@ -14,9 +14,11 @@ no `kubectl apply` / `helm upgrade` in the normal workflow.
 
 CI shape is **`{{ ci_shape }}`**{% if ci_shape == 'gitlab_selfhosted' %}: every job in `.gitlab-ci.yml` is included from
 `{{ lib_project }}` at a pinned tag. Do not re-inline one; change behaviour by
-bumping the `ref:` or adjusting the `inputs:`{% elif ci_shape == 'github' %}: `.github/workflows/` is a vendored copy of
-the shared library's workflows. Keep it byte-identical to the library and
-re-vendor on a bump — do not hand-edit a job{% else %}: there is no pipeline. `task lint` and the
+bumping the `ref:` or adjusting the `inputs:`{% elif ci_shape == 'github' %}: `.github/workflows/{ci,release,build-image}.yml`
+are vendored copies of the shared library's workflows. Keep them byte-identical
+and re-vendor on a bump. `manifest-gates.yml` beside them is this repo's own.
+They take no hand edit: `ci.yml` reads repository variable `K8S_VERSION`,
+which a byte-identical copy cannot take from an answer — see docs/VERSIONING.md{% else %}: there is no pipeline. `task lint` and the
 pre-commit hooks are the whole gate{% endif %}.
 
 The repo was generated from a copier template and records its answers in
@@ -44,7 +46,27 @@ metrics — are `copier update` with the answer flipped, not hand-assembly.
   `restricted`: keep `runAsNonRoot`, dropped capabilities and a read-only root
   filesystem.
 - **Register every new manifest** in `kubernetes/flux/kustomization.yaml`.
+- **Never edit the vendored copies in place**: every file under `scripts/`{% if ci_shape == 'github' %}
+  and `.github/workflows/{ci,release,build-image}.yml`{% endif %}. They are
+  byte-identical library copies; a re-vendor overwrites a local edit.{% if ci_shape == 'github' %}
+  `.github/workflows/manifest-gates.yml` is this repo's own: fix that one
+  here.{% endif %}
 - **Run `task lint` before opening a {{ change_request }}.**
+
+## Comments
+
+Comments state the current constraint and why it exists, in the present tense.
+They carry no history: no dates, no {{ change_request }} numbers, no "this used
+to", no incident narration. Longer rationale belongs in `docs/`, not in a header
+above five lines of YAML.
+
+A comment block runs to three content lines. A block guarding a trap that causes
+an outage may open `CRITICAL:` and run to eight. That marker is for outages, not
+for emphasis and not for a long file header.
+
+`task comment-length` is the gate, and the pre-commit hook runs it on every
+commit. It takes `--max` and `--exclude`, so a tree your team wants held to a
+different budget is an argument change rather than a reason to drop the gate.
 
 ## Where things are documented
 
@@ -56,4 +78,4 @@ Do not restate platform detail here; follow the pointer.
 | The operator wiring this repo depends on | [`docs/ONBOARDING.md`](docs/ONBOARDING.md) |
 | What a release means, and the library pin | [`docs/VERSIONING.md`](docs/VERSIONING.md) |
 | The local loop and Flux debugging | `.claude/skills/project-development/SKILL.md` |
-| Multi-repo onboarding, Flux day-2 operations, runner limits | the CLUSTER repo's own docs — authoritative, and the only place they are maintained. Every alert this repo raises links [the Flux operations page]({{ runbook_url }}). |
+| Multi-repo onboarding, Flux day-2 operations, runner limits | the CLUSTER repo's own docs — authoritative, and the only place they are maintained. Every alert this repo raises links [the cluster's runbooks page]({{ runbook_url }}). |

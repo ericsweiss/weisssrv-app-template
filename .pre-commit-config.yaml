@@ -1,0 +1,33 @@
+---
+# `pre-commit install` arms gitleaks and the YAML/whitespace hooks, which skip
+# template/ (Jinja names) while gitleaks scans it. The doc-link and lib-pin gates
+# and the render suite run under `pytest tests`; ruff runs in CI and validate_render.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        # The profile is vendored at this path, not as a root `.yamllint`:
+        # ansible-lint discovers a root one and loses its own yaml[*] rules.
+        args: [-c, lint/yamllint-relaxed.yml]
+        exclude: ^template/
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+        exclude: ^template/
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+        exclude: ^template/
+      - id: check-merge-conflict
+      - id: check-yaml
+        # --unsafe: syntax-only parse (no tag construction), so GitLab's
+        # `!reference` and Ansible's `!vault` custom tags do not false-fail.
+        args: [--allow-multiple-documents, --unsafe]
+        exclude: ^template/

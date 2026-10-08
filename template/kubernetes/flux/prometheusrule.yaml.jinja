@@ -1,12 +1,11 @@
 ---
-# Down/stale alerts. The platform Prometheus discovers PrometheusRules in every
-# namespace, so these fire without any operator action. They read kube-state
-# metrics (always present), so they work even before the app exposes /metrics.
-#
-# BOTH expressions pin `namespace`: tenant rules are evaluated cluster-wide, so
-# without it AppDown fires on any namespace's like-named Deployment, and
-# absent() returns nothing the moment ANY namespace has one — silently
-# disarming AppAbsent.
+# Every expression pins `namespace`: tenant rules evaluate cluster-wide, so
+# without it AppDown fires on another namespace's like-named Deployment and
+# absent() silently disarms AppAbsent. See docs/ARCHITECTURE.md.
+
+# A `severity: info` rule must carry a `namespace` label, set explicitly when the
+# expr aggregates it away: the platform mutes any info alert sharing a
+# `namespace` with a firing `InfoInhibitor`, and a label-less one always does.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -15,7 +14,7 @@ metadata:
     app.kubernetes.io/name: {{ app_slug }}
 spec:
   groups:
-    - name: homelab.{{ app_slug }}
+    - name: {{ app_slug }}
       rules:
         - alert: AppDown
           expr: kube_deployment_status_replicas_available{namespace="{{ app_namespace }}", deployment="{{ app_slug }}"} < 1
@@ -33,8 +32,9 @@ spec:
           for: 15m
           labels:
             severity: warning
-            # absent() drops every label, so the alert carries no namespace of
-            # its own; pin it here as well as in the selector.
+            # Redundant for this selector — absent() carries the
+            # equality-matcher labels — and kept so a rewritten expr still
+            # reports a namespace.
             namespace: {{ app_namespace }}
           annotations:
             runbook_url: '{{ runbook_url }}'

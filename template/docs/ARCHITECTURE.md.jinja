@@ -24,6 +24,14 @@ flowchart LR
 - **Internal** `{{ app_slug }}.{{ internal_domain }}`: reached only on the
   LAN/tailnet via the `lan-tailscale-only` middleware. The internal name is
   **not** auto-provisioned — the operator adds the record (ONBOARDING step O5).
+  The middleware name is fixed cluster-side, so internal routes copy between
+  tenant repos unchanged. On a cluster with no tailnet it allows the LAN and the
+  pod CIDR and nothing else; the name keeps `tailscale` either way.
+{%- if enable_sso %}
+  SSO covers the **public** route only. This hostname is source-filtered to the
+  LAN and tailnet, not authenticated: an Authentik proxy provider pins one
+  `external_host`, so gating it too needs a second provider (ONBOARDING O8).
+{%- endif %}
 {%- else %}
 - **Internal**: not published. `enable_internal_ingress` renders a second
   IngressRoute and its Certificate, plus one operator DNS step.
@@ -32,8 +40,9 @@ flowchart LR
   issues a Secret into this namespace, and Traefik terminates from it. Per-host
   rather than wildcard: Let's Encrypt caps duplicate certificates at 5 per week
   and the platform already issues the shared wildcards.
-- **Middlewares** live in the platform `traefik` namespace and are referenced
-  cross-namespace; the cluster enables `allowCrossNamespace`.
+- **Middlewares** are referenced cross-namespace from the namespace that owns
+  them: `hsts-header` from `traefik`{% if enable_sso %}, the SSO forward-auth `authentik-auth` from
+  `authentik`{% endif %}. The cluster enables `allowCrossNamespace`.
 
 ## Secret flow
 {% if secrets_backend == 'none' %}
@@ -62,33 +71,76 @@ flowchart LR
 - Keys are hyphenated, so the Deployment binds each one with `secretKeyRef`; an
   `envFrom: secretRef` would silently skip them (hyphens are not valid env-var
   names).
+- The binding is not `optional:`. The pod stays in `CreateContainerConfigError`
+  until the `ExternalSecret` has synced, so a mis-wired store fails visibly
+  instead of starting a pod with no credential.
+- The binding is read at container start. A rotated value reaches the app only
+  after `kubectl delete pod -n {{ app_namespace }} -l app.kubernetes.io/name={{ app_slug }}`;
+  the `ExternalSecret` reports Ready either way, and no alert shows the gap. A
+  `rollout restart` is not a substitute: it writes a pod-template annotation
+  the cluster's kustomize-controller reverts on its next reconcile.
 {%- endif %}
 
 ## Storage & scheduling
 
 The app is **stateless** as generated, and soft-avoids the storage node
-(`{{ node_label_domain }}/nas`). Persistent, zvol-backed data is an
-operator-assisted step: the operator provisions the volume and a matching PV,
-and the pod is pinned to the storage node with a required hostname affinity plus
-a toleration for `{{ node_label_domain }}/nas=true:PreferNoSchedule`. NFS-backed
-volumes mount **by hostname** (a wildcard certificate carries no IP SAN, so an
-IP mount fails the TLS handshake). See ONBOARDING step O6 — the details are
-cluster-specific and this template ships no PVC.
+(`{{ node_label_domain }}/nas`). This template ships no PVC and names no
+StorageClass. Persistent data is an operator-assisted step: the operator
+supplies the StorageClass or a pre-provisioned PV, and you add the PVC, the
+volume and its mount. A volume added this way is outside every backup set until
+the operator adds it, and its backup schedule is theirs. See ONBOARDING step O6.
+
+The `/tmp` `emptyDir` is capped at 64Mi under a 512Mi container
+`ephemeral-storage` limit. An app that uses `/tmp` for real work raises the
+`sizeLimit` and keeps the limit above it, or the kubelet evicts the pod.
+
+On a Proxmox/ZFS cluster the volume is a zvol and a matching PV, and the pod is
+pinned to the storage node with a required hostname affinity plus a toleration
+for `{{ node_label_domain }}/nas=true:PreferNoSchedule`. NFS-backed volumes
+mount **by hostname** there: a wildcard certificate carries no IP SAN, so an IP
+mount fails the TLS handshake.
 
 ## Network policy
 
 `networkpolicy.yaml` denies all ingress and egress, then opens Traefik to the
-app port{% if enable_servicemonitor %}, Prometheus to the metrics port{% endif %}, cluster DNS, and public HTTPS. The public rule's
+app port{% if enable_servicemonitor %}, Prometheus to that same app port{% endif %}, cluster DNS, and public HTTPS. The public rule's
 `except:` list is the RFC-reserved and private IPv4 space — a standards
 constant, not this cluster's addressing — so the app cannot reach LAN, tailnet,
 loopback or cloud-metadata addresses.
 
+`scripts/check-netpol-except-parity.py` holds that list to the constant.
+{%- if ci_shape == 'gitlab_selfhosted' %}
+`task lint` runs it, the `netpol-check` job runs it, and so does the pre-commit
+hook after `pre-commit install`.
+{%- elif ci_shape == 'github' %}
+`task lint` runs it, and so does the `manifest-gates` workflow on every pull
+request and push to main. `pre-commit install` arms the same gate on every
+commit.
+{%- else %}
+`task lint` runs it, and the pre-commit hook runs it on every commit once you
+have run `pre-commit install`. This repo ships no pipeline, so those two are the
+only gates.
+{%- endif %}
+
+A cluster whose LAN sits outside the shipped fence, or a rule that legitimately
+needs peer-less egress, passes the gate a `--config FILE`. That file carries
+`canonical_except_lists`, `fence_networks` and `unrestricted_egress_ok`. Add the
+flag wherever the gate runs. That file replaces the built-in lists rather than
+extending them, so a custom `canonical_except_lists` must still carry the set
+the shipped `networkpolicy.yaml` uses (`reserved-full`), and `lan-fence` too if
+you use it. An except-list matching no named set fails the gate.
+`examples/netpol-except.example.yaml` is a filled-in copy of all three keys;
+`load_config` in `scripts/check-netpol-except-parity.py` is the schema.
+
 Anything else needs its own egress rule. Three worked examples:
 
+Same-namespace traffic needs both halves: an egress rule here, and an ingress
+rule on the peer, which `default-deny` fences too.
+
 ```yaml
-# Other pods in THIS namespace (a database or cache beside the app). The pod
-# and Service CIDRs sit inside the 10.0.0.0/8 except above, so same-namespace
-# traffic is denied until this rule exists.
+# Egress to other pods in THIS namespace (a database or cache beside the app).
+# The pod and Service CIDRs sit inside the 10.0.0.0/8 except above, so this
+# traffic is denied until the rule exists.
 - to:
     - podSelector: {}
 
@@ -104,16 +156,32 @@ Anything else needs its own egress rule. Three worked examples:
   ports: [{protocol: TCP, port: 6443}]
 ```
 
+The peer's own policy carries the matching ingress half:
+
+```yaml
+policyTypes: [Ingress]
+ingress:
+  - from:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: {{ app_slug }}
+    ports: [{protocol: TCP, port: <peer-port>}]
+```
+
 ## Autoscaling & resilience
 
 {% if enable_hpa -%}
 - **HPA** owns the replica count on CPU (`minReplicas: 2`), so the Deployment
-  ships no `replicas:` and the **VPA** is memory-only — two autoscalers on one
-  resource fight.
+  ships no `replicas:`{% if enable_vpa %} and the **VPA** is memory-only — two autoscalers on one
+  resource fight{% endif %}. Utilisation is measured against `requests.cpu`, which ships
+  as the 25m placeholder, so raise it with the real image or the HPA sits at
+  `maxReplicas`.
 {%- else -%}
+{% if enable_vpa -%}
 - **VPA** (`updateMode: Initial`) right-sizes the pod on natural restarts,
   without evicting a running one. Set `updateMode: "Off"` for a stateful
   workload.
+{% endif -%}
 - Replicas are fixed at {{ replica_count }}.
 {%- endif %}
 {% if replica_count > 1 or enable_hpa -%}
@@ -130,26 +198,158 @@ Anything else needs its own egress rule. Three worked examples:
 - **Metrics**: the `ServiceMonitor` is discovered cluster-wide by the platform
   Prometheus, and `networkpolicy.yaml` allows the scrape from the
   `observability` namespace on the same port.
+- **Keeping `/metrics` private**: that port is the one the public `IngressRoute`
+  backends, so metrics served there are readable from the internet. Give the
+  container a second `containerPort`, add a second named port to `service.yaml`,
+  then point `servicemonitor.yaml`'s `endpoints[].port` and
+  `networkpolicy.yaml`'s `allow-scrape-from-observability` rule at that name.
+  Excluding `/metrics` with a path condition on the public route works too.
 {%- else -%}
 - **Metrics**: not scraped. `enable_servicemonitor` renders the ServiceMonitor
   and the matching scrape NetworkPolicy together, once the app has a real
   `/metrics`.
 {%- endif %}
-- **Alerts**: the `PrometheusRule` is likewise discovered cluster-wide. Both
-  expressions pin `namespace` and `deployment`, because tenant rules evaluate
-  across the whole cluster.
-- **Reachability**: those alerts read kube-state metrics, so they cover replica
-  availability, not end-to-end HTTP/TLS. A broken route, certificate or DNS
-  record does not fire them while the pod stays ready — that is an operator-added
-  blackbox target (ONBOARDING step O7).
+- **Alerts**: the platform Prometheus discovers this `PrometheusRule` in every
+  namespace. Every expression pins `namespace`, because tenant rules evaluate
+  across the whole cluster. A `severity: info` rule also needs a `namespace`
+  label of its own, set explicitly when the expression aggregates it away. The
+  platform inhibits info alerts on an equal `namespace`, so an info alert
+  without one is muted.
+- **Reachability**: `AppDown` and `AppAbsent` read kube-state metrics, so they
+  cover replica availability only. Certificates need no rule here: the platform
+  already alerts on expiry and on a `Certificate` that never goes Ready, in
+  every namespace. Do not re-declare those, because a tenant rule sharing an
+  alertname at a different severity breaks the platform's routing. A broken
+  route or DNS record fires nothing while the pod stays ready. End-to-end HTTP
+  and DNS is an operator-added blackbox target (ONBOARDING step O7).
 - **Logs**: container stdout/stderr ships to Loki via the platform's log agent.
   Nothing to configure.
+
+## Local gates
+
+`task lint` runs every gate this repo has. Three are worth knowing:
+
+- `flux-lint` fails when kubeconform validated more resources against no schema
+  than `ALLOWED_SKIPS` in `Taskfile.yml` allows. A CR your own operator defines
+  is not in the public CRD catalog: add a `-schema-location` for it, or raise
+  `ALLOWED_SKIPS`.
+{%- if ci_shape == 'gitlab_selfhosted' %}
+  The pipeline carries its own budget: raise it by passing `allowed_skips` to the
+  `flux-lint` include in `.gitlab-ci.yml`, or that job still fails at zero.
+{%- elif ci_shape == 'github' %}
+  The pipeline reads its own budget from repository variable `ALLOWED_SKIPS`, so
+  raise that too, or the `flux-lint` job still fails at zero.
+{%- endif %}
+- `scrape-wiring` fails when no NetworkPolicy admits the `observability`
+  namespace on the port `servicemonitor.yaml` scrapes. A drifted pair is a
+  `TargetDown` page in the platform's Alertmanager, not here. The gate models a
+  namespace-scoped peer only: a peer that also carries a `podSelector` fails it,
+  so keep the namespace peer whole and narrow elsewhere. A
+  `spec.namespaceSelector` on the monitor may name this namespace
+  (`matchNames: [{{ app_namespace }}]`); a wider scrape has to be checked where
+  the policies covering it live.
+{%- if ci_shape == 'gitlab_selfhosted' %}
+  The `scrape-wiring-check` job runs the same script on every change.
+{%- elif ci_shape == 'github' %}
+  The `manifest-gates` workflow runs the same script on every change.
+{%- else %}
+  No CI job on this shape runs it. The pre-commit hook and `task lint` do.
+{%- endif %}
+- `kustomization` fails on an empty `resources:` list, on a listed path that
+  does not exist, and on a manifest present but unlisted. An emptied list
+  renders nothing and the cluster-side `Kustomization` then deletes every object
+  this repo applied.
+{%- if ci_shape == 'gitlab_selfhosted' %}
+  The `kustomization-check` job runs the same script on every change.
+{%- elif ci_shape == 'github' %}
+  The `manifest-gates` workflow runs the same script on every change.
+{%- else %}
+  No CI job on this shape runs it. The pre-commit hook and `task lint` do.
+{%- endif %}
+
+## Platform contract
+
+The rendered manifests bind to objects the cluster must already provide:
+
+- A `ClusterIssuer` named `letsencrypt-prod`, for the per-host `Certificate`.
+{%- if enable_internal_ingress %}
+  Its DNS-01 solver must hold credentials for `{{ internal_domain }}` as well as
+  `{{ external_domain }}`: the internal name is validated over public DNS even
+  though it resolves only on the LAN.
+{%- endif %}
+- Traefik with `providers.kubernetesCRD.allowCrossNamespace: true`, and every
+  middleware the routes name: `hsts-header`{% if enable_internal_ingress %} and `lan-tailscale-only`{% endif %} in `traefik`{% if enable_sso %},
+  `authentik-auth` in `authentik`{% endif %}. Without the flag Traefik refuses the route and the
+  hostname 404s.
+- A Traefik `websecure` entryPoint. Every route here names it.
+- external-dns watching the `traefik-proxy` source with the
+  `external-dns.alpha.kubernetes.io` annotation prefix, which the public route's
+  target annotation uses. Under a different prefix the annotation is ignored and
+  no public record appears, while the pods stay ready and no alert fires. That
+  annotation targets `{{ external_domain }}`, so the zone apex must itself
+  resolve to the cluster's public ingress; an edge under a different name is a
+  retarget in `kubernetes/flux/ingressroute.yaml`.
+- A Prometheus that discovers `PrometheusRule`s{% if enable_servicemonitor %} and `ServiceMonitor`s{% endif %} in every
+  namespace. Under the kube-prometheus-stack defaults
+  `ruleSelectorNilUsesHelmValues: true`{% if enable_servicemonitor %} and
+  `serviceMonitorSelectorNilUsesHelmValues: true`{% endif %} the selector is
+  `matchLabels: {release: <release>}`, which these objects do not carry: set
+  those inputs to `false` (the namespace selectors are already `{}`), or add the
+  release label here. Left as they are, `AppDown` never
+  fires{% if enable_servicemonitor %}, and the `ServiceMonitor` is never selected{% endif %}.
+- kube-state-metrics, scraped by that Prometheus. `AppDown` and `AppAbsent` read
+  `kube_deployment_status_replicas_available`; without it `AppAbsent` fires
+  permanently and `AppDown` never fires.
+- cert-manager controller metrics, scraped by that Prometheus. The platform's
+  cluster-wide certificate alerts read them; without them a `Certificate` whose
+  renewal fails is invisible until it expires.
+- A cluster-scoped `tenant-crd-editor` ClusterRole granting edit on
+  `traefik.io`, `monitoring.coreos.com`{% if enable_vpa %}, `autoscaling.k8s.io`{% endif %}{% if secrets_backend != 'none' %},
+  `external-secrets.io`{% endif %} and `cert-manager.io`. The wiring file binds it. `admin`
+  does not aggregate `traefik.io` or `monitoring.coreos.com`{% if enable_vpa %}, nor
+  `autoscaling.k8s.io`{% endif %}; it normally covers{% if secrets_backend != 'none' %} `external-secrets.io` and{% endif %}
+  `cert-manager.io` through their `*-edit` roles, which `tenant-crd-editor`
+  repeats so a cluster missing one still applies them. A RoleBinding to a
+  missing ClusterRole applies cleanly and grants nothing.
+- The namespaces `traefik`{% if enable_servicemonitor %}, `observability`{% endif %} and `kube-system`, which
+  `networkpolicy.yaml` names in its allow rules. The DNS rule ANDs the
+  `kube-system` namespace with the pod label `k8s-app: kube-dns`, so on a cluster
+  whose CoreDNS pods carry another label the peer matches nothing and the app
+  resolves no names. Edit that rule's `podSelector`.
+{%- if enable_vpa %}
+- The `VerticalPodAutoscaler` CRD (`autoscaling.k8s.io`), the recommender, and
+  the admission controller that applies its recommendation at pod creation.
+- A resource-metrics API (metrics-server). Without it the VPA recommends
+  nothing{% if enable_hpa %} and the HPA never leaves `minReplicas`{% endif %}, with no alert either way.
+{%- elif enable_hpa %}
+- A resource-metrics API (metrics-server). Without it the HPA never leaves
+  `minReplicas`, and no alert says so.
+{%- endif %}
+{%- if secrets_backend != 'none' %}
+- The External Secrets Operator, with the `external-secrets.io` `ExternalSecret`
+  and `ClusterSecretStore` CRDs. `externalsecret.yaml` is inert without them.
+{%- endif %}
+{%- if secrets_backend == 'onepassword' %}
+- A `onepassword-connect` Service in namespace `external-secrets` on port 8080,
+  which the `ClusterSecretStore` reads.
+{%- endif %}
+- A Flux `Kustomization` named `infrastructure-configs` in `flux-system`, or
+  another name for the stage that applies the platform CRDs. The wiring file's
+  `dependsOn` names it, and a name the cluster does not have leaves this repo's
+  `Kustomization` retrying forever with nothing applied.
+- Nothing here spells `${var}`: the wiring in ONBOARDING step O3 carries no
+  `postBuild`. If the operator adds `postBuild.substituteFrom` so this repo can
+  read the cluster's own domains and VIPs, kustomize-controller usually runs
+  with `StrictPostBuildSubstitutions` on, and then an undefined `${var}`
+  anywhere under `kubernetes/flux/` fails the whole tenant reconcile. A literal
+  dollar-brace in a container arg, a config blob or dashboard JSON must be
+  written `$${var}`.
 
 ## What the operator owns vs. what you own
 
 | Operator (cluster repo) | You (this repo) |
 |---|---|
-| The `Namespace` and its PSA labels | Everything under `kubernetes/flux/` |
+| The `Namespace`, its PSA labels, its `ResourceQuota` and `LimitRange` | Everything under `kubernetes/flux/` |
 | The `GitRepository` + `Kustomization` wiring | Workload, Service, routing CRs |
 {%- if secrets_backend != 'none' %}
 | The `ClusterSecretStore` + bootstrap secret | The `ExternalSecret` reference |

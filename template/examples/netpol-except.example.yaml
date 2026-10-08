@@ -1,0 +1,47 @@
+---
+# Policy data for scripts/check-netpol-except-parity.py (--config).
+# canonical_except_lists: reserved-CIDR sets an egress `ipBlock` /0 peer must
+# match exactly. Declaring the key replaces the built-in sets wholesale.
+canonical_except_lists:
+  lan-fence:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 100.64.0.0/10
+    - 169.254.0.0/16
+  reserved-full:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 0.0.0.0/8
+    - 127.0.0.0/8
+    - 169.254.0.0/16
+    - 100.64.0.0/10
+    - 192.0.0.0/24
+    - 192.0.2.0/24
+    - 198.51.100.0/24
+    - 203.0.113.0/24
+    - 198.18.0.0/15
+    - 224.0.0.0/4
+    - 240.0.0.0/4
+
+# fence_networks: ranges no egress rule may reach IN FULL, whatever CIDR
+# arithmetic spells them. Omit to keep the built-in v4 LAN fence plus its v6
+# analogue (fc00::/7, fe80::/10).
+fence_networks:
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+  - 100.64.0.0/10
+  - 169.254.0.0/16
+  - fc00::/7
+  - fe80::/10
+
+# unrestricted_egress_ok: "<namespace>/<name>" egress rules that deliberately
+# carry no peers, each with the reason. A rule not listed here that omits `to:`
+# is the accidental version of the same edit and fails.
+unrestricted_egress_ok:
+  flux-system/allow-egress: >-
+    shipped verbatim inside the upstream gotk-components manifest; the
+    controllers reach arbitrary git/OCI/Helm origins and an edit here is
+    reverted by the next `flux install` regeneration

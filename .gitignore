@@ -4,6 +4,9 @@
 *.env
 .tmp/
 
+# CI scratch — validate-rendered-app installs kustomize/kubeconform here.
+.bin/
+
 # Rendered template instances (`tests/render_app.py --out`, local copier runs).
 # Anchored so nothing under template/ can match by accident.
 /.render/
@@ -21,6 +24,11 @@ __pycache__/
 venv/
 .pytest_cache/
 .ruff_cache/
+# coverage.py: local `coverage run` / pytest --cov output.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 
 # Agent tooling — keep the shared config, drop the per-machine overrides.
 .claude/settings.local.json

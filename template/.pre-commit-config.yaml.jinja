@@ -1,0 +1,75 @@
+---
+# Local guardrails: run `pre-commit install` once, then these run on every
+# commit. They mirror the CI gates and, on a repo with no pipeline, are the only
+# automatic ones. Revs are pinned; bump them deliberately, in a reviewed change.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        # The profile is vendored at this path, not as a root `.yamllint`:
+        # ansible-lint discovers a root one and loses its own yaml[*] rules.
+        args: [-c, lint/yamllint-relaxed.yml]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: check-merge-conflict
+      - id: check-yaml
+        # --unsafe: syntax-only parse (no tag construction), so GitLab's
+        # `!reference` and Ansible's `!vault` custom tags do not false-fail.
+        args: [--allow-multiple-documents, --unsafe]
+
+  # The local gates; `task lint` runs the same five. The three PyYAML ones
+  # install it into their own hook venv, so the host python3 needs none, and
+  # `always_run` keeps them on a deletion-only commit, which `files:` misses.
+  - repo: local
+    hooks:
+      - id: netpol-except-parity
+        name: egress fence
+        entry: python scripts/check-netpol-except-parity.py kubernetes/flux
+        language: python
+        additional_dependencies: ["pyyaml==6.0.2"]
+        pass_filenames: false
+        files: ^(kubernetes/|scripts/check-)
+        always_run: true
+      - id: scrape-wiring
+        name: scrape wiring
+        entry: >-
+          python scripts/check-scrape-wiring.py kubernetes/flux
+          --namespace {{ app_namespace }}
+        language: python
+        additional_dependencies: ["pyyaml==6.0.2"]
+        pass_filenames: false
+        files: ^(kubernetes/|scripts/check-)
+        always_run: true
+      - id: kustomization
+        name: kustomization resource list
+        entry: python scripts/check-kustomization.py kubernetes/flux
+        language: python
+        additional_dependencies: ["pyyaml==6.0.2"]
+        pass_filenames: false
+        files: ^(kubernetes/|scripts/check-)
+        always_run: true
+      - id: doc-links
+        name: doc links
+        entry: python3 scripts/check-doc-links.py
+        language: system
+        pass_filenames: false
+        files: \.md$
+      - id: comment-length
+        name: comment length
+        # The gate walks the tree itself and reads every file type it knows, so
+        # it takes no file list.
+        entry: python3 scripts/check-comment-length.py .
+        language: system
+        pass_filenames: false
+        always_run: true

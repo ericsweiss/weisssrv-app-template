@@ -23,6 +23,11 @@ __pycache__/
 venv/
 .pytest_cache/
 .ruff_cache/
+# coverage.py: local `coverage run` / pytest --cov output.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 
 # Agent tooling — keep the shared config, drop the per-machine overrides.
 .claude/settings.local.json

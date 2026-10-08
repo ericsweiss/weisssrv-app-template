@@ -1,3 +1,12 @@
+# Secrets and local env — never in a build context.
+.env
+.env.*
+*.env
+.tmp/
+kubeconfig
+*.kubeconfig
+.kube/
+
 # Keep the build context small: exclude VCS, the deploy/CI surface, docs and
 # agent config. Add your build outputs as your app grows, and keep your
 # application source.
@@ -11,7 +20,7 @@ kubernetes/
 .gitlab-ci.yml
 .github/
 Taskfile.yml
-.yamllint
+lint/
 .pre-commit-config.yaml
 .gitleaks.toml
 .editorconfig
@@ -27,8 +36,9 @@ docs/
 LICENSE
 CODEOWNERS
 
-# Tooling scripts (the vendored library helpers).
+# Tooling scripts and the gate policy examples beside them.
 scripts/
+examples/
 
 # Common local build artifacts and tool caches.
 __pycache__/

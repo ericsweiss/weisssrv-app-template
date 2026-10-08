@@ -1,40 +1,12 @@
 ---
-# Canonical copy: weisssrv-lib `ci/github/build-image.example.yml`. Consumers
-# vendor it byte-identically as `.github/workflows/build-image.yml` — edit it
-# upstream, then re-vendor. Every path named below (`docs/`, `scripts/`,
-# `kubernetes/`) is CONSUMER-relative and resolves in the tenant repo, not here.
-#
-# Build (and, on the default branch, push) THIS service's container image —
-# the GitHub Actions counterpart of the `build-image` job in `.gitlab-ci.yml`
-# (`ci_shape: github`). See docs/CI-SHAPES.md in the app template — the
-# rendered tenant does not carry that doc.
-#
-# Registry: GHCR (`ghcr.io/<owner>/<repo>`), authenticated with the built-in
-# GITHUB_TOKEN — nothing to bring, the same way `$CI_REGISTRY_*` are GitLab
-# built-ins. Point `kubernetes/flux/deployment.yaml`'s `image:` at a tag here.
-# For a different registry (Docker Hub, a private Harbor), swap the login step
-# and set REGISTRY/IMAGE_NAME below.
-#
-# Differences from the GitLab job, on purpose:
-#   * Pull requests do not run this workflow at all — see the note above `on`.
-#     Their Dockerfile gate is ci.yml's `docker-build`, which builds and discards
-#     under `contents: read`. The GitLab job DOES push `:<short-sha>` on merge
-#     requests, because a merge request there runs with project credentials and
-#     the job cannot be redefined by the branch under review.
-#   * No privileged-runner problem to solve: GitHub-hosted runners ship Docker,
-#     so unlike the tenant `k8s-deploy` runner this needs no special tag.
-#
-# `:latest` is default-branch-only, deliberately: privileged jobs consume that
-# tag, so unreviewed code must never be able to populate it.
+# Canonical copy in weisssrv-lib; vendored as .github/workflows/build-image.yml.
+# Builds this service's image, pushing to GHCR on the default branch only.
+# Registry swap and GitLab differences: the app template's docs/CI-SHAPES.md.
 name: build-image
 
-# PUSH-ONLY, and no workflow_dispatch. This workflow holds `packages: write`,
-# and both other triggers run the workflow file from code that has not been
-# reviewed: a pull_request run executes the PR's own copy, and a dispatch
-# executes the selected ref's — either can delete the step-level push guard and
-# publish. :latest is consumed by privileged jobs, so unreviewed code must never
-# be able to populate it. The pull-request Dockerfile gate lives in ci.yml
-# (`docker-build`), which builds under `contents: read` and cannot push.
+# CRITICAL: push-only, no workflow_dispatch. This workflow holds
+# `packages: write`; other triggers run it from unreviewed code that can drop
+# the step-level push guard. The pull-request gate is ci.yml's `docker-build`.
 "on":
   push:
     branches: [main]
@@ -48,6 +20,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # GHCR only. Another registry changes these two and the login step's
+  # REGISTRY_USER / REGISTRY_TOKEN together; a registry nothing pushes to
+  # leaves every consumer's `image:` pointing at a tag that never appears.
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
@@ -56,26 +31,16 @@ jobs:
     name: build-image
     runs-on: ubuntu-latest
     steps:
-      # persist-credentials: false — checkout otherwise writes the job's token
-      # into .git/config, and this job holds `packages: write`. The build context
-      # is the repository, so a Dockerfile could `COPY .git/config` and read the
-      # token back out of the image. Nothing after this step does an
-      # authenticated git operation.
+      # persist-credentials: false — checkout otherwise writes the job's
+      # `packages: write` token into .git/config, and the build context is the
+      # repository, so a Dockerfile could `COPY .git/config` it into the image.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
           persist-credentials: false
 
-      # A project that runs an upstream image has no Dockerfile. Skip instead of
-      # failing, so such a project keeps a green pipeline.
-      #
-      # The skip is ANNOUNCED, not silent. This file is byte-identical across
-      # consumers, so it cannot read the answer that decided whether the repo
-      # builds an image — which means it cannot tell "this project never builds
-      # one" from "the Dockerfile was renamed and main quietly stopped
-      # publishing". Both land here as a green no-op job whose every step is
-      # skipped, invisible in the run list. The annotation and the summary line
-      # are what put the second case in front of someone. Same guard, same
-      # reason, in ci.yml's `docker-build`.
+      # A project running an upstream image has no Dockerfile: skip rather than
+      # fail. The skip is ANNOUNCED — this file cannot tell "never builds one"
+      # from "the Dockerfile was renamed and main quietly stopped publishing".
       - name: Check for a Dockerfile
         id: dockerfile
         run: |

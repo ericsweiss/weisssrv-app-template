@@ -1,14 +1,7 @@
 ---
 # CI for the template itself. The generic jobs come from the shared library, so
 # the template is linted by the same tooling it hands to a generated repo.
-#
-# Every job is TAG-LESS and non-root safe (pip --user, workspace-local tool
-# downloads), so they land on the shared runner.
-#
-# `release` is LAST on purpose: the semantic-release job sets no `needs:`, so
-# stage ordering is what gates a tag on every job above it — including
-# `render-validate`. A template tag is what a generated repo's `copier update`
-# resolves to, so it must never be cut from a tree that does not render.
+# Every job is tag-less and non-root safe, so they land on the shared runner.
 stages:
   - lint
   - test
@@ -16,61 +9,74 @@ stages:
   - ai-review
   - release
 
+# Settings every job inherits unless it says otherwise. No image or tags here —
+# each job and every library include already names its own.
+default:
+  # Cancel a superseded pipeline's jobs on a new commit; see the workflow policy
+  # below. The library's `release` job overrides this to false itself.
+  interruptible: true
+
 workflow:
+  # MR refs cancel superseded pipelines; main never cancels, because `release`
+  # cuts the tag every generated repo's `copier update` resolves to.
+  auto_cancel:
+    on_new_commit: interruptible
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == "main"'
+      auto_cancel:
+        on_new_commit: none
     - if: '$CI_PIPELINE_SOURCE == "web"'
 
 variables:
   LIB_PROJECT: "eric/weisssrv-lib"
-  # Single source for the library pin. `include:` CANNOT read this — it is
-  # resolved before job variables exist — so each entry below repeats the tag as
-  # a literal and scripts/check-lib-pins.py (vendored from the library) fails
-  # the pipeline if they drift from it or pin a branch. Bump here, then
-  # `scripts/check-lib-pins.py --fix`.
-  WEISSSRV_LIB_REF: "v0.17.1"
+  # Full clone: the copier.yml release gates read `git tag -l` and
+  # `git show <tag>:copier.yml`, and a shallow fetch creates no tag refs.
+  GIT_DEPTH: "0"
+  # Single source for the library pin. `include:` cannot read it, so each entry
+  # below repeats the tag as a literal and scripts/check-lib-pins.py fails the
+  # pipeline on drift or a branch pin. Bump here, then run that with --fix.
+  WEISSSRV_LIB_REF: "v0.18.0"
+  # Library checkout the python-tests job clones into, read by
+  # tests/test_validate_render.py's include-contract gate, which fails rather
+  # than skips once $CI is set.
+  WEISSSRV_LIB_PATH: "$CI_PROJECT_DIR/.tmp/weisssrv-lib"
   COPIER_VERSION: "9.17.0"
   PYYAML_VERSION: "6.0.2"
   YAMLLINT_VERSION: "1.38.0"
-  RUFF_VERSION: "0.16.0"
-  KUBECONFORM_VERSION: "0.6.7"
-  KUBECONFORM_SHA256: "95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73"
-  KUSTOMIZE_VERSION: "5.4.3"
-  KUSTOMIZE_SHA256: "3669470b454d865c8184d6bce78df05e977c9aea31c30df3c669317d43bcc7a7"
+  RUFF_VERSION: "0.16.7"
 
 include:
-  # Only genuine YAML: files under template/ that carry the .jinja suffix are
-  # Jinja sources, not documents, and the conditional paths are not valid names
-  # until they are rendered. render-validate yamllints the rendered tree, which
-  # is where template/ actually gets covered.
+  # Only genuine YAML: .jinja files under template/ are Jinja sources and the
+  # conditional paths are not valid names until rendered. validate-rendered-app
+  # yamllints the rendered tree, which is where template/ gets covered.
   - project: eric/weisssrv-lib
-    ref: v0.17.1
+    ref: v0.18.0
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
       image: python:3.13-slim
-      config: "-c .yamllint"
-      targets: "copier.yml tests/ .gitlab-ci.yml .yamllint scripts/vendored-manifest.yml"
+      config: "-c lint/yamllint-relaxed.yml"
+      targets: >-
+        copier.yml tests/ .gitlab-ci.yml lint/ .pre-commit-config.yaml
+        scripts/vendored-manifest.yml
       changes:
         - "copier.yml"
         - "tests/**/*"
-        - ".yamllint"
+        - "lint/yamllint-relaxed.yml"
         - ".gitlab-ci.yml"
+        - ".pre-commit-config.yaml"
         - "scripts/vendored-manifest.yml"
 
   - project: eric/weisssrv-lib
-    ref: v0.17.1
+    ref: v0.18.0
     file: /ci/lint/python-lint.yml
     inputs:
       tags: []
       image: python:3.13-slim
-      # `scripts` is this repository's OWN vendored tooling. `template/scripts`
-      # is on the target list, but ruff's walk only classifies
-      # check-doc-links.py there: the other two carry a conditional Jinja path
-      # as their filename, so they do not end in `.py`. They are byte-identical
-      # vendored copies, linted in the library and again in every render, so
-      # the coverage is real — it just does not come from this job.
+      # `scripts` is this repository's own vendored tooling. Under
+      # template/scripts ruff sees the four plain-named files; the two with a
+      # Jinja path for a filename are linted in each render that ships them.
       targets: "scripts tests template/scripts"
       changes:
         - "scripts/**/*.py"
@@ -79,10 +85,19 @@ include:
         - "ruff.toml"
         - ".gitlab-ci.yml"
 
+  # The comment convention, over the whole tree. No `--config`, so the gate is
+  # stdlib-only and the PyYAML install is skipped.
+  - project: eric/weisssrv-lib
+    ref: v0.18.0
+    file: /ci/lint/comment-length.yml
+    inputs:
+      tags: []
+      pyyaml_version: ""
+
   # copier.yml schema checks + the render invariants. Everything in the
   # repository feeds a render, hence the catch-all `changes`.
   - project: eric/weisssrv-lib
-    ref: v0.17.1
+    ref: v0.18.0
     file: /ci/test/python-tests.yml
     inputs:
       tags: []
@@ -90,18 +105,21 @@ include:
       apt_packages: ""
       test_dir: "tests"
       pip_packages: "copier==9.17.0 jinja2"
+      # The library checkout the include-contract gate compares against; the
+      # python:3.13 image already ships git.
+      setup_command: 'python3 scripts/ci-fetch-tools.py kustomize kubeconform && mkdir -p "$(dirname "$WEISSSRV_LIB_PATH")" && git clone --depth 1 --branch "$WEISSSRV_LIB_REF" "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${LIB_PROJECT}.git" "$WEISSSRV_LIB_PATH"'
       changes:
         - "**/*"
 
-  # Self-application: the template ships this checker into every generated repo,
-  # and its own docs carry the same relative cross-links. The checker scans every
-  # TRACKED *.md, so `template/**/*.md` is listed too — the forge templates there
-  # are tracked Markdown, and an edit to one must not skip the gate.
+  # Self-application: the template ships this checker into every generated repo
+  # and its own docs carry the same relative cross-links. It scans every tracked
+  # *.md, so `template/**/*.md` is listed too.
   - project: eric/weisssrv-lib
-    ref: v0.17.1
+    ref: v0.18.0
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
+      job_name: lint-docs-links
       changes:
         - "docs/**/*"
         - "README.md"
@@ -111,36 +129,38 @@ include:
         - "scripts/check-doc-links.py"
 
   - project: eric/weisssrv-lib
-    ref: v0.17.1
+    ref: v0.18.0
     file: /ci/security/secret-detection.yml
     inputs:
       tags: []
+      # gitleaks needs POPCNT/SSE4.2 and SIGILLs on older CPUs, so the job pins
+      # a modern-CPU node. The label domain is site data, passed explicitly
+      # rather than inherited.
+      cpu_selector: "esweiss.com/cpu=modern"
 
   - project: eric/weisssrv-lib
-    ref: v0.17.1
+    ref: v0.18.0
     file: /ci/review/pr-agent.yml
     inputs:
       tags: []
       gitlab_url: "https://git.ericsweiss.com"
       # Do NOT override openai_key/gitlab_token: the library already defaults
       # them to $OPENAI__KEY / $GITLAB__PERSONAL_ACCESS_TOKEN, and a renamed
-      # variable means the job is never created and the pipeline goes green with
-      # no review.
+      # variable means no job is created and the pipeline goes green.
       gate: "$OPENAI__KEY && $GITLAB__PERSONAL_ACCESS_TOKEN"
       needs:
         - job: yaml-lint
           optional: true
         - job: python-tests
           optional: true
-        - job: render-validate
+        - job: validate-rendered-app
           optional: true
 
-  # Cuts THIS template's tag from the conventional commits merged to main — the
-  # tag a generated repo's `copier update` resolves to and records as `_commit`
-  # in .copier-answers.yml. Untagged, copier falls back to HEAD, so every update
-  # pulls unreleased work; see docs/VERSIONING.md.
+  # Cuts this template's tag from the conventional commits merged to main: the
+  # tag a generated repo's `copier update` resolves to. Untagged, copier falls
+  # back to HEAD. See docs/VERSIONING.md.
   - project: eric/weisssrv-lib
-    ref: v0.17.1
+    ref: v0.18.0
     file: /ci/release/semantic-release.yml
     inputs:
       tags: []
@@ -154,7 +174,8 @@ lib-pin-check:
   tags: []
   needs: []
   script:
-    - pip install --quiet --no-cache-dir "pyyaml==$PYYAML_VERSION"
+    # `--user`: the shared non-root runner cannot write system site-packages.
+    - pip install --user --quiet --no-cache-dir "pyyaml==$PYYAML_VERSION"
     - python3 scripts/check-lib-pins.py --project "$LIB_PROJECT"
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
@@ -163,16 +184,14 @@ lib-pin-check:
         - "scripts/check-lib-pins.py"
     - if: '$CI_COMMIT_BRANCH == "main"'
 
-render-validate:
+validate-rendered-app:
   stage: test
   image: python:3.13
   tags: []
   needs: []
-  # This job requests the largest limits in the pipeline, so on the quota-capped
-  # shared runner it is the first to be refused at POD-CREATION time when several
-  # pipelines overlap. That arrives as a system failure rather than a test
-  # failure, which the retry turns into throttling instead of a red pipeline that
-  # says nothing about the render.
+  # The largest limits in the pipeline, so on the quota-capped shared runner
+  # this job is the first refused at pod creation. That arrives as a system
+  # failure, which the retry throttles instead of reddening the pipeline.
   retry:
     max: 2
     when:
@@ -182,65 +201,78 @@ render-validate:
     LIB_CHECKOUT: "$CI_PROJECT_DIR/.tmp/lib"
   before_script:
     - export PATH="$CI_PROJECT_DIR/.bin:$(python -m site --user-base)/bin:$PATH"
-    - mkdir -p "$CI_PROJECT_DIR/.bin"
     - |
       pip install --user --quiet \
         "copier==${COPIER_VERSION}" \
         "pyyaml==${PYYAML_VERSION}" \
         "yamllint==${YAMLLINT_VERSION}" \
         "ruff==${RUFF_VERSION}"
+    # Non-root, sha256-verified static binaries, into the workspace bin the
+    # export above already put on PATH. The pins are the vendored script's.
+    - python3 scripts/ci-fetch-tools.py kubeconform kustomize
     - |
       set -eo pipefail
-      # Non-root tool install: stdlib download, sha256 verify, extract into a
-      # workspace bin that before_script already put on PATH.
-      fetch_verified() {  # <file> <url> <sha256>
-        python -c "import urllib.request,sys; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" "$2" "/tmp/$1"
-        echo "$3  /tmp/$1" | sha256sum -c -
-      }
-      fetch_verified kubeconform.tar.gz \
-        "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
-        "$KUBECONFORM_SHA256"
-      tar xzf /tmp/kubeconform.tar.gz -C "$CI_PROJECT_DIR/.bin" kubeconform
-      fetch_verified kustomize.tar.gz \
-        "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
-        "$KUSTOMIZE_SHA256"
-      tar xzf /tmp/kustomize.tar.gz -C "$CI_PROJECT_DIR/.bin" kustomize
-      kubeconform -v && kustomize version
-    - |
-      set -eo pipefail
-      # The ref under test is copier.yml's lib_ref default — the single source
-      # the fixtures inherit — so the vendored-copy gate, the render and the
-      # generated pipeline can never disagree about which library is exercised.
+      # Clone the library at copier.yml's lib_ref default; the fixtures are held
+      # to the same tag by tests/test_copier_config.py.
       LIB_REF=$(python -c "import yaml; print(yaml.safe_load(open('copier.yml'))['lib_ref']['default'])")
       git clone --depth 1 --branch "$LIB_REF" \
         "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${LIB_PROJECT}.git" \
         "$LIB_CHECKOUT"
   script:
-    # ONE render per invocation, so every branch that changes the file SET needs
-    # a line of its own. pytest's own toolchain gates skip in this image, so
-    # without these lines those trees are linted nowhere.
-    #
-    # Reference-shaped fixture. --lib-path adds the two gates that read the
-    # library rather than the render: the vendored-copy registry, and the
-    # include contract (every passed input exists, every job's stage is
-    # declared).
+    # ONE render per invocation: every branch that changes the file set needs a
+    # line of its own, held to the render matrix by tests/test_render.py.
+    # Reference-shaped fixture: the GitLab shape with every component on.
     - python3 tests/validate_render.py --lib-path "$LIB_CHECKOUT"
-    # Contrast fixture: different in every field, every optional component off,
-    # a different CI shape. A value hardcoded from the reference cluster renders
-    # identically to a correct substitution under the shaped fixture, and fails
-    # here.
+    # Contrast fixture: the GitHub shape, every component off. A value
+    # hardcoded from the reference cluster fails on this render and the ones
+    # derived from it.
     - python3 tests/validate_render.py --answers tests/answers-unlike.yml
-    # The pipeline-less shape: the Taskfile's flux-lint branch and the absence
-    # of the release script from the ruff surface exist in no other render.
+    # The GitHub shape WITH the image build and every component off: the
+    # `packages: write` workflow and the Dockerfile on the minimal tree.
+    - >-
+      python3 tests/validate_render.py --answers tests/answers-unlike.yml
+      --data enable_image_build=true
+    # The contrast fixture with every component on: the bare-key remoteRef arm,
+    # the forward-auth middleware, and the seven manifests no other
+    # unlike-answers render produces.
+    - >-
+      python3 tests/validate_render.py --answers tests/answers-unlike.yml
+      --data enable_servicemonitor=true --data enable_internal_ingress=true
+      --data enable_hpa=true --data enable_vpa=true
+      --data enable_registry_pull_secret=true --data enable_image_build=true
+      --data enable_sso=true --data replica_count=3
+    # The contrast fixture on the GitLab shape: its pipeline, rendered from
+    # answers unlike the reference cluster's.
+    - >-
+      python3 tests/validate_render.py --lib-path "$LIB_CHECKOUT"
+      --answers tests/answers-unlike.yml --data ci_shape=gitlab_selfhosted
+      --data forge=gitlab --data enable_image_build=true
+      --data lib_project=seaworks/brinemoor-lib
+    # The pipeline-less shape on the GitLab forge: the shaped tree minus
+    # .gitlab-ci.yml, check-lib-pins.py and semantic-release.py, with the
+    # .gitlab metadata the forge answer keeps.
     - python3 tests/validate_render.py --data ci_shape=none
+    # No pipeline on a GitHub-hosted repo: the forge answer drops the .gitlab
+    # metadata the shape alone keeps, and carries the default HPA-off/VPA-on
+    # pair no other invocation renders.
+    - >-
+      python3 tests/validate_render.py --data ci_shape=none --data forge=github
+      --data "change_request=pull request" --data enable_hpa=false
+    # A forge that is neither GitLab nor GitHub: no forge metadata renders at
+    # all, the docs take the word this shape is asked for, and it is the one
+    # render with the HPA on, the VPA off and SSO with no LAN name.
+    - >-
+      python3 tests/validate_render.py --data ci_shape=none --data forge=other
+      --data "change_request=pull request" --data enable_vpa=false
+      --data enable_internal_ingress=false
+    # The GitLab shape with the image build OFF: no `build` stage, no
+    # docker-build include, no Dockerfile. --lib-path because it renders a
+    # pipeline, so the include-contract gate must run.
+    - >-
+      python3 tests/validate_render.py --lib-path "$LIB_CHECKOUT"
+      --data enable_image_build=false
     # No secret surface at all. The pull credential is overridden with it
-    # because it is an ExternalSecret too, and copier takes a skipped question's
-    # value from the data file rather than from its default.
-    #
-    # --lib-path again: this render keeps the GitLab shape, and the rule is that
-    # every invocation rendering a pipeline gets the include-contract gate — the
-    # two that do not (the contrast fixture and ci_shape=none) ship no pipeline
-    # for it to read.
+    # because it is an ExternalSecret too.
     - >-
       python3 tests/validate_render.py --lib-path "$LIB_CHECKOUT"
       --data secrets_backend=none --data enable_registry_pull_secret=false

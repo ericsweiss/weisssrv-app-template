@@ -25,7 +25,6 @@
       "Bash(cat:*)",
       "Bash(grep:*)",
       "Bash(rg:*)",
-      "Bash(find:*)",
       "WebSearch",
       "WebFetch(domain:copier.readthedocs.io)",
       "WebFetch(domain:github.com)",
@@ -36,8 +35,14 @@
       "WebFetch(domain:doc.traefik.io)"
     ],
     "deny": [
+      "Bash(git push origin main:*)",
+      "Bash(git push -u origin main:*)",
+      "Bash(git push --set-upstream origin main:*)",
+      "Bash(git push * main:*)",
+      "Bash(git push origin HEAD:*)",
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
       "Bash(kubectl apply:*)",
       "Bash(kubectl delete:*)",
       "Bash(kubectl edit:*)",

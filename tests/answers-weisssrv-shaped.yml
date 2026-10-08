@@ -1,18 +1,7 @@
 ---
-# Answer fixture A: the reference cluster's shape, with every optional component
-# ON. Those branches — HPA, internal route, metrics, pull credential, SSO — are
-# the ones a defaults-only render never reaches, and each of them also changes a
-# file the DEFAULT render ships (the Deployment loses `replicas:`, the VPA loses
-# CPU, the NetworkPolicy gains a scrape rule).
-#
-# Every question in copier.yml must have an entry: `copier copy --defaults`
-# would otherwise fall back to a default, and a question that gains one later
-# would silently stop being exercised.
-#
-# The values here are the reference cluster's, deliberately: they are the shape
-# a real tenant of it answers. They are no longer copier defaults — site
-# identity has none — so every one of them is supplied explicitly below, and
-# answers-unlike.yml is what proves they are substituted rather than hardcoded.
+# Answer fixture A: the same shape as the reference cluster, every optional
+# component on. Every ASKED question in copier.yml needs an entry here; a
+# computed one is left out, so the render proves the expression that makes it.
 app_slug: recipe-box
 app_namespace: recipe-box
 app_port: 8080
@@ -22,14 +11,15 @@ copyright_holder: Eric S. Weiss
 external_domain: ericsweiss.com
 internal_domain: esweiss.com
 node_label_domain: esweiss.com
-internal_vip: 192.168.0.101
+internal_vip: 10.0.10.101
 registry_host: registry.git.ericsweiss.com
 registry_pull_host: registry.git.esweiss.com
 runbook_url: https://git.ericsweiss.com/eric/weisssrv/-/blob/main/docs/29-flux-operations.md
 
 ci_shape: gitlab_selfhosted
-# Computed from ci_shape (`when: false`), so copier ignores the value here and
-# recomputes it; answered anyway because every question must appear.
+forge: gitlab
+# Only `forge: other` is asked for this word; answered anyway so the fixture
+# covers the whole question set, and equal to what the default computes.
 change_request: merge request
 enable_image_build: true
 git_host: git.ericsweiss.com
@@ -48,11 +38,10 @@ gitlab_api_url: https://git.ericsweiss.com
 enable_servicemonitor: true
 enable_internal_ingress: true
 enable_hpa: true
+enable_vpa: true
 enable_registry_pull_secret: true
 enable_sso: true
 
-# A RELEASE TAG, matching copier.yml's default: a fixture pinned to a branch
-# would exercise CI includes at a ref no real tenant gets, and break outright
-# the moment the branch is deleted.
-lib_ref: v0.7.4
+# copier.yml's lib_ref default, held there by test_copier_config.py.
+lib_ref: v0.18.0
 lib_project: eric/weisssrv-lib

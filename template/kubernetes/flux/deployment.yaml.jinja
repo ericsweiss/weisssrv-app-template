@@ -1,14 +1,7 @@
 ---
-# Application workload. Hardened, non-root so it satisfies the tenant
-# namespace's Pod Security Admission (enforce: baseline / warn+audit:
-# restricted). Swap the image, probe paths and resources for your app.
-#
-# The image tag is a PLACEHOLDER no registry has, so the first reconcile
-# ImagePullBackOffs until you replace it{% if enable_image_build %} — with a tag this repo's own image
-# build publishes. Which tag that is follows from the CI shape, so it is named
-# in README.md's first step rather than here, where the shape is not known{% endif %}.
-# Tags are LITERAL pins: Flux postBuild `${var}` substitution is
-# cluster-internal and not available to tenants.
+# Application workload, hardened for the namespace's Pod Security Admission.
+# Swap the image, probe paths and resources for your app. The image tag is a
+# PLACEHOLDER no registry has, so the first reconcile ImagePullBackOffs.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,7 +13,9 @@ spec:
   # No `replicas:` — hpa.yaml owns the replica count, and Flux server-side apply
   # would otherwise fight the HPA over the field on every reconcile.
 {%- else %}
-  # {{ replica_count }} replica{{ 's' if replica_count > 1 else '' }}{% if replica_count > 1 %}, so a rolling update never drops to zero{% endif %}.
+{%- if replica_count > 1 %}
+  # {{ replica_count }} replicas, so a rolling update never drops to zero.
+{%- endif %}
   replicas: {{ replica_count }}
 {%- endif %}
   selector:
@@ -50,8 +45,8 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
-      # Soft NAS-avoidance. To PIN to the storage node instead (zvol-backed
-      # data), see docs/ARCHITECTURE.md § Storage & scheduling.
+      # Soft NAS-avoidance. To PIN to the storage node instead, see
+      # docs/ARCHITECTURE.md § Storage & scheduling.
       affinity:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -70,24 +65,22 @@ spec:
                     app.kubernetes.io/name: {{ app_slug }}
       containers:
         - name: app
-          image: {{ registry_host }}/{{ git_namespace }}/{{ app_slug }}:REPLACE-ME
+          image: {{ registry_host }}/{{ git_namespace | lower }}/{{ app_slug }}:REPLACE-ME
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: {{ app_port }}
               protocol: TCP
 {%- if secrets_backend != 'none' %}
-          # Bind each secret key as its own env var: the ExternalSecret's keys
-          # are hyphenated per the homelab convention and hyphens are not valid
-          # env-var names, so `envFrom: secretRef` would silently SKIP them.
-          # `optional: true` lets the pod start before ESO wires the store.
+          # CRITICAL: a key the backing secret lacks holds the pod in
+          # CreateContainerConfigError. One key at a time because the keys are
+          # hyphenated and `envFrom: secretRef` silently SKIPS a hyphenated name.
           env:
             - name: API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ app_slug }}-secrets
                   key: api-key
-                  optional: true
 {%- endif %}
           securityContext:
             allowPrivilegeEscalation: false
@@ -96,7 +89,7 @@ spec:
               drop:
                 - ALL
           # Adjust to your app's health endpoints. The liveness grace on a slow
-          # boot is ~75s — anything slower needs a startupProbe.
+          # boot is ~55s; anything slower needs a startupProbe.
           readinessProbe:
             httpGet:
               path: /
@@ -113,12 +106,24 @@ spec:
             requests:
               cpu: 25m
               memory: 64Mi
+              ephemeral-storage: 64Mi
             limits:
+{%- if enable_vpa %}
+              # vpa.yaml caps maxAllowed.memory at this value; move both together.
+{%- endif %}
               memory: 256Mi
-          # readOnlyRootFilesystem is on; add emptyDir mounts as the app needs.
+              # Sized above the /tmp emptyDir below plus the node's rotated
+              # container logs, which share this budget; at the emptyDir's own
+              # size the kubelet evicts the pod before the volume ever fills.
+              ephemeral-storage: 512Mi
+          # readOnlyRootFilesystem is on; add emptyDir mounts, each with a
+          # sizeLimit, as the app needs.
           volumeMounts:
             - name: tmp
               mountPath: /tmp
       volumes:
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            # Node ephemeral storage. Raise the container's ephemeral-storage
+            # limit with it, and keep that limit above this value.
+            sizeLimit: 64Mi
