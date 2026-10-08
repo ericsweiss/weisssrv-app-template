@@ -93,8 +93,8 @@ task render          # print the manifests Flux will apply
 ```
 
 Install the pre-commit hooks (`pre-commit install`) to catch secrets, YAML
-problems, a broken doc link, an opened egress fence, a drifted scrape pair and
-an emptied kustomization list before you push.
+problems, a broken doc link, an over-long comment block, an opened egress fence,
+a drifted scrape pair and an emptied kustomization list before you push.
 {%- if ci_shape == 'none' %}
 
 There is no pipeline in this repo (CI shape `none`), so `task lint` and the

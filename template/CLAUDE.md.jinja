@@ -17,8 +17,8 @@ CI shape is **`{{ ci_shape }}`**{% if ci_shape == 'gitlab_selfhosted' %}: every 
 bumping the `ref:` or adjusting the `inputs:`{% elif ci_shape == 'github' %}: `.github/workflows/{ci,release,build-image}.yml`
 are vendored copies of the shared library's workflows. Keep them byte-identical
 and re-vendor on a bump. `manifest-gates.yml` beside them is this repo's own.
-The one permitted hand edit is `env.K8S_VERSION` in `ci.yml`, which a
-byte-identical copy cannot take from an answer — see docs/VERSIONING.md{% else %}: there is no pipeline. `task lint` and the
+They take no hand edit: `ci.yml` reads repository variable `K8S_VERSION`,
+which a byte-identical copy cannot take from an answer — see docs/VERSIONING.md{% else %}: there is no pipeline. `task lint` and the
 pre-commit hooks are the whole gate{% endif %}.
 
 The repo was generated from a copier template and records its answers in
@@ -46,14 +46,11 @@ metrics — are `copier update` with the answer flipped, not hand-assembly.
   `restricted`: keep `runAsNonRoot`, dropped capabilities and a read-only root
   filesystem.
 - **Register every new manifest** in `kubernetes/flux/kustomization.yaml`.
-- **Never edit the vendored copies in place**: `scripts/check-doc-links.py`,
-  `scripts/check-netpol-except-parity.py`{% if ci_shape == 'gitlab_selfhosted' %}, `scripts/check-lib-pins.py`{% endif %}{% if ci_shape != 'none' %},
-  `scripts/semantic-release.py`{% endif %}{% if ci_shape == 'github' %} and
-  `.github/workflows/{ci,release,build-image}.yml` (except `env.K8S_VERSION` in
-  `ci.yml`, docs/VERSIONING.md){% endif %}. They are byte-identical
-  library copies; a re-vendor overwrites a local edit. `scripts/check-kustomization.py`{% if ci_shape == 'github' %},
-  `.github/workflows/manifest-gates.yml`{% endif %}
-  and `scripts/check-scrape-wiring.py` are this repo's own: fix them here.
+- **Never edit the vendored copies in place**: every file under `scripts/`{% if ci_shape == 'github' %}
+  and `.github/workflows/{ci,release,build-image}.yml`{% endif %}. They are
+  byte-identical library copies; a re-vendor overwrites a local edit.{% if ci_shape == 'github' %}
+  `.github/workflows/manifest-gates.yml` is this repo's own: fix that one
+  here.{% endif %}
 - **Run `task lint` before opening a {{ change_request }}.**
 
 ## Comments
@@ -66,6 +63,10 @@ above five lines of YAML.
 A comment block runs to three content lines. A block guarding a trap that causes
 an outage may open `CRITICAL:` and run to eight. That marker is for outages, not
 for emphasis and not for a long file header.
+
+`task comment-length` is the gate, and the pre-commit hook runs it on every
+commit. It takes `--max` and `--exclude`, so a tree your team wants held to a
+different budget is an argument change rather than a reason to drop the gate.
 
 ## Where things are documented
 

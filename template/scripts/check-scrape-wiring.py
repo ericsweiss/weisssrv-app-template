@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Assert the scrape NetworkPolicy admits Prometheus on the port the monitor scrapes.
 
-An unmodelled peer or selector shape is not credited and is named in the failure.
-Exits 0 clean, 1 on a violation, 2 on an operator error or an empty corpus.
+Port granularity; check-scrape-netpol.py is the namespace half. An unmodelled
+peer or selector shape is not credited. Exit codes and shapes: docs/SCRIPTS.md.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ except ImportError:
     print("ERROR: PyYAML required: pip install pyyaml", file=sys.stderr)
     raise SystemExit(2) from None
 
-SCRAPE_NAMESPACE = "observability"
+DEFAULT_OBSERVABILITY_NS = "observability"
 WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet")
 ENDPOINT_KEYS = {"PodMonitor": "podMetricsEndpoints", "ServiceMonitor": "endpoints"}
 
@@ -206,7 +206,7 @@ def pod_port(
     return targets
 
 
-def scrape_allow(documents: list[dict]) -> str | None:
+def scrape_allow(documents: list[dict], scrape_ns: str) -> str | None:
     """The name of a NetworkPolicy admitting the observability namespace, if any.
 
     It is the repo's own statement that something here is scraped, so it stands
@@ -220,12 +220,12 @@ def scrape_allow(documents: list[dict]) -> str | None:
             for peer in rule.get("from") or []:
                 namespaces = peer.get("namespaceSelector") or {}
                 labels = namespaces.get("matchLabels") or {}
-                if labels.get("kubernetes.io/metadata.name") == SCRAPE_NAMESPACE:
+                if labels.get("kubernetes.io/metadata.name") == scrape_ns:
                     return (document.get("metadata") or {}).get("name")
     return None
 
 
-def admits(policy: dict, pods: dict, accepted: set[int | str]) -> bool:
+def admits(policy: dict, pods: dict, accepted: set[int | str], scrape_ns: str) -> bool:
     """Does this NetworkPolicy let the observability namespace in on the port?"""
     spec = mapping(policy.get("spec"), describe(policy), "spec")
     rules = spec.get("ingress") or []
@@ -259,7 +259,7 @@ def admits(policy: dict, pods: dict, accepted: set[int | str]) -> bool:
                     )
                 continue
             labels = namespaces.get("matchLabels") or {}
-            if labels.get("kubernetes.io/metadata.name") == SCRAPE_NAMESPACE:
+            if labels.get("kubernetes.io/metadata.name") == scrape_ns:
                 if peer.get("podSelector"):
                     note(
                         f"{name}: its scrape peer scopes the namespace with a podSelector "
@@ -313,14 +313,19 @@ def admits(policy: dict, pods: dict, accepted: set[int | str]) -> bool:
     return False
 
 
-def check(documents: list[dict]) -> int:
+def check(
+    documents: list[dict],
+    scrape_ns: str = DEFAULT_OBSERVABILITY_NS,
+    namespace: str | None = None,
+) -> int:
     """Every monitor's scraped port, against the policies beside it."""
+    UNMODELLED.clear()
     monitors = [d for d in documents if d.get("kind") in ENDPOINT_KEYS]
     if not monitors:
-        declared = scrape_allow(documents)
+        declared = scrape_allow(documents, scrape_ns)
         if declared:
             raise GateError(
-                f"{declared} admits namespace {SCRAPE_NAMESPACE} but no ServiceMonitor "
+                f"{declared} admits namespace {scrape_ns} but no ServiceMonitor "
                 "or PodMonitor is present: a gate that checks nothing is not a gate. "
                 "Restore the monitor, or remove the scrape allow with it."
             )
@@ -337,14 +342,23 @@ def check(documents: list[dict]) -> int:
         spec = mapping(monitor.get("spec"), describe(monitor), "spec")
         scope = mapping(spec.get("namespaceSelector"), describe(monitor), "spec.namespaceSelector")
         names = scope.get("matchNames") or []
-        # NamespaceSelector carries `any` and `matchNames` only, and the tree names
-        # no namespace, so one matchNames entry reads as this directory's own.
+        # The tree names no namespace, so a matchNames entry is verified against
+        # --namespace or refused; an unverified name would certify another namespace.
         if set(scope) - {"any", "matchNames"} or scope.get("any") or len(names) > 1:
             raise GateError(
                 f"{name}: spec.namespaceSelector scopes the scrape outside this directory, "
                 "whose NetworkPolicies cover one namespace only. Leave it out, or scope it "
-                "to this namespace with `any: false` or a single `matchNames` entry; a wider "
-                "scrape must be checked where those policies live."
+                "to this namespace with `any: false` or `matchNames: [<namespace>]` and "
+                "`--namespace`; a wider scrape must be checked where those policies live."
+            )
+        if names and names != [namespace]:
+            raise GateError(
+                f"{name}: spec.namespaceSelector.matchNames {names} cannot be verified "
+                + (
+                    f"against --namespace {namespace}: the policies here cover that namespace only."
+                    if namespace
+                    else "without --namespace: pass the namespace this tree deploys into."
+                )
             )
         selector = mapping(
             mapping(spec.get("selector"), describe(monitor), "spec.selector").get("matchLabels"),
@@ -360,21 +374,21 @@ def check(documents: list[dict]) -> int:
             raise GateError(f"{name}: the monitor declares no endpoints, so nothing is checked")
         for endpoint in endpoints:
             for accepted, pods, subject in pod_port(documents, selector, endpoint, kind, name):
-                if any(admits(policy, pods, accepted) for policy in policies):
+                if any(admits(policy, pods, accepted, scrape_ns) for policy in policies):
                     continue
                 numbers = sorted(v for v in accepted if not isinstance(v, str))
                 port = numbers[0] if numbers else sorted(accepted)[0]
                 message = (
-                    f"{name}{subject}: no NetworkPolicy admits namespace {SCRAPE_NAMESPACE} "
+                    f"{name}{subject}: no NetworkPolicy admits namespace {scrape_ns} "
                     f"on port {port}, so Prometheus cannot reach this target"
                 )
                 raise Violation("\n".join([message, *UNMODELLED]))
 
-    print(f"{len(monitors)} monitor(s); every scraped port is admitted from {SCRAPE_NAMESPACE}")
+    print(f"{len(monitors)} monitor(s); every scraped port is admitted from {scrape_ns}")
     return 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "directory",
@@ -382,7 +396,16 @@ def main() -> int:
         default="kubernetes/flux",
         help="manifest directory to check (default: %(default)s)",
     )
-    arguments = parser.parse_args()
+    parser.add_argument(
+        "--observability-namespace",
+        default=DEFAULT_OBSERVABILITY_NS,
+        help="namespace Prometheus scrapes from (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--namespace",
+        help="namespace this tree deploys into; a monitor's matchNames must equal it",
+    )
+    arguments = parser.parse_args(argv)
 
     base = pathlib.Path(arguments.directory)
     if not base.is_dir():
@@ -407,7 +430,7 @@ def main() -> int:
         return 2
 
     try:
-        return check(documents)
+        return check(documents, arguments.observability_namespace, arguments.namespace)
     except GateError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2

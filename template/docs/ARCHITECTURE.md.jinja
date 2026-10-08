@@ -128,8 +128,9 @@ needs peer-less egress, passes the gate a `--config FILE`. That file carries
 flag wherever the gate runs. That file replaces the built-in lists rather than
 extending them, so a custom `canonical_except_lists` must still carry the set
 the shipped `networkpolicy.yaml` uses (`reserved-full`), and `lan-fence` too if
-you use it. An except-list matching no named set fails the gate. The key shapes
-live in `load_config` in `scripts/check-netpol-except-parity.py`.
+you use it. An except-list matching no named set fails the gate.
+`examples/netpol-except.example.yaml` is a filled-in copy of all three keys;
+`load_config` in `scripts/check-netpol-except-parity.py` is the schema.
 
 Anything else needs its own egress rule. Three worked examples:
 
@@ -232,11 +233,21 @@ ingress:
   than `ALLOWED_SKIPS` in `Taskfile.yml` allows. A CR your own operator defines
   is not in the public CRD catalog: add a `-schema-location` for it, or raise
   `ALLOWED_SKIPS`.
+{%- if ci_shape == 'gitlab_selfhosted' %}
+  The pipeline carries its own budget: raise it by passing `allowed_skips` to the
+  `flux-lint` include in `.gitlab-ci.yml`, or that job still fails at zero.
+{%- elif ci_shape == 'github' %}
+  The pipeline reads its own budget from repository variable `ALLOWED_SKIPS`, so
+  raise that too, or the `flux-lint` job still fails at zero.
+{%- endif %}
 - `scrape-wiring` fails when no NetworkPolicy admits the `observability`
   namespace on the port `servicemonitor.yaml` scrapes. A drifted pair is a
   `TargetDown` page in the platform's Alertmanager, not here. The gate models a
   namespace-scoped peer only: a peer that also carries a `podSelector` fails it,
-  so keep the namespace peer whole and narrow elsewhere.
+  so keep the namespace peer whole and narrow elsewhere. A
+  `spec.namespaceSelector` on the monitor may name this namespace
+  (`matchNames: [{{ app_namespace }}]`); a wider scrape has to be checked where
+  the policies covering it live.
 {%- if ci_shape == 'gitlab_selfhosted' %}
   The `scrape-wiring-check` job runs the same script on every change.
 {%- elif ci_shape == 'github' %}

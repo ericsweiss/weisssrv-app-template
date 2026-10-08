@@ -414,6 +414,22 @@ def test_change_request_is_computed_per_forge():
     assert asked(forge="github") == "False"
 
 
+def test_the_answer_reference_row_matches_the_computed_words():
+    """docs/CONSUMING.md is the only place an operator reads the vocabulary
+    before answering, and the three words are an expression nobody else holds
+    against the doc."""
+    default = jinja2.Template(QUESTIONS["change_request"]["default"]).render
+    text = (REPO_ROOT / "docs" / "CONSUMING.md").read_text(encoding="utf-8")
+    row = next(
+        line for line in text.splitlines() if line.startswith("| `change_request` |")
+    )
+    missing = [
+        default(forge=forge) for forge in ("github", "gitlab", "other")
+        if default(forge=forge) not in row
+    ]
+    assert not missing, "the change_request row names no word for: " + ", ".join(missing)
+
+
 @pytest.mark.parametrize("ref,rejected", [("v0.7.4", False), ("main", True), ("0.6.2", True)])
 def test_lib_ref_takes_release_tags_only(ref, rejected):
     assert bool(_validator_message("lib_ref", lib_ref=ref)) is rejected
@@ -904,11 +920,47 @@ def test_every_vendored_consumer_path_exists():
     )
 
 
-# Gates this template owns outright, so no library copy claims them.
-TEMPLATE_OWNED = {
-    "template/scripts/check-kustomization.py",
-    "template/scripts/check-scrape-wiring.py",
-}
+# The scrape gate refuses a ServiceMonitor's `matchNames` without `--namespace`,
+# so a template-owned caller that omits the answer reds on a tenant's own
+# manifest. The vendored workflow takes no answer: docs/VERSIONING.md, Pending.
+SCRAPE_INVOCATION = re.compile(r"python3?\s+scripts/check-scrape-wiring\.py")
+
+
+def test_every_template_owned_scrape_caller_passes_the_namespace():
+    """The task, the pre-commit hook and both pipelines run the same gate, and
+    the answer is the only thing that tells it which namespace this tree
+    deploys into."""
+    document = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
+    # Only the byte-identical copies: a declared fork is edited here.
+    vendored = {
+        entry if isinstance(entry, str) else entry["consumer"]
+        for entry in document.get("vendored") or []
+    }
+    callers = {}
+    for path in sorted((REPO_ROOT / "template").rglob("*")):
+        if not path.is_file() or "__pycache__" in path.parts:
+            continue
+        relpath = path.relative_to(REPO_ROOT).as_posix()
+        if relpath in vendored:
+            continue
+        try:
+            body = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if SCRAPE_INVOCATION.search(body):
+            callers[relpath] = body
+    assert len(callers) >= 4, f"the scan found only {sorted(callers)}"
+    missing = sorted(
+        relpath
+        for relpath, body in callers.items()
+        if "--namespace {{ app_namespace }}" not in body
+    )
+    assert not missing, "scrape-gate callers passing no namespace: " + ", ".join(missing)
+
+
+# Gates this template would own outright. Every gate it ships is a registered
+# library copy, so the set is empty; the negative test below holds it honest.
+TEMPLATE_OWNED: set[str] = set()
 
 
 def _script_paths(root) -> set[str]:

@@ -1,29 +1,29 @@
 """Render this template into a throwaway directory.
 
-Shared by the pytest suite and tests/validate_render.py. The source is copied
-without .git, so copier renders the working tree rather than committed HEAD.
+The copier invocation is the library's vendored tests/copier_render.py; what
+stays here is this repository's own.
 """
 
 from __future__ import annotations
 
 import importlib.util
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import copier_render
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ANSWERS = REPO_ROOT / "tests" / "answers-weisssrv-shaped.yml"
 ANSWERS_B = REPO_ROOT / "tests" / "answers-unlike.yml"
 
-# `.tmp` and `.bin` are what CI's render-validate job creates inside the project
-# directory: a full library clone and the extracted kustomize/kubeconform
-# tarballs. Copying either into the template source is pointless I/O.
-_IGNORED = shutil.ignore_patterns(
-    ".git", "__pycache__", "*.pyc", ".pytest_cache", ".ruff_cache", ".render", ".tmp", ".bin"
-)
+# What CI's render-validate job creates inside the project directory: a full
+# library clone and the extracted kustomize/kubeconform tarballs. Copying
+# either into the template source is pointless I/O.
+_EXTRA_IGNORE = (".tmp", ".bin")
 
 
 class CILoader(yaml.SafeLoader):
@@ -58,9 +58,7 @@ def load_gate(name: str, directory: str):
 
 
 def copy_source(scratch: Path) -> Path:
-    src = scratch / "template-src"
-    shutil.copytree(REPO_ROOT, src, ignore=_IGNORED)
-    return src
+    return copier_render.copy_source(REPO_ROOT, scratch, extra_ignore=_EXTRA_IGNORE)
 
 
 def render(
@@ -69,53 +67,16 @@ def render(
     dest_name: str = "render",
     data: dict[str, str] | None = None,
 ) -> Path:
-    """Render the working tree with `answers`; return the generated repo root.
-
-    `data` overrides individual answers, reaching branches neither fixture answers.
-    """
-    src = copy_source(scratch)
-    dest = scratch / dest_name
-    overrides: list[str] = []
-    for key, value in (data or {}).items():
-        overrides += ["--data", f"{key}={value}"]
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "copier",
-            "copy",
-            "--defaults",
-            "--overwrite",
-            "--trust",
-            "--data-file",
-            str(answers),
-            *overrides,
-            str(src),
-            str(dest),
-        ],
-        check=True,
+    """Render the working tree with `answers`; return the generated repo root."""
+    return copier_render.render(
+        REPO_ROOT,
+        scratch,
+        answers=answers,
+        dest_name=dest_name,
+        data=data,
+        extra_ignore=_EXTRA_IGNORE,
     )
-    return dest
-
-
-def main() -> int:
-    import argparse
-    import tempfile
-
-    parser = argparse.ArgumentParser(description="Render the template for inspection.")
-    parser.add_argument("--out", type=Path, help="Directory to render into (must not exist).")
-    parser.add_argument("--answers", type=Path, default=ANSWERS)
-    args = parser.parse_args()
-
-    scratch = Path(tempfile.mkdtemp(prefix="app-template-"))
-    dest = render(scratch, answers=args.answers)
-    if args.out:
-        shutil.copytree(dest, args.out)
-        shutil.rmtree(scratch, ignore_errors=True)
-        dest = args.out
-    print(dest)
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(copier_render.cli_main(REPO_ROOT, ANSWERS, "app-template-"))

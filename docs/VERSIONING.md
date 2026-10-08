@@ -58,6 +58,12 @@ suite fails a change that is not listed.
 A recorded answer always wins over the default, so a repo that answered the
 question keeps its value through `copier update`.
 
+### Rendered-path changes since the last release
+
+- `.yamllint` moves to `lint/yamllint-relaxed.yml`, beside the other lint
+  profiles and at the path the library offers the file under. `copier update`
+  carries the move; tooling that names `.yamllint` by hand reads the new path.
+
 ## MAJOR / MINOR / PATCH
 
 | Level | Meaning here |
@@ -84,7 +90,8 @@ template input, a changed default that alters a resolved job — is a MAJOR here
 The GitHub shape's `ci.yml`, `release.yml` and `build-image.yml` are vendored
 byte-identically from the same library; re-vendor them in the same merge request
 that moves `lib_ref`'s default, or the two shapes gate on different tools.
-`manifest-gates.yml` is this template's own and has no library counterpart.
+`manifest-gates.yml` is this template's own; the library's `ci.yml` carries a
+job of the same name, so the two overlap — see Pending below.
 
 ## Vendored copies
 
@@ -110,90 +117,36 @@ files that drift separately.
 A `forked` entry's `reason:` must name a difference the file actually contains,
 so the next re-vendor reconciles against the real divergence.
 
-`template/scripts/check-kustomization.py` and
-`template/scripts/check-scrape-wiring.py` are template-local at the pinned
-`lib_ref`, so they are absent from the manifest. The library's
-`scripts/check-scrape-netpol.py` checks the same invariant at namespace level
-over a cluster corpus, and the copy here resolves it per port.
+Every gate under `template/scripts/` is a registered library copy. The
+library's `scripts/check-scrape-netpol.py` checks the scrape invariant at
+namespace level over a cluster corpus; `check-scrape-wiring.py`, the copy a
+tenant gets, resolves it per port.
 
 ### Pending at the next library bump
 
-Each entry is deleted by the pin bump that satisfies it.
+Each entry is deleted by the change that satisfies it. All three are unblocked
+at the pinned `lib_ref` and waiting on their own change.
 
-- `scripts/check-netpol-except-parity.py` imports `gate_common` from its own
-  directory in the library's current tree. Re-vendor
-  `template/scripts/gate_common.py` alongside it and register it. Without it,
-  every generated repo's `task netpol` and `netpol-check` fail with
-  ImportError. This repo keeps no root copy of the egress fence, so it needs no
-  root `gate_common.py`.
-- `template/scripts/check-kustomization.py` and
-  `template/scripts/check-scrape-wiring.py` have library twins,
-  `scripts/check-kustomization.py` and `scripts/check-scrape-wiring.py`, in the
-  offer list from the next release. At the bump either re-vendor both and
-  register them under `vendored:` against the `template/scripts/` consumers, or
-  register them under `forked:` with a `reason:` and a `reconciled_sha256`.
-  Nothing flags them today: `tests/test_copier_config.py`'s `TEMPLATE_OWNED`
-  set exempts both. The same change passes `--scan template/scripts=scripts`
-  and `--scan scripts=scripts` in `tests/validate_render.py`'s
-  `check_registered_copies`, drops the `TEMPLATE_OWNED` allowlist, and rewrites
-  the matching claims in docs/ARCHITECTURE.md, docs/CONSUMING.md and CLAUDE.md.
-- `.gitattributes` and `template/.gitattributes` are not registered: the
-  library's `lint/gitattributes` is not in its offer list at the pinned
-  `lib_ref`. Register both halves in the change that moves the pin to a release
-  carrying that path.
-- `scripts/check-netpol-except-parity.py`'s docstring cites
-  `examples/netpol-except.example.yaml` for the `--config` schema, and neither
-  this repo nor a generated one carries it. Vendor it into `examples/` and
-  `template/examples/`, so the tenant who needs a different fence has the file
-  the gate names.
-- The `flux-lint` include in the rendered `.gitlab-ci.yml` gains
-  `crd_catalog_ref`, passed the sha `Taskfile.yml`'s `CRD_CATALOG_REF` already
-  pins, so the pipeline and `task flux-lint` resolve one catalog. Consider
-  `expected_skipped_file` in the same change, and rewrite the two
-  docs/CI-SHAPES.md claims it invalidates: that the library's job takes no such
-  input at the pinned `lib_ref`, and that neither pipeline shape's kubeconform
-  run fails on a skipped schema.
-- The library's `flux-lint` simple arm gains an empty-build guard and a
-  skipped-schema guard, so the rendered `Taskfile.yml` drops its shell
-  re-implementation of both.
-- The library's `ci.yml` lints with `yamllint -c lint/yamllint-relaxed.yml .`
-  from the next release, and the library offers the profile at
-  `lint/yamllint-relaxed.yml` for that path only. This template renders it to
-  the tenant root as `.yamllint`, so re-vendoring the workflow alone ships a
-  `-c` path no tenant has. At the bump move `template/.yamllint` to
-  `template/lint/yamllint-relaxed.yml`, repoint the forked consumer path in
-  `scripts/vendored-manifest.yml`, and move the local references with it:
-  `template/Taskfile.yml.jinja`'s `yaml-lint` command,
-  `template/.pre-commit-config.yaml`'s yamllint hook args, the rendered GitLab
-  pipeline's `yaml-lint` `config:` input and the `changes:` list beside it, and
-  the `.dockerignore` entry. A rendered file moves, so the release is MAJOR.
-- The library's `ci.yml` gains a `manifest-gates` job that runs
-  `check-netpol-except-parity.py`, `check-scrape-wiring.py` and
-  `check-kustomization.py` over `$MANIFEST_ROOT`, which defaults to the
-  rendered tenant's `kubernetes/flux`. Re-vendoring it makes every GitHub-shape
-  tenant run the three gates twice. At the bump either drop the template's own
-  `manifest-gates.yml`, or keep it and say here why the duplication is wanted.
-  Dropping it removes a rendered file, so MAJOR, and it carries
-  `tests/test_github_shape.py`, the parity rows in docs/CI-SHAPES.md § Job
-  parity and the design note in § Why the GitHub workflows are shaped as they
-  are. It also closes the release-gating gap docs/CI-SHAPES.md records, because
-  the library's job sits inside `ci.yml`, which `release.yml`'s `workflow_run`
-  trigger gates. Three claims become false and must be rewritten in the same
-  change: this page's "`manifest-gates.yml` is this template's own and has no
-  library counterpart", and the two in docs/CI-SHAPES.md that say the library
-  ships no GitHub workflow running those gates and that the file is never
-  re-vendored.
-- `K8S_VERSION` becomes a repository variable: the library's `ci.yml` reads
-  `vars.K8S_VERSION` with its own literal as the fallback, and `flux-lint`
-  prints a warning annotation on every run while the variable is unset. At the
-  bump rewrite `copier.yml`'s `_message_after_copy`, docs/CI-SHAPES.md
-  § What the GitHub shape gives up, `template/docs/VERSIONING.md.jinja` and
-  `template/docs/ONBOARDING.md.jinja` to tell the tenant to set repository
-  variable `K8S_VERSION`, and optionally `MANIFEST_ROOT`, `ALLOWED_SKIPS` and
-  `CRD_CATALOG_REF`, instead of editing the vendored literal. Drop the
-  "re-apply after every re-vendor" sentence from each. That leaves no sanctioned
-  hand edit to a vendored workflow, so the `env.K8S_VERSION` carve-out in
-  `template/CLAUDE.md.jinja` goes with it.
+- The `flux-lint` include in the rendered `.gitlab-ci.yml` does not pass
+  `crd_catalog_ref`, so the pipeline takes the library's default while
+  `task flux-lint` takes `Taskfile.yml`'s `CRD_CATALOG_REF`. They agree today
+  because both pin the same commit, with nothing holding them equal. Pass the
+  input, and consider `expected_skipped_file` in the same change.
+- The library's `flux-lint` simple arm carries the empty-build guard, the
+  skipped-schema guard and the integer check on the skip budget, and the
+  rendered `Taskfile.yml` implements the same three in shell because a CI
+  template cannot serve a local task. Give the library a script form both can
+  call, or the two drift and only `tests/test_render.py` notices.
+- The vendored `ci.yml` carries a `manifest-gates` job running the same three
+  gates as this template's own `manifest-gates.yml`, over `$MANIFEST_ROOT`,
+  which defaults to the rendered tenant's `kubernetes/flux`. Every GitHub-shape
+  tenant therefore runs them twice. Drop the template's own workflow, or keep it
+  and say here why the duplication is wanted. Dropping it removes a rendered
+  file, so MAJOR, and it carries `tests/test_github_shape.py`, the parity rows
+  in docs/CI-SHAPES.md § Job parity and the design note in § Why the GitHub
+  workflows are shaped as they are. The vendored job also passes no
+  `--namespace`, which the four template-owned callers do, so a ServiceMonitor
+  scoped with `matchNames` reds it while they pass.
 
 ## Which library release a template release was validated against
 
@@ -209,7 +162,7 @@ default and runs the real toolchain over the render against it.
 | `v0.2.0` | weisssrv-lib `v0.7.2` |
 | `v0.3.0` | weisssrv-lib `v0.8.0` |
 | `v0.4.0` | weisssrv-lib `v0.9.5` |
-| `main` (unreleased) | weisssrv-lib `v0.17.1` |
+| `main` (unreleased) | weisssrv-lib `v0.18.0` |
 
 Rules that keep the table meaningful:
 

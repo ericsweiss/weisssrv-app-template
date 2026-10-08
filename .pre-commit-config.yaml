@@ -12,6 +12,8 @@ repos:
     rev: v1.38.0
     hooks:
       - id: yamllint
+        # The profile is vendored at this path, not as a root `.yamllint`:
+        # ansible-lint discovers a root one and loses its own yaml[*] rules.
         args: [-c, lint/yamllint-relaxed.yml]
         exclude: ^template/
 
@@ -25,6 +27,7 @@ repos:
         exclude: ^template/
       - id: check-merge-conflict
       - id: check-yaml
-        # --unsafe is a syntax-only parse, so GitLab's `!reference` tags do not false-fail.
+        # --unsafe: syntax-only parse (no tag construction), so GitLab's
+        # `!reference` and Ansible's `!vault` custom tags do not false-fail.
         args: [--allow-multiple-documents, --unsafe]
         exclude: ^template/

@@ -43,5 +43,5 @@ enable_registry_pull_secret: true
 enable_sso: true
 
 # copier.yml's lib_ref default, held there by test_copier_config.py.
-lib_ref: v0.17.1
+lib_ref: v0.18.0
 lib_project: eric/weisssrv-lib

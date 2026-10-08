@@ -7,7 +7,7 @@ outside `kubernetes/`. Three values:
 |---|---|---|
 | `gitlab_selfhosted` (default) | self-hosted GitLab, jobs included from `eric/weisssrv-lib` at a pinned tag | `.gitlab-ci.yml`, `.gitlab/secret-detection-ruleset.toml`, `scripts/check-lib-pins.py`, `scripts/semantic-release.py` |
 | `github` | GitHub Actions, workflows vendored from the same library | `.github/workflows/{ci,manifest-gates,release}.yml` — plus `build-image.yml` when `enable_image_build` is on — and `scripts/semantic-release.py` |
-| `none` | none | neither pipeline; `scripts/check-doc-links.py`, `scripts/check-kustomization.py`, `scripts/check-netpol-except-parity.py` and `scripts/check-scrape-wiring.py` still ship, and `task lint` plus the pre-commit hooks are the whole gate |
+| `none` | none | neither pipeline; `scripts/check-comment-length.py`, `scripts/check-doc-links.py`, `scripts/check-kustomization.py`, `scripts/check-netpol-except-parity.py` and `scripts/check-scrape-wiring.py` still ship, and `task lint` plus the pre-commit hooks are the whole gate |
 
 The `.gitlab/issue_templates/` and `.gitlab/merge_request_templates/` files
 follow the `forge` answer rather than `ci_shape`, so a `forge: gitlab` tenant
@@ -38,6 +38,7 @@ including the deploy-notes prompt about new secrets and cluster-side wiring.
 | ruff | `python-lint` (library template) | `python-lint` job | `task python-lint` |
 | shellcheck | n/a — no GitLab counterpart; a tenant with shell scripts adds the library's `shellcheck` template | `shellcheck` job, skipped when the repo has no `.sh` files | n/a |
 | Markdown link check | `docs-link-check` (library template) | `docs-link-check` job | `task doc-links` |
+| Comment convention (`check-comment-length.py`) | `comment-length` (library template), plus `task comment-length` locally | n/a — the vendored `ci.yml` carries no counterpart; `task comment-length` locally | `task comment-length` |
 | Secret scanning | GitLab Secret Detection (gitleaks under the hood), findings block | gitleaks directly, same `.gitleaks.toml`, findings block | pre-commit gitleaks hook |
 | Library pin gate | `lib-pin-check`, plus `task lib-pins` locally | n/a — no includes to pin | n/a |
 | Egress fence (`check-netpol-except-parity.py`) | `netpol-check`, plus `task netpol` locally | `manifest-gates` job, plus `task netpol` locally | `task netpol` |
@@ -47,14 +48,15 @@ including the deploy-notes prompt about new secrets and cluster-side wiring.
 | Release | `semantic-release` (library template) | `release.yml` (vendored) | by hand |
 | AI review | `pr-agent-review`, created only when both keys are set | n/a | n/a |
 
-Neither pipeline shape's kubeconform run fails on a skipped schema, so a
-catalog path that moves leaves the CRs unvalidated while the job still prints
-ok. The generated `task flux-lint` fails on a skip count over its
-`ALLOWED_SKIPS` budget and on an empty build in every shape, and
-`tests/validate_render.py` fails on any skip, so a green `task lint` is
-stricter than a green pipeline. `task flux-lint` resolves CR schemas from a
-pinned catalog commit; the library's job takes no such input at the pinned
-`lib_ref`, so the two can disagree about what has a schema.
+Both pipeline shapes fail a kubeconform run whose skip count exceeds their
+budget: the GitLab `flux-lint` include defaults `allowed_skips` to 0, and the
+vendored `ci.yml` reads repository variable `ALLOWED_SKIPS`. The generated
+`task flux-lint` fails on the same budget and on an empty build in every shape,
+and `tests/validate_render.py` fails on any skip, so a green `task lint` is
+still the strictest of the three. `task flux-lint` resolves CR schemas from the
+catalog commit `Taskfile.yml` pins; the library's job has a `crd_catalog_ref`
+input the rendered include does not pass, so the two can still disagree about
+what has a schema — docs/VERSIONING.md § Pending at the next library bump.
 
 Both pipelined shapes drive the **same** vendored `scripts/semantic-release.py`
 with `--platform {gitlab,github}`, so there is one implementation to audit
@@ -81,21 +83,20 @@ announces its skip when there is none.
   re-vendored.
 - **The manifest gates do not gate the tag.** On the GitLab shape
   `netpol-check`, `scrape-wiring-check` and `kustomization-check` sit in
-  `stage: lint`, ahead of `stage: release`. On GitHub they run as the sibling
-  `manifest-gates.yml` workflow while `release.yml` triggers on `ci` completing,
-  and `release.yml`'s own header says anything that must gate the release
-  belongs inside `ci.yml` as a job. A red manifest gate does not stop a tag, so
-  branch protection is what keeps one out of `main`. The library's next release
-  ships a `manifest-gates` job inside `ci.yml`; the entry in
-  docs/VERSIONING.md § Pending at the next library bump closes this gap and
-  deletes this bullet.
-- **`k8s_version`.** The vendored `ci.yml` carries the library's own literal
-  (`K8S_VERSION`), because a byte-identical copy cannot take a copier answer. A
-  cluster on a different Kubernetes minor edits that one line by hand, and
-  re-applies the edit in the same pull request as every re-vendor: the copy
-  overwrites it, and no gate in a tenant repo notices. The generated
-  `docs/VERSIONING.md` says so where the tenant reads it. The GitLab shape
-  takes the answer in both places it validates from.
+  `stage: lint`, ahead of `stage: release`. On GitHub this template's own
+  `manifest-gates.yml` runs as a sibling workflow while `release.yml` triggers
+  on `ci` completing, so a red gate there does not stop a tag and branch
+  protection is what keeps one out of `main`. The vendored `ci.yml` runs the
+  same three gates inside the workflow `release.yml` waits on, which closes the
+  gap; dropping this template's duplicate is docs/VERSIONING.md § Pending at
+  the next library bump.
+- **`k8s_version`.** The vendored `ci.yml` cannot take a copier answer, so it
+  reads repository variable `K8S_VERSION` and falls back to the library's own
+  literal. A cluster on a different Kubernetes minor sets that variable;
+  `flux-lint` warns on every run while it is unset. `MANIFEST_ROOT`,
+  `ALLOWED_SKIPS` and `CRD_CATALOG_REF` work the same way. The generated
+  `docs/VERSIONING.md` and `docs/ONBOARDING.md` say so where the tenant reads
+  them. The GitLab shape takes the answer in both places it validates from.
 - **`registry_host`.** The vendored build workflow publishes to
   `ghcr.io/<owner>/<repo>` from its own literals, so a GitHub tenant answering
   another registry gets an image reference nothing pushed to. Answer `ghcr.io`,
@@ -139,12 +140,12 @@ no AI review by design.
 `manifest-gates.yml` is this template's own. Their design lives here rather than
 in a banner each tenant carries.
 
-**`manifest-gates`.** The library ships `check-netpol-except-parity.py` and no
-GitHub workflow that runs it; `check-scrape-wiring.py` and
-`check-kustomization.py` are this template's own. This template therefore ships
-the job. It holds `contents: read`, runs on pull requests, pushes to main and
-`workflow_dispatch`, and drives the same three scripts the GitLab shape runs as
-`netpol-check`, `scrape-wiring-check` and `kustomization-check`.
+**`manifest-gates`.** This template's own workflow holds `contents: read`,
+runs on pull requests, pushes to main and `workflow_dispatch`, and drives the
+same three scripts the GitLab shape runs as `netpol-check`,
+`scrape-wiring-check` and `kustomization-check`. The vendored `ci.yml` carries
+a `manifest-gates` job of its own, so on this shape the three gates run twice;
+docs/VERSIONING.md § Pending at the next library bump owns that.
 
 **The `kustomization.yaml` resource list.** An emptied list renders nothing,
 kustomize and kubeconform both exit 0 on it, and the cluster-side Kustomization

@@ -71,7 +71,7 @@ is an example, not a value you can accept by pressing enter.
 |---|---|---|
 | `forge` | derived from `ci_shape` | Where the repo lives: `gitlab`, `github` or `other`. Decides the issue and change-request templates and the word the docs use for a reviewed change — never the pipeline. A repo with no pipeline still lives on a forge. |
 | `ci_shape` | `gitlab_selfhosted` | Which pipeline ships — see [CI-SHAPES.md](CI-SHAPES.md). Flux deploys the repo in all three. |
-| `change_request` | derived from `forge` | Asked only when `forge` is `other`. The forge's word for a reviewed change — "pull request" when `forge` is `github`, "merge request" otherwise — substituted into every generated doc, agent file and Cursor rule, so the instruction names an object the forge has. |
+| `change_request` | `pull request` on `github`, `merge request` on `gitlab`, `change request` on `other` | The forge's word for a reviewed change, substituted into every generated doc, agent file and Cursor rule, so the instruction names an object the forge has. Asked only when `forge` is `other`, where `change request` is the prefill. |
 | `enable_image_build` | `true` | The placeholder `Dockerfile` and the build job. Off for a service that runs an upstream image. |
 | `git_host` | derived from `forge`: `github.com` on GitHub, `git.{{ external_domain }}` otherwise | The forge this repo lives on: the library include host, the AI-review URL, the repo URL in the operator's wiring. |
 | `git_namespace` | — | The group/user path that owns the repo. Also the middle segment of the image path. |
@@ -107,7 +107,7 @@ component is wired and a disabled one leaves nothing behind. There is no
 
 | Answer | Default | What it drives |
 |---|---|---|
-| `lib_ref` | `v0.17.1` | The tag every `include:` pins. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
+| `lib_ref` | `v0.18.0` | The tag every `include:` pins. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
 | `lib_project` | `eric/weisssrv-lib` | The library's project path. `include: project:` resolves instance-locally, so the library must live on the same GitLab as the repo. |
 
 ---
@@ -202,34 +202,28 @@ Nothing stops you — it is your repository. Three things to know:
   byte-identical library copies. A generated repo carries no gate that notices an
   edit to one. A re-vendor overwrites it, and `copier update` quietly carries it
   forward as a fork nothing records. Change them upstream.
-  `scripts/check-kustomization.py`, `scripts/check-scrape-wiring.py` and
-  `.github/workflows/manifest-gates.yml` are not copies: change those here.
+  `.github/workflows/manifest-gates.yml` is not a copy: change that one here.
 
 ## The vendored library helpers
 
-`scripts/check-doc-links.py`, `scripts/check-lib-pins.py`,
-`scripts/check-netpol-except-parity.py` and `scripts/semantic-release.py` are
-**byte-identical copies** of
-[`eric/weisssrv-lib`](https://git.ericsweiss.com/eric/weisssrv-lib)'s helper
-tools, so the copy is what executes. Most are run by the library's job
-templates from those paths; the egress fence is run by the generated repo's own
-`netpol-check` job and by `task netpol`. Two of them need PyYAML — the pin gate
-and the egress fence — and the other two are stdlib-only. All four live here
-under `template/scripts/`, beside this template's own two gates; the doc-link
-checker and the egress fence are not shape-gated, so every generated repo carries
-them —
+Every helper under `template/scripts/` is a **byte-identical copy** of a
+[`eric/weisssrv-lib`](https://git.ericsweiss.com/eric/weisssrv-lib) file, so the
+copy is what executes. Some are run by the library's job templates from those
+paths; the three manifest gates are run by the generated repo's own jobs and by
+`task lint`. `check-netpol-except-parity.py` imports `gate_common.py` and
+`check-lib-pins.py` imports `ci_yaml.py`, each from its own directory, so those
+pairs ship together.
 
-| `ci_shape` | Which of the four ship |
+Five are unconditional, so every generated repo carries them on every shape:
+`check-comment-length.py`, `check-doc-links.py`,
+`check-netpol-except-parity.py`, `check-scrape-wiring.py` and
+`check-kustomization.py`. The rest are shape-gated —
+
+| `ci_shape` | What else ships |
 |---|---|
-| `gitlab_selfhosted` | all four |
-| `github` | `check-doc-links.py`, `check-netpol-except-parity.py`, `semantic-release.py` (the pin gate has no includes to gate) |
-| `none` | `check-doc-links.py` and `check-netpol-except-parity.py`, run by `task lint` with no pipeline at all |
-
-`template/scripts/check-kustomization.py` and
-`template/scripts/check-scrape-wiring.py` are this template's own gates, not
-library copies. They are unconditional, so every generated repo gets both on
-every shape, and `task lint` runs both. They are deliberately absent from
-`scripts/vendored-manifest.yml`: fix them here, not upstream.
+| `gitlab_selfhosted` | `check-lib-pins.py` with `ci_yaml.py`, and `semantic-release.py` |
+| `github` | `semantic-release.py` (the pin gate has no includes to gate) |
+| `none` | nothing further; `task lint` and the pre-commit hooks are the whole gate |
 
 This repository owns the copy relationship in `scripts/vendored-manifest.yml`
 and the library's `check-vendored-copies.py` gates it — fix a bug upstream and
@@ -243,9 +237,9 @@ they drift separately —
   `.gitleaks.toml`, `lint/yamllint-relaxed.yml`, `.editorconfig`,
   `.pre-commit-config.yaml` and `.gitlab/secret-detection-ruleset.toml`;
 - under `template/`, what a generated repo gets: `template/ruff.toml`,
-  `template/.gitleaks.toml`, `template/.yamllint`, `template/.editorconfig`,
-  `template/.pre-commit-config.yaml` and the rendered
-  `.gitlab/secret-detection-ruleset.toml`.
+  `template/.gitleaks.toml`, `template/lint/yamllint-relaxed.yml`,
+  `template/.editorconfig`, `template/.pre-commit-config.yaml.jinja` and the
+  rendered `.gitlab/secret-detection-ruleset.toml`.
 
 The registry records each as a fork and pins the library-side blob it was last
 reconciled against, so an upstream change is surfaced rather than silently

@@ -120,9 +120,9 @@ def _write(tmp_path: Path, documents: list[dict], name: str = "flux") -> Path:
     return directory
 
 
-def _run(directory: Path) -> subprocess.CompletedProcess:
+def _run(directory: Path, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(GATE), str(directory)], capture_output=True, text=True
+        [sys.executable, str(GATE), str(directory), *extra], capture_output=True, text=True
     )
 
 
@@ -581,17 +581,31 @@ def test_a_scrape_scoped_beyond_this_namespace_is_an_error(tmp_path, scope):
 
 
 @pytest.mark.parametrize(
-    "scope",
-    [{"any": False}, {"matchNames": ["recipe-box"]}],
+    "scope,extra",
+    [
+        ({"any": False}, ()),
+        ({"matchNames": ["recipe-box"]}, ("--namespace", "recipe-box")),
+    ],
     ids=["any-false", "one-name"],
 )
-def test_an_own_namespace_monitor_passes(tmp_path, scope):
+def test_an_own_namespace_monitor_passes(tmp_path, scope, extra):
     """NamespaceSelector has only `any` and `matchNames`, so these are the
-    spellings a tenant can write for its own namespace."""
+    spellings a tenant can write for its own namespace. A matchNames entry is
+    credited only against the namespace the caller names."""
     monitor = _service_monitor()
     monitor["spec"]["namespaceSelector"] = scope
-    result = _run(_write(tmp_path, _base(monitor, _allow())))
+    result = _run(_write(tmp_path, _base(monitor, _allow())), *extra)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_a_matchnames_entry_unverified_by_the_caller_is_an_error(tmp_path):
+    """A caller that names no namespace cannot have the entry checked, so the
+    gate refuses rather than crediting whatever the monitor claims."""
+    monitor = _service_monitor()
+    monitor["spec"]["namespaceSelector"] = {"matchNames": ["recipe-box"]}
+    result = _run(_write(tmp_path, _base(monitor, _allow())))
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "--namespace" in result.stderr
 
 
 def test_an_empty_policy_types_list_still_credits_the_scrape(tmp_path):

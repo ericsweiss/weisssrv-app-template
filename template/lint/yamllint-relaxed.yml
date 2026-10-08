@@ -1,7 +1,7 @@
 ---
-# Shared by pre-commit and the CI yaml-lint job so both agree. `relaxed` keeps
-# line-length at warning level and disables the comment rules; this file
-# disables line-length outright and re-enables document-start as a warning.
+# Shared by pre-commit, the CI yaml-lint job and `task lint` so all three agree.
+# `relaxed` keeps line-length at warning level and disables the comment rules;
+# this file disables line-length outright and re-enables document-start as a warning.
 
 # CRITICAL: never vendor this as a repo-root `.yamllint`. ansible-lint discovers
 # one there and merges it over its own yaml[*] rules.

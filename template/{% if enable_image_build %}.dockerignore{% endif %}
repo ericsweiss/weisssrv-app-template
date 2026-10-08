@@ -20,7 +20,7 @@ kubernetes/
 .gitlab-ci.yml
 .github/
 Taskfile.yml
-.yamllint
+lint/
 .pre-commit-config.yaml
 .gitleaks.toml
 .editorconfig
@@ -36,8 +36,9 @@ docs/
 LICENSE
 CODEOWNERS
 
-# Tooling scripts.
+# Tooling scripts and the gate policy examples beside them.
 scripts/
+examples/
 
 # Common local build artifacts and tool caches.
 __pycache__/

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Assert kustomization.yaml lists every manifest, and lists at least one.
 
-An unlisted manifest is inert, an emptied list prunes every applied object.
-Exits 0 clean, 1 on a violation, 2 on an operator error or no kustomization.yaml.
+An unlisted manifest is inert; an emptied list prunes every object this repo
+applied. Exits 0 clean, 1 on a violation, 2 on an operator error. docs/SCRIPTS.md.
 """
 
 from __future__ import annotations
@@ -72,8 +72,10 @@ def referenced_paths(doc: dict) -> set[str]:
         for generator in doc.get(key) or []:
             if not isinstance(generator, dict):
                 continue
-            for field in ("files", "envs"):
-                for entry in generator.get(field) or []:
+            # `env` is kustomize's deprecated singular spelling of `envs`.
+            for field in ("files", "envs", "env"):
+                value = generator.get(field)
+                for entry in [value] if isinstance(value, str) else value or []:
                     if isinstance(entry, str):
                         referenced.add(normalize(entry.split("=", 1)[-1]))
     for chart in doc.get("helmCharts") or []:
@@ -191,7 +193,7 @@ def check(
     return problems, len(listed)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "directory",
@@ -199,7 +201,7 @@ def main() -> int:
         default="kubernetes/flux",
         help="manifest directory to check (default: %(default)s)",
     )
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
 
     base = pathlib.Path(arguments.directory)
     if not base.is_dir():

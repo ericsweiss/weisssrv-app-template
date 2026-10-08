@@ -1,7 +1,7 @@
 ---
 # Three manifest gates: the egress fence, the scrape wiring and the
-# kustomization resource list. Template-owned, since no library workflow runs
-# them. Why each gate exists: docs/CI-SHAPES.md in the app template.
+# kustomization resource list. Template-owned, so the scrape gate can take the
+# namespace answer. Why each gate exists: docs/CI-SHAPES.md in the app template.
 name: manifest-gates
 
 # Quoted: unquoted `on` is a YAML 1.1 boolean, which yamllint's truthy rule
@@ -16,7 +16,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: manifest-gates-${{ github.ref }}
+  # GitHub's own expression, held literal through the render.
+  group: manifest-gates-{% raw %}${{ github.ref }}{% endraw %}
   cancel-in-progress: true
 
 env:
@@ -41,6 +42,8 @@ jobs:
       - name: Egress fence parity
         run: python3 scripts/check-netpol-except-parity.py kubernetes/flux
       - name: Scrape wiring
-        run: python3 scripts/check-scrape-wiring.py kubernetes/flux
+        run: >-
+          python3 scripts/check-scrape-wiring.py kubernetes/flux
+          --namespace {{ app_namespace }}
       - name: Kustomization completeness
         run: python3 scripts/check-kustomization.py kubernetes/flux

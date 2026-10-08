@@ -48,9 +48,9 @@ _message_after_copy: |
     3. Hand your operator docs/ONBOARDING.md — the wiring file in it is
        rendered with this repo's slug, namespace and secret backend.
     {%- if ci_shape == 'github' %}
-    4. Set env.K8S_VERSION in .github/workflows/ci.yml to {{ k8s_version }}. The
-       vendored workflow carries the library's own literal and no gate here
-       notices; a re-vendor overwrites the edit.
+    4. Set repository variable K8S_VERSION to {{ k8s_version }} (Settings >
+       Secrets and variables > Actions). The vendored workflow cannot take an
+       answer and warns on every run until it is set.
     {%- endif %}
 
     Then: `task lint`, then branch -> {{ change_request }}. Flux deploys on merge.
@@ -581,7 +581,7 @@ lib_ref:
     RELEASE TAG (vX.Y.Z): the library's include contract is explicit that a
     branch is never a valid pin, and a branch deleted after merge takes every
     include with it.
-  default: "v0.17.1"
+  default: "v0.18.0"
   validator: >-
     {% if not (lib_ref | regex_search('^v\\d+\\.\\d+\\.\\d+$')) %}
     lib_ref must be a release TAG of the form vX.Y.Z (e.g. v1.2.3). The

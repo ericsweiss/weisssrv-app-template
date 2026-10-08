@@ -84,3 +84,19 @@ def test_a_directory_with_no_policies_is_an_error(tmp_path):
     result = _run(directory)
     assert result.returncode == 2, result.stdout + result.stderr
     assert "is not a gate" in result.stderr
+
+
+def test_the_gate_without_its_companion_is_an_error(tmp_path):
+    """gate_common.py is vendored beside the gate. Alone, the gate must name the
+    missing file and exit 2, not run with a silently reduced rule set."""
+    alone = tmp_path / "scripts"
+    alone.mkdir()
+    copy = alone / GATE.name
+    copy.write_bytes(GATE.read_bytes())
+    result = subprocess.run(
+        [sys.executable, str(copy), str(_write(tmp_path, _parity.RESERVED_FULL))],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "gate_common.py" in result.stderr

@@ -36,7 +36,7 @@ variables:
   # Single source for the library pin. `include:` cannot read it, so each entry
   # below repeats the tag as a literal and scripts/check-lib-pins.py fails the
   # pipeline on drift or a branch pin. Bump here, then run that with --fix.
-  WEISSSRV_LIB_REF: "v0.17.1"
+  WEISSSRV_LIB_REF: "v0.18.0"
   # Library checkout the python-tests job clones into, read by
   # tests/test_validate_render.py's include-contract gate, which fails rather
   # than skips once $CI is set.
@@ -44,18 +44,14 @@ variables:
   COPIER_VERSION: "9.17.0"
   PYYAML_VERSION: "6.0.2"
   YAMLLINT_VERSION: "1.38.0"
-  RUFF_VERSION: "0.16.0"
-  KUBECONFORM_VERSION: "0.6.7"
-  KUBECONFORM_SHA256: "95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73"
-  KUSTOMIZE_VERSION: "5.4.3"
-  KUSTOMIZE_SHA256: "3669470b454d865c8184d6bce78df05e977c9aea31c30df3c669317d43bcc7a7"
+  RUFF_VERSION: "0.16.7"
 
 include:
   # Only genuine YAML: .jinja files under template/ are Jinja sources and the
   # conditional paths are not valid names until rendered. render-validate
   # yamllints the rendered tree, which is where template/ gets covered.
   - project: eric/weisssrv-lib
-    ref: v0.17.1
+    ref: v0.18.0
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
@@ -73,7 +69,7 @@ include:
         - "scripts/vendored-manifest.yml"
 
   - project: eric/weisssrv-lib
-    ref: v0.17.1
+    ref: v0.18.0
     file: /ci/lint/python-lint.yml
     inputs:
       tags: []
@@ -89,10 +85,19 @@ include:
         - "ruff.toml"
         - ".gitlab-ci.yml"
 
+  # The comment convention, over the whole tree. No `--config`, so the gate is
+  # stdlib-only and the PyYAML install is skipped.
+  - project: eric/weisssrv-lib
+    ref: v0.18.0
+    file: /ci/lint/comment-length.yml
+    inputs:
+      tags: []
+      pyyaml_version: ""
+
   # copier.yml schema checks + the render invariants. Everything in the
   # repository feeds a render, hence the catch-all `changes`.
   - project: eric/weisssrv-lib
-    ref: v0.17.1
+    ref: v0.18.0
     file: /ci/test/python-tests.yml
     inputs:
       tags: []
@@ -102,7 +107,7 @@ include:
       pip_packages: "copier==9.17.0 jinja2"
       # The library checkout the include-contract gate compares against; the
       # python:3.13 image already ships git.
-      setup_command: 'mkdir -p "$(dirname "$WEISSSRV_LIB_PATH")" && git clone --depth 1 --branch "$WEISSSRV_LIB_REF" "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${LIB_PROJECT}.git" "$WEISSSRV_LIB_PATH"'
+      setup_command: 'python3 scripts/ci-fetch-tools.py kustomize kubeconform && mkdir -p "$(dirname "$WEISSSRV_LIB_PATH")" && git clone --depth 1 --branch "$WEISSSRV_LIB_REF" "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${LIB_PROJECT}.git" "$WEISSSRV_LIB_PATH"'
       changes:
         - "**/*"
 
@@ -110,7 +115,7 @@ include:
   # and its own docs carry the same relative cross-links. It scans every tracked
   # *.md, so `template/**/*.md` is listed too.
   - project: eric/weisssrv-lib
-    ref: v0.17.1
+    ref: v0.18.0
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
@@ -123,7 +128,7 @@ include:
         - "scripts/check-doc-links.py"
 
   - project: eric/weisssrv-lib
-    ref: v0.17.1
+    ref: v0.18.0
     file: /ci/security/secret-detection.yml
     inputs:
       tags: []
@@ -133,7 +138,7 @@ include:
       cpu_selector: "esweiss.com/cpu=modern"
 
   - project: eric/weisssrv-lib
-    ref: v0.17.1
+    ref: v0.18.0
     file: /ci/review/pr-agent.yml
     inputs:
       tags: []
@@ -154,7 +159,7 @@ include:
   # tag a generated repo's `copier update` resolves to. Untagged, copier falls
   # back to HEAD. See docs/VERSIONING.md.
   - project: eric/weisssrv-lib
-    ref: v0.17.1
+    ref: v0.18.0
     file: /ci/release/semantic-release.yml
     inputs:
       tags: []
@@ -195,33 +200,15 @@ render-validate:
     LIB_CHECKOUT: "$CI_PROJECT_DIR/.tmp/lib"
   before_script:
     - export PATH="$CI_PROJECT_DIR/.bin:$(python -m site --user-base)/bin:$PATH"
-    - mkdir -p "$CI_PROJECT_DIR/.bin"
     - |
       pip install --user --quiet \
         "copier==${COPIER_VERSION}" \
         "pyyaml==${PYYAML_VERSION}" \
         "yamllint==${YAMLLINT_VERSION}" \
         "ruff==${RUFF_VERSION}"
-    - |
-      set -eo pipefail
-      # Non-root tool install: stdlib download, sha256 verify, extract into a
-      # workspace bin that before_script already put on PATH. The download dir
-      # is per-job: fixed /tmp paths collide when jobs share /tmp.
-      dl=$(mktemp -d)
-      trap 'rm -rf "$dl"' EXIT
-      fetch_verified() {  # <file> <url> <sha256>
-        python -c "import urllib.request,sys; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" "$2" "$dl/$1"
-        echo "$3  $dl/$1" | sha256sum -c -
-      }
-      fetch_verified kubeconform.tar.gz \
-        "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
-        "$KUBECONFORM_SHA256"
-      tar xzf "$dl/kubeconform.tar.gz" -C "$CI_PROJECT_DIR/.bin" kubeconform
-      fetch_verified kustomize.tar.gz \
-        "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
-        "$KUSTOMIZE_SHA256"
-      tar xzf "$dl/kustomize.tar.gz" -C "$CI_PROJECT_DIR/.bin" kustomize
-      kubeconform -v && kustomize version
+    # Non-root, sha256-verified static binaries, into the workspace bin the
+    # export above already put on PATH. The pins are the vendored script's.
+    - python3 scripts/ci-fetch-tools.py kubeconform kustomize
     - |
       set -eo pipefail
       # Clone the library at copier.yml's lib_ref default; the fixtures are held

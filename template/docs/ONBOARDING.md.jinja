@@ -104,10 +104,10 @@ is `{{ secrets_backend }}`.
    whole gate.
 {%- elif ci_shape == 'github' %}
    CI must be green. The workflows are byte-identical library copies, so they
-   cannot take an answer: confirm `env.K8S_VERSION` in
-   `.github/workflows/ci.yml` is `{{ k8s_version }}` and set it if it differs.
-   A re-vendor overwrites that edit, and a mismatch validates the manifests
-   against a Kubernetes minor this cluster does not run.
+   cannot take an answer: set repository variable `K8S_VERSION` to
+   `{{ k8s_version }}` under Settings > Secrets and variables > Actions. Until
+   it is set, `flux-lint` warns and validates the manifests against the
+   library's own fallback minor.
 {%- else %}
    CI must be green.
 {%- endif %}

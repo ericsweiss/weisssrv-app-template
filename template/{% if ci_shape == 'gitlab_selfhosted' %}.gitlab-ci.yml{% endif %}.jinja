@@ -48,18 +48,17 @@ variables:
   WEISSSRV_LIB_REF: "{{ lib_ref }}"
 
 include:
-  # -- yaml-lint: lint the whole tree against the repo-local .yamllint --------
+  # -- yaml-lint: lint the whole tree against lint/yamllint-relaxed.yml ------
   - project: {{ lib_project }}
     ref: {{ lib_ref }}
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
-      config: "-c .yamllint"
+      config: "-c lint/yamllint-relaxed.yml"
       targets: "."
       changes:
         - "**/*.yaml"
         - "**/*.yml"
-        - ".yamllint"
 
   # -- flux-lint: kustomize build + kubeconform (SIMPLE mode) ----------------
   # substitute: false — a tenant pins literal tags, so nothing needs envsubst.
@@ -93,6 +92,19 @@ include:
         - "scripts/**/*.py"
         - "ruff.toml"
         - ".gitlab-ci.yml"
+
+  # -- comment-length: the comment convention, over the whole tree -----------
+  # No `config:`, so the gate is stdlib-only and the PyYAML install is skipped.
+  - project: {{ lib_project }}
+    ref: {{ lib_ref }}
+    file: /ci/lint/comment-length.yml
+    inputs:
+      tags: []
+      pyyaml_version: ""
+      # Every file: the convention applies to every file, and a narrowed list
+      # lets an over-long comment land in a path it does not name.
+      changes:
+        - "**/*"
 
   # -- docs-link-check: relative Markdown cross-links resolve -----------------
   # python:3.13 overrides the library's python:3.11; drop the input to take the
@@ -213,7 +225,9 @@ netpol-check:
 scrape-wiring-check:
   extends: .manifest-gate
   script:
-    - python3 scripts/check-scrape-wiring.py kubernetes/flux
+    - >-
+      python3 scripts/check-scrape-wiring.py kubernetes/flux
+      --namespace {{ app_namespace }}
 
 # CRITICAL: the included `flux-lint` JOB passes on an empty render (kustomize
 # and kubeconform both exit 0 on one) and the cluster-side Kustomization prunes,

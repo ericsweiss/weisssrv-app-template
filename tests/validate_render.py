@@ -135,7 +135,9 @@ def validate(root: Path, answers: dict) -> list[str]:
     _make_git_tree(root)
     catalog = _catalog(root)
     runner = Runner(root)
-    runner.gate("yamllint", "yamllint", "--strict", "-c", ".yamllint", ".")
+    runner.gate(
+        "yamllint", "yamllint", "--strict", "-c", "lint/yamllint-relaxed.yml", "."
+    )
 
     built = runner.gate("kustomize build", "kustomize", "build", "kubernetes/flux")
     if "kustomize build" not in runner.failures:
@@ -164,7 +166,12 @@ def validate(root: Path, answers: dict) -> list[str]:
         "netpol except", sys.executable, "scripts/check-netpol-except-parity.py", "kubernetes/flux"
     )
     runner.gate(
-        "scrape wiring", sys.executable, "scripts/check-scrape-wiring.py", "kubernetes/flux"
+        "scrape wiring",
+        sys.executable,
+        "scripts/check-scrape-wiring.py",
+        "kubernetes/flux",
+        "--namespace",
+        str(answers["app_namespace"]),
     )
     runner.gate(
         "kustomization", sys.executable, "scripts/check-kustomization.py", "kubernetes/flux"

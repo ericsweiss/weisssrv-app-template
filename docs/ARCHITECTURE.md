@@ -137,13 +137,9 @@ is not one.
 The vendored copies live in this repository, not in a generated one: the helpers
 at the root are what this repo lints and, where it has the tree for them, runs
 on itself; the same helpers under `template/scripts/` and the GitHub workflows
-are what it hands to a tenant. The library copies among them
-(`check-doc-links.py`, `check-lib-pins.py`, `check-netpol-except-parity.py`,
-`semantic-release.py` and the `ci.yml`, `release.yml` and `build-image.yml`
-workflows) are byte-identical to weisssrv-lib;
-`template/scripts/check-kustomization.py`,
-`template/scripts/check-scrape-wiring.py` and the `manifest-gates.yml` workflow
-are this template's own and are deliberately unregistered. That relationship is
+are what it hands to a tenant. Every gate script is a byte-identical library copy, as are the `ci.yml`,
+`release.yml` and `build-image.yml` workflows. The `manifest-gates.yml` workflow
+is this template's own and is deliberately unregistered. That relationship is
 recorded HERE, in `scripts/vendored-manifest.yml`, and checked by the library's
 `check-vendored-copies.py`, which `tests/validate_render.py --lib-path` runs
 against a checkout at `copier.yml`'s `lib_ref` default.

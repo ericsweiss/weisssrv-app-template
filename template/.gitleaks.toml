@@ -11,10 +11,10 @@ useDefault = true
 [[allowlists]]
 description = "known false positives"
 regexes = [
-  # 1Password reference URIs — pointers to vault items, not secrets.
-  '''op://[A-Za-z0-9_ /-]+''',
-  # Documentation placeholders like [your-api-key].
-  '''\[your-[a-z0-9-]+\]''',
-  # Test/fixture tokens — anchored so a real secret can't hide behind the prefix.
+  # 1Password refs, doc placeholders like [your-api-key], and test/fixture
+  # tokens. All anchored at the start of the token, so a real secret merely
+  # prefixed with one of these shapes can't be silenced.
+  '''^op://[A-Za-z0-9_ /-]+''',
+  '''^\[your-[a-z0-9-]+\]''',
   '''^(test|fake|dummy|example)[-_]?(password|token|key|secret)[A-Za-z0-9_-]*''',
 ]

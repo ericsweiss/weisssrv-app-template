@@ -1307,6 +1307,38 @@ def test_no_pipeline_gate_wording_stays_off_the_github_shape(repo):
         assert NO_PIPELINE_GATE_CLAIMS[0] in architecture
 
 
+def test_raising_the_skip_budget_names_the_pipelines_own_copy(repo):
+    """`task flux-lint` and the pipeline hold separate skip budgets, so a doc that
+    names only `Taskfile.yml` leaves the tenant with a red job and nowhere to look.
+    """
+    architecture = (repo.path / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    shape = repo.answers["ci_shape"]
+    if shape == "gitlab_selfhosted":
+        assert "passing `allowed_skips` to the" in architecture, (
+            f"{repo.label} tells the tenant to raise ALLOWED_SKIPS without naming the "
+            "include input the pipeline reads"
+        )
+        pipeline = (repo.path / ".gitlab-ci.yml").read_text(encoding="utf-8")
+        assert "allowed_skips" not in pipeline, (
+            "the flux-lint include now passes allowed_skips, so the doc sentence asking "
+            "the tenant to add it is stale"
+        )
+    elif shape == "github":
+        assert "repository variable `ALLOWED_SKIPS`" in architecture, (
+            f"{repo.label} does not send the tenant to the repository variable the "
+            "vendored flux-lint job reads"
+        )
+        workflow = (repo.path / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        assert "vars.ALLOWED_SKIPS" in workflow, (
+            "the vendored ci.yml no longer reads vars.ALLOWED_SKIPS; the doc points at "
+            "a variable nothing consumes"
+        )
+    else:
+        assert "fails at zero" not in architecture, (
+            f"{repo.label} has no pipeline, so a second skip budget is not its problem"
+        )
+
+
 def test_the_pull_registry_answer_reaches_nothing_without_the_credential(repo):
     """`registry_pull_host` renders only inside the pull-credential
     ExternalSecret, which is why copier stops asking for it when that component
@@ -1713,7 +1745,9 @@ def test_generated_repo_passes_yamllint(repo):
         "pip install yamllint in the test job.",
         ci_optional=True,
     )
-    result = _run(repo.path, "yamllint", "--strict", "-c", ".yamllint", ".")
+    result = _run(
+        repo.path, "yamllint", "--strict", "-c", "lint/yamllint-relaxed.yml", "."
+    )
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -2275,7 +2309,8 @@ def _local_hook_ids(repo: Repo) -> list[str]:
 
 
 @pytest.mark.parametrize(
-    "hook_id", ["netpol-except-parity", "scrape-wiring", "kustomization", "doc-links"]
+    "hook_id",
+    ["netpol-except-parity", "scrape-wiring", "kustomization", "doc-links", "comment-length"],
 )
 def test_every_local_gate_has_a_pre_commit_hook(repo, hook_id):
     """On `github` and `none` there is no CI job for these, so the hook is the
@@ -2363,11 +2398,12 @@ def test_the_rendered_manifests_pass_the_shipped_egress_gate(repo):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def _flux_lint_script(repo: Repo) -> str:
-    """The rendered flux-lint task as a runnable shell script: go-task's own
-    `{{.VAR}}` references are substituted from the Taskfile's `vars:`, to a
-    fixed point, because one var's value references another's."""
+def _flux_lint_script(repo: Repo, **overrides: str) -> str:
+    """The rendered flux-lint task as a runnable shell script: go-task's `{{.VAR}}`
+    references are substituted from the Taskfile's `vars:` to a fixed point, because
+    one var's value references another's. `overrides` stands in for a tenant's edit."""
     taskfile = yaml.safe_load((repo.path / "Taskfile.yml").read_text())
+    taskfile["vars"].update(overrides)
     script = "\n".join(taskfile["tasks"]["flux-lint"]["cmds"])
     for _ in range(10):
         before = script
@@ -2453,6 +2489,18 @@ def test_the_manifest_gate_reports_an_invalid_resource(repo, tmp_path):
     )
     assert result.returncode != 0, "flux-lint reported an invalid resource as clean"
     assert "Invalid: 1" in result.stderr, result.stdout + result.stderr
+
+
+def test_the_manifest_gate_rejects_a_non_integer_skip_budget(repo, tmp_path):
+    """A budget the comparison cannot read errors inside an `if` condition,
+    which sh reports as false, so without the guard the gate passes."""
+    script = _flux_lint_script(repo, ALLOWED_SKIPS="two")
+    env = _stubbed_path(tmp_path / "bad-budget" / "bin", "kind: Service\n", SKIPPED_SUMMARY)
+    result = subprocess.run(
+        ["sh", "-c", script], cwd=repo.path, capture_output=True, text=True, env=env
+    )
+    assert result.returncode != 0, "flux-lint accepted a budget it cannot compare against"
+    assert "non-negative integer" in result.stderr, result.stdout + result.stderr
 
 
 def test_the_manifest_gate_rejects_a_summary_without_a_skip_count(repo, tmp_path):

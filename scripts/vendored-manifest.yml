@@ -6,25 +6,55 @@
 vendored:
   # The root copies are what this repo lints and, where it has the tree for
   # them, runs on ITSELF …
+  - scripts/check-comment-length.py
   - scripts/check-doc-links.py
   - scripts/check-lib-pins.py
+  # The jobs that run it do so before any library checkout exists, so the tool
+  # fetcher has to be in this repo rather than read from the library.
+  - scripts/ci-fetch-tools.py
+  # check-lib-pins.py imports ci_yaml from its own directory: the pair is
+  # vendored together, or the gate exits 2 on import.
+  - scripts/ci_yaml.py
   - scripts/semantic-release.py
   # … and the template/ copies are the same files rendered into a tenant.
   # Both are registered: a re-vendor that touched only the root pair would
   # otherwise ship a stale script to every repo generated afterwards.
+  - lib: scripts/check-comment-length.py
+    consumer: template/scripts/check-comment-length.py
   - lib: scripts/check-doc-links.py
     consumer: template/scripts/check-doc-links.py
+  - lib: scripts/check-kustomization.py
+    consumer: template/scripts/check-kustomization.py
   - lib: scripts/check-netpol-except-parity.py
     consumer: template/scripts/check-netpol-except-parity.py
-  # check-lib-pins.py needs scripts/ci_yaml.py beside both of its copies from
-  # library v0.18.0: docs/VERSIONING.md, Pending at the next library bump.
+  - lib: scripts/check-scrape-wiring.py
+    consumer: template/scripts/check-scrape-wiring.py
+  # check-netpol-except-parity.py imports gate_common from its own directory:
+  # without the companion every tenant's egress fence exits 2 on import.
+  - lib: scripts/gate_common.py
+    consumer: template/scripts/gate_common.py
   - lib: scripts/check-lib-pins.py
     consumer: "template/scripts/{% if ci_shape == 'gitlab_selfhosted' %}check-lib-pins.py{% endif %}"
+  # One line, quoted: a folded scalar reconstructs the literal filename only if
+  # the wrap lands on a space.
+  - lib: scripts/ci_yaml.py
+    consumer: "template/scripts/{% if ci_shape == 'gitlab_selfhosted' %}ci_yaml.py{% endif %}"
   - lib: scripts/semantic-release.py
     consumer: "template/scripts/{% if ci_shape != 'none' %}semantic-release.py{% endif %}"
+  # The egress fence's --config schema, filled in: the shipped fence is a
+  # built-in, and a tenant whose LAN sits outside it copies this and edits it.
+  - lib: examples/netpol-except.example.yaml
+    consumer: template/examples/netpol-except.example.yaml
+  # The copier invocation every suite and tests/validate_render.py renders through.
+  - tests/copier_render.py
   # The check-lib-pins suite is canonical in the library: a consumer that
   # vendors the script vendors its tests and adds only its own smoke test.
   - tests/test_check_lib_pins.py
+  # No directory walk reaches these two: the walks cover scripts/ trees only.
+  - lib: lint/gitattributes
+    consumer: .gitattributes
+  - lib: lint/gitattributes
+    consumer: template/.gitattributes
   - lib: ci/release/github-release-workflow.example.yml
     consumer: "template/{% if ci_shape == 'github' %}.github{% endif %}/workflows/release.yml"
   - lib: ci/github/ci.example.yml
@@ -38,71 +68,73 @@ forked:
   - lib: lint/ruff.toml
     consumer: ruff.toml
     reason: Header comments only; the rule selection is the library's.
-    reconciled_sha256: ccf4e857a9d7e20039ef8f68be7080210e6703d1400c23586ec6f5679e2fbfb2
+    comment_only: true
+    reconciled_sha256: 17ffa1185a44dbc93e14f20bca60af1610702b1b03681691b6f602bd21ce9098
   - lib: lint/gitleaks.toml
     consumer: .gitleaks.toml
     reason: Allowlist paths and fixture anchors are per-repo.
-    reconciled_sha256: bffbe70c94436f4442aaeecc1f1f5715315fc5908b1486b2198796b9e097ff0d
+    reconciled_sha256: a70051101f8045b94172594a0a89c5cf7e17aa6ad56c184843ffc5eac29891ec
   # The root ruleset, the one this template's OWN pipeline loads. A separate
   # file from the tenant copy below and it drifts separately, so both are
   # registered — the same split the scripts and lint profiles get.
   - lib: lint/secret-detection-ruleset.toml
     consumer: .gitlab/secret-detection-ruleset.toml
-    reason: >-
-      Header comments and the ruleset description string; the passthrough is
-      the library's.
-    reconciled_sha256: d6413e69a2d8a6f7d0c468d4370a406299894ad9e3fe274eb7f69eb30a7c936d
+    reason: The ruleset description string; the passthrough is the library's.
+    reconciled_sha256: 778c939138d015867a1d0e42846994bd03a127c1ded1616eee7136b7e2ecfc75
   # One line, quoted, however long: a folded scalar reconstructs the literal
   # filename only if the wrap lands on a space, so re-wrapping it silently
   # produces a different path.
   - lib: lint/secret-detection-ruleset.toml
     consumer: "template/{% if forge == 'gitlab' %}.gitlab{% endif %}/{% if ci_shape == 'gitlab_selfhosted' %}secret-detection-ruleset.toml{% endif %}"
-    reason: >-
-      Header comments and the ruleset description string; the passthrough is
-      the library's.
-    reconciled_sha256: d6413e69a2d8a6f7d0c468d4370a406299894ad9e3fe274eb7f69eb30a7c936d
+    reason: The ruleset description string; the passthrough is the library's.
+    reconciled_sha256: 778c939138d015867a1d0e42846994bd03a127c1ded1616eee7136b7e2ecfc75
   # The family spells the profile at this path, not the root `.yamllint` that
   # ansible-lint discovers and lets override its own yaml rule. Callers pass `-c`.
   - lib: lint/yamllint-relaxed.yml
     consumer: lint/yamllint-relaxed.yml
     reason: Header comments only; the rules are the library's.
-    reconciled_sha256: 7fcb8f02aadf68b97cd334a69a889c8cd87ac4796927c086bf77702a247ae2d5
+    comment_only: true
+    reconciled_sha256: 27bcd61c2e64c949a4e3da41633beecc8c8ee3933d4c6c0ab175c2f0828585d7
   - lib: lint/editorconfig
     consumer: .editorconfig
-    reason: Per-repo file-type sections on a shared base.
-    reconciled_sha256: 911171d9f26ba0bb47300c97a9e46b078d48eb852dfe9a050fbc3c8e41cc2944
+    reason: >-
+      Drops the library-facing "copy this into a consumer repo" header line;
+      the sections are the library's.
+    reconciled_sha256: 9873966d0ce8a80d7ed84ecce449107b2a20387a146692ffb9aec28dd505fe02
   - lib: lint/pre-commit-config.yaml
     consumer: .pre-commit-config.yaml
     reason: >-
       Template-repo hook set on a shared base: the template/ tree is excluded
       from the YAML hooks.
-    reconciled_sha256: 39e7c3a5fbc7d2185ad73c436cbba736cae1e2b2b88f7f50387f041cbd87323c
+    reconciled_sha256: f7e2dff0acee6c4787e1d89311fa72e5d089b13681ed9cd94e8b92bdcada519c
   - lib: lint/pre-commit-config.yaml
-    consumer: template/.pre-commit-config.yaml
+    consumer: template/.pre-commit-config.yaml.jinja
     reason: >-
-      The library's hook set plus four local hooks: the egress fence, the
-      scrape-wiring check, the kustomization check and the doc-link check, so a
-      tenant with no pipeline still runs them. The header also drops the
-      library's copy instruction.
-    reconciled_sha256: 39e7c3a5fbc7d2185ad73c436cbba736cae1e2b2b88f7f50387f041cbd87323c
+      The library's hook set plus five local hooks: the egress fence, the
+      scrape-wiring check, the kustomization check, the doc-link check and the
+      comment-length check, so a tenant with no pipeline still runs them. The
+      header also drops the library's copy instruction.
+    reconciled_sha256: f7e2dff0acee6c4787e1d89311fa72e5d089b13681ed9cd94e8b92bdcada519c
   # Tenant-side lint profiles, the same split as the scripts above: the root
   # copies lint this repo, these ship to a generated tenant. Both halves are
   # registered.
   - lib: lint/ruff.toml
     consumer: template/ruff.toml
     reason: Header comments only; the rule selection is the library's.
-    reconciled_sha256: ccf4e857a9d7e20039ef8f68be7080210e6703d1400c23586ec6f5679e2fbfb2
+    comment_only: true
+    reconciled_sha256: 17ffa1185a44dbc93e14f20bca60af1610702b1b03681691b6f602bd21ce9098
   - lib: lint/gitleaks.toml
     consumer: template/.gitleaks.toml
     reason: Allowlist paths and fixture anchors are per-tenant.
-    reconciled_sha256: bffbe70c94436f4442aaeecc1f1f5715315fc5908b1486b2198796b9e097ff0d
+    reconciled_sha256: a70051101f8045b94172594a0a89c5cf7e17aa6ad56c184843ffc5eac29891ec
   - lib: lint/editorconfig
     consumer: template/.editorconfig
-    reason: Tenant file-type sections on a shared base.
-    reconciled_sha256: 911171d9f26ba0bb47300c97a9e46b078d48eb852dfe9a050fbc3c8e41cc2944
-  # Still the root name, unlike the copy above: the vendored GitHub workflow
-  # lints with `-c .yamllint`, so this path moves when the library's does.
+    reason: >-
+      Drops the library-facing "copy this into a consumer repo" header line;
+      the sections are the library's.
+    reconciled_sha256: 9873966d0ce8a80d7ed84ecce449107b2a20387a146692ffb9aec28dd505fe02
   - lib: lint/yamllint-relaxed.yml
-    consumer: template/.yamllint
+    consumer: template/lint/yamllint-relaxed.yml
     reason: Header comments only; the rules are the library's.
-    reconciled_sha256: 7fcb8f02aadf68b97cd334a69a889c8cd87ac4796927c086bf77702a247ae2d5
+    comment_only: true
+    reconciled_sha256: 27bcd61c2e64c949a4e3da41633beecc8c8ee3933d4c6c0ab175c2f0828585d7

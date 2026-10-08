@@ -61,10 +61,8 @@ and moving those pins changes what gates this repo. The tag lives in **one** pla
 `scripts/check-lib-pins.py --fix` syncs those literals and the `lib-pin-check`
 job fails the pipeline on any that drift or pin a branch. A bump is one edit plus
 `--fix`, and re-vendoring the library copies under `scripts/` from the new tag in
-the same {{ change_request }}: `check-doc-links.py`, `check-lib-pins.py`,
-`check-netpol-except-parity.py` and `semantic-release.py`. No gate here notices an
-edit to a vendored file; a re-vendor overwrites it. `check-kustomization.py` and
-`check-scrape-wiring.py` are this repo's own, so edit those here.
+the same {{ change_request }}: every file under `scripts/`. No gate here
+notices an edit to a vendored file; a re-vendor overwrites it.
 {%- elif ci_shape == 'github' %}
 
 ## Vendored workflows
@@ -72,30 +70,24 @@ edit to a vendored file; a re-vendor overwrites it. `check-kustomization.py` and
 `.github/workflows/ci.yml`, `release.yml` and `build-image.yml` are vendored
 from the shared library rather than referenced, because GitHub has no equivalent
 of GitLab's `include: project:` for a private library. Tool versions and their
-sha256 pins are literals there. Re-vendor those three files and the library
-copies `scripts/check-doc-links.py`, `scripts/check-netpol-except-parity.py` and
-`scripts/semantic-release.py` from the library tag you move to, in one
-{{ change_request }}. They come from the shared **weisssrv-lib** project, and
-this repo records no library ref, so name the tag you vendored in the
-{{ change_request }}. `.github/workflows/manifest-gates.yml`,
-`scripts/check-kustomization.py` and `scripts/check-scrape-wiring.py` are this
-repo's own, not library copies.
+sha256 pins are literals there. Re-vendor those three files and every file
+under `scripts/` from the library tag you move to, in one {{ change_request }}.
+They come from the shared **weisssrv-lib** project, and this repo records no
+library ref, so name the tag you vendored in the {{ change_request }}.
+`.github/workflows/manifest-gates.yml` is this repo's own, not a library copy.
 
-One hand edit is expected: `env.K8S_VERSION` in `ci.yml` carries the library's
-own literal, which a byte-identical copy cannot take from an answer. Set it to
-this cluster's Kubernetes minor, `{{ k8s_version }}`, the value `Taskfile.yml`
-uses. Re-apply it in the same pull request as every re-vendor: the copy
-overwrites it, and no gate in this repo notices.
+No hand edit to a vendored workflow is needed. `ci.yml` reads the Kubernetes
+minor from repository variable `K8S_VERSION`, falling back to the library's own
+literal. Set that variable to `{{ k8s_version }}`, the value `Taskfile.yml`
+uses, and `flux-lint` stops warning that it is unset.
 {%- else %}
 
 ## The vendored files
 
-`scripts/check-doc-links.py` and `scripts/check-netpol-except-parity.py` are
-byte-identical copies of library files. This repo carries no gate that notices an
-edit to one, and a re-vendor overwrites it. Change them upstream, or re-vendor
-both from a single library tag and say so in the {{ change_request }}.
-`scripts/check-kustomization.py` and `scripts/check-scrape-wiring.py` are this
-repo's own: change them here.
+Every file under `scripts/` is a byte-identical copy of a library file. This
+repo carries no gate that notices an edit to one, and a re-vendor overwrites it.
+Change them upstream, or re-vendor them all from a single library tag and say so
+in the {{ change_request }}.
 {%- endif %}
 
 ## Updating from the template

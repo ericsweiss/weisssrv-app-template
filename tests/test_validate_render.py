@@ -520,7 +520,8 @@ def test_validate_runs_every_gate(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(validate_render, "_make_git_tree", lambda root: None)
     monkeypatch.setattr(validate_render, "_catalog", lambda root: "catalog")
     monkeypatch.setattr(validate_render, "_onboarding_wiring", lambda root: "---\n")
-    validate_render.validate(tmp_path, {"k8s_version": "1.36.0", "lib_project": "x/y"})
+    answers = {"k8s_version": "1.36.0", "lib_project": "x/y", "app_namespace": "ns"}
+    validate_render.validate(tmp_path, answers)
     # tmp_path carries no .gitlab-ci.yml, so "library pins" is out of scope.
     assert set(labels) == {
         "yamllint",
