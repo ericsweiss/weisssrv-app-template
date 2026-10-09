@@ -162,7 +162,7 @@ default and runs the real toolchain over the render against it.
 | `v0.2.0` | weisssrv-lib `v0.7.2` |
 | `v0.3.0` | weisssrv-lib `v0.8.0` |
 | `v0.4.0` | weisssrv-lib `v0.9.5` |
-| `main` (unreleased) | weisssrv-lib `v0.18.0` |
+| `main` (unreleased) | weisssrv-lib `v0.18.1` |
 
 Rules that keep the table meaningful:
 

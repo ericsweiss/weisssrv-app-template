@@ -54,5 +54,5 @@ enable_registry_pull_secret: false
 enable_sso: false
 
 # Never asked (the library is only included by the GitLab shape).
-lib_ref: v0.18.0
+lib_ref: v0.18.1
 lib_project: eric/weisssrv-lib

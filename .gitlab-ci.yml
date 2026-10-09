@@ -36,7 +36,7 @@ variables:
   # Single source for the library pin. `include:` cannot read it, so each entry
   # below repeats the tag as a literal and scripts/check-lib-pins.py fails the
   # pipeline on drift or a branch pin. Bump here, then run that with --fix.
-  WEISSSRV_LIB_REF: "v0.18.0"
+  WEISSSRV_LIB_REF: "v0.18.1"
   # Library checkout the python-tests job clones into, read by
   # tests/test_validate_render.py's include-contract gate, which fails rather
   # than skips once $CI is set.
@@ -51,7 +51,7 @@ include:
   # conditional paths are not valid names until rendered. validate-rendered-app
   # yamllints the rendered tree, which is where template/ gets covered.
   - project: eric/weisssrv-lib
-    ref: v0.18.0
+    ref: v0.18.1
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
@@ -69,7 +69,7 @@ include:
         - "scripts/vendored-manifest.yml"
 
   - project: eric/weisssrv-lib
-    ref: v0.18.0
+    ref: v0.18.1
     file: /ci/lint/python-lint.yml
     inputs:
       tags: []
@@ -88,7 +88,7 @@ include:
   # The comment convention, over the whole tree. No `--config`, so the gate is
   # stdlib-only and the PyYAML install is skipped.
   - project: eric/weisssrv-lib
-    ref: v0.18.0
+    ref: v0.18.1
     file: /ci/lint/comment-length.yml
     inputs:
       tags: []
@@ -97,7 +97,7 @@ include:
   # copier.yml schema checks + the render invariants. Everything in the
   # repository feeds a render, hence the catch-all `changes`.
   - project: eric/weisssrv-lib
-    ref: v0.18.0
+    ref: v0.18.1
     file: /ci/test/python-tests.yml
     inputs:
       tags: []
@@ -115,7 +115,7 @@ include:
   # and its own docs carry the same relative cross-links. It scans every tracked
   # *.md, so `template/**/*.md` is listed too.
   - project: eric/weisssrv-lib
-    ref: v0.18.0
+    ref: v0.18.1
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
@@ -129,7 +129,7 @@ include:
         - "scripts/check-doc-links.py"
 
   - project: eric/weisssrv-lib
-    ref: v0.18.0
+    ref: v0.18.1
     file: /ci/security/secret-detection.yml
     inputs:
       tags: []
@@ -139,7 +139,7 @@ include:
       cpu_selector: "esweiss.com/cpu=modern"
 
   - project: eric/weisssrv-lib
-    ref: v0.18.0
+    ref: v0.18.1
     file: /ci/review/pr-agent.yml
     inputs:
       tags: []
@@ -160,7 +160,7 @@ include:
   # tag a generated repo's `copier update` resolves to. Untagged, copier falls
   # back to HEAD. See docs/VERSIONING.md.
   - project: eric/weisssrv-lib
-    ref: v0.18.0
+    ref: v0.18.1
     file: /ci/release/semantic-release.yml
     inputs:
       tags: []
