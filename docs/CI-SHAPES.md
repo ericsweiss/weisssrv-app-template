@@ -58,6 +58,11 @@ still the strictest of the three. `task flux-lint` resolves CR schemas from the
 catalog commit `Taskfile.yml` pins, and the GitLab shape passes that same commit
 to the include's `crd_catalog_ref`, so both read one schema set.
 
+The empty-build guard, the skipped-schema guard and the integer check on the
+skip budget exist twice: in the library's `flux-lint` simple arm, and in the
+rendered `Taskfile.yml`'s shell because a CI template cannot serve a local task.
+`tests/test_render.py` is the only thing holding the two in step.
+
 Both pipelined shapes drive the **same** vendored `scripts/semantic-release.py`
 with `--platform {gitlab,github}`, so there is one implementation to audit
 rather than one per forge.
@@ -81,15 +86,14 @@ announces its skip when there is none.
   re-vendor of `ci.yml`, `release.yml`, `build-image.yml` and the vendored
   `scripts/` helpers. `manifest-gates.yml` is this template's own and is never
   re-vendored.
-- **The manifest gates do not gate the tag.** On the GitLab shape
-  `netpol-check`, `scrape-wiring-check` and `kustomization-check` sit in
-  `stage: lint`, ahead of `stage: release`. On GitHub this template's own
+- **This template's own manifest-gates workflow does not gate the tag.** On the
+  GitLab shape `netpol-check`, `scrape-wiring-check` and `kustomization-check`
+  sit in `stage: lint`, ahead of `stage: release`. On GitHub
   `manifest-gates.yml` runs as a sibling workflow while `release.yml` triggers
   on `ci` completing, so a red gate there does not stop a tag and branch
   protection is what keeps one out of `main`. The vendored `ci.yml` runs the
-  same three gates inside the workflow `release.yml` waits on, which closes the
-  gap; dropping this template's duplicate is docs/VERSIONING.md § Pending at
-  the next library bump.
+  same three gates inside the workflow `release.yml` waits on, so a red gate
+  there does stop a tag.
 - **`k8s_version`.** The vendored `ci.yml` cannot take a copier answer, so it
   reads repository variable `K8S_VERSION` and falls back to the library's own
   literal. A cluster on a different Kubernetes minor sets that variable;
@@ -144,8 +148,10 @@ in a banner each tenant carries.
 runs on pull requests, pushes to main and `workflow_dispatch`, and drives the
 same three scripts the GitLab shape runs as `netpol-check`,
 `scrape-wiring-check` and `kustomization-check`. The vendored `ci.yml` carries
-a `manifest-gates` job of its own, so on this shape the three gates run twice;
-docs/VERSIONING.md § Pending at the next library bump owns that.
+a `manifest-gates` job of its own over `$MANIFEST_ROOT`, which defaults to the
+rendered tenant's `kubernetes/flux`, so on this shape the three gates run twice.
+The vendored job passes no `--namespace`, which the four template-owned callers
+do, so a ServiceMonitor scoped with `matchNames` reds it while they pass.
 
 **The `kustomization.yaml` resource list.** An emptied list renders nothing,
 kustomize and kubeconform both exit 0 on it, and the cluster-side Kustomization
