@@ -563,14 +563,14 @@ def test_render_b_carries_no_fixture_a_values(request, answers, label):
 
 
 def test_the_fixture_a_scan_reaches_a_template_owned_file(tmp_path, request, answers):
-    """The vendored exemption is per file, not per directory: a value dropped
-    into the template-owned workflow beside the vendored ones is still found."""
+    """The vendored exemption is per file, not per directory: a value in a file
+    beside the vendored workflows, and not registered as one, is still found."""
     root = tmp_path / "render"
     shutil.copytree(request.getfixturevalue("rendered_b"), root)
-    target = root / ".github" / "workflows" / "manifest-gates.yml"
-    target.write_text(f"{target.read_text()}# {answers['app_slug']}\n")
+    target = root / ".github" / "workflows" / "tenant-owned.yml"
+    target.write_text(f"# {answers['app_slug']}\n")
     leaks = _fixture_a_leaks(root, answers, request.getfixturevalue("answers_b"))
-    assert [leak for leak in leaks if "manifest-gates.yml" in leak], leaks
+    assert [leak for leak in leaks if "tenant-owned.yml" in leak], leaks
 
 
 # Reference-cluster spellings, named outright: the A/B diff above cannot see a
@@ -1265,7 +1265,7 @@ SHAPE_FILES = {
     # build-image.yml is not listed here: it is gated on `enable_image_build`
     # as well as the shape, so it has its own test below.
     "github": (
-        [".github/workflows/ci.yml", ".github/workflows/manifest-gates.yml"],
+        [".github/workflows/ci.yml"],
         [
             ".gitlab-ci.yml",
             ".gitlab/secret-detection-ruleset.toml",
@@ -1280,7 +1280,6 @@ SHAPE_FILES = {
         [
             ".gitlab-ci.yml",
             ".github/workflows/ci.yml",
-            ".github/workflows/manifest-gates.yml",
             ".gitlab/secret-detection-ruleset.toml",
             "scripts/semantic-release.py",
             "scripts/check-ci-include-job-names.py",
@@ -1288,9 +1287,9 @@ SHAPE_FILES = {
     ),
 }
 
-# Sentences the tenant-side docs may only carry on a shape where no pipeline
-# runs the three manifest gates. On `github` the `manifest-gates` workflow does,
-# so a doc that still claims otherwise sends the tenant looking for a gate it has.
+# Sentences the tenant-side docs may only carry on a shape where no pipeline runs
+# the three manifest gates. On `github` the vendored ci.yml's `manifest-gates`
+# job does, so a doc claiming otherwise hides a gate the tenant has.
 NO_PIPELINE_GATE_CLAIMS = (
     "No CI job on this shape runs it",
     "the vendored GitHub workflow has no step",
@@ -2838,9 +2837,9 @@ def test_the_tenant_docs_name_the_egress_gate(repo):
     architecture = (repo.path / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     assert "check-netpol-except-parity.py" in architecture
     if repo.answers["ci_shape"] == "github":
-        workflow = repo.path / ".github" / "workflows" / "manifest-gates.yml"
+        workflow = repo.path / ".github" / "workflows" / "ci.yml"
         assert workflow.is_file(), "the workflow the doc points the tenant at is missing"
-        assert "manifest-gates" in architecture, "the workflow running the gate is unnamed"
+        assert "manifest-gates" in architecture, "the job running the gate is unnamed"
 
 
 def test_the_platform_contract_names_what_the_manifests_bind_to(repo):

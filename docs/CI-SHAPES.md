@@ -6,7 +6,7 @@ outside `kubernetes/`. Three values:
 | `ci_shape` | Pipeline | Ships |
 |---|---|---|
 | `gitlab_selfhosted` (default) | self-hosted GitLab, jobs included from `eric/weisssrv-lib` at a pinned tag | `.gitlab-ci.yml`, `.gitlab/secret-detection-ruleset.toml`, `scripts/check-lib-pins.py`, `scripts/check-ci-include-job-names.py`, `scripts/semantic-release.py` |
-| `github` | GitHub Actions, workflows vendored from the same library | `.github/workflows/{ci,manifest-gates,release}.yml` — plus `build-image.yml` when `enable_image_build` is on — and `scripts/semantic-release.py` |
+| `github` | GitHub Actions, workflows vendored from the same library | `.github/workflows/{ci,release}.yml` — plus `build-image.yml` when `enable_image_build` is on — and `scripts/semantic-release.py` |
 | `none` | none | neither pipeline; `scripts/check-comment-length.py`, `scripts/check-doc-links.py`, `scripts/check-kustomization.py`, `scripts/check-netpol-except-parity.py` and `scripts/check-scrape-wiring.py` still ship, and `task lint` plus the pre-commit hooks are the whole gate |
 
 The `.gitlab/issue_templates/` and `.gitlab/merge_request_templates/` files
@@ -42,9 +42,9 @@ including the deploy-notes prompt about new secrets and cluster-side wiring.
 | Secret scanning | GitLab Secret Detection (gitleaks under the hood), findings block | gitleaks directly, same `.gitleaks.toml`, findings block | pre-commit gitleaks hook |
 | Library pin gate | `lib-pin-check`, plus `task lib-pins` locally | n/a — no includes to pin | n/a |
 | Optional-need gate (`check-ci-include-job-names.py`) | `ci-job-names-check`, plus `task ci-job-names` locally | n/a — a workflow `needs:` names a job in the same file | n/a |
-| Egress fence (`check-netpol-except-parity.py`) | `netpol-check`, plus `task netpol` locally | `manifest-gates` job, plus `task netpol` locally | `task netpol` |
-| Scrape wiring (`check-scrape-wiring.py`) | `scrape-wiring-check`, plus `task scrape-wiring` locally | `manifest-gates` job, plus `task scrape-wiring` locally | `task scrape-wiring` |
-| `kustomization.yaml` resource list | `kustomization-check`, plus `task kustomization` locally | `manifest-gates` job, plus `task kustomization` locally | `task kustomization` |
+| Egress fence (`check-netpol-except-parity.py`) | `netpol-check`, plus `task netpol` locally | `ci.yml`'s `manifest-gates` job, plus `task netpol` locally | `task netpol` |
+| Scrape wiring (`check-scrape-wiring.py`) | `scrape-wiring-check`, plus `task scrape-wiring` locally | `ci.yml`'s `manifest-gates` job — `--namespace-from-tree`, not `--namespace`, so a monitor scoped with `matchNames` reds it — plus `task scrape-wiring` locally | `task scrape-wiring` |
+| `kustomization.yaml` resource list | `kustomization-check`, plus `task kustomization` locally | `ci.yml`'s `manifest-gates` job, plus `task kustomization` locally | `task kustomization` |
 | Image build | `build-image` on a privileged runner | `build-image.yml` to GHCR, push-only | `task build` locally |
 | Release | `semantic-release` (library template) | `release.yml` (vendored) | by hand |
 | AI review | `pr-agent-review`, created only when both keys are set | n/a | n/a |
@@ -84,16 +84,12 @@ announces its skip when there is none.
   library and move when the `ref:` moves. The GitHub workflows are vendored
   copies with literal versions and sha256s — a library bump is a manual
   re-vendor of `ci.yml`, `release.yml`, `build-image.yml` and the vendored
-  `scripts/` helpers. `manifest-gates.yml` is this template's own and is never
-  re-vendored.
-- **This template's own manifest-gates workflow does not gate the tag.** On the
-  GitLab shape `netpol-check`, `scrape-wiring-check` and `kustomization-check`
-  sit in `stage: lint`, ahead of `stage: release`. On GitHub
-  `manifest-gates.yml` runs as a sibling workflow while `release.yml` triggers
-  on `ci` completing, so a red gate there does not stop a tag and branch
-  protection is what keeps one out of `main`. The vendored `ci.yml` runs the
-  same three gates inside the workflow `release.yml` waits on, so a red gate
-  there does stop a tag.
+  `scripts/` helpers.
+- **The manifest gates gate the tag on both pipeline shapes.** On the GitLab
+  shape `netpol-check`, `scrape-wiring-check` and `kustomization-check` sit in
+  `stage: lint`, ahead of `stage: release`. On GitHub the three run as the
+  vendored `ci.yml`'s `manifest-gates` job, and `release.yml` triggers on `ci`
+  completing, so a red gate stops the tag there too.
 - **`k8s_version`.** The vendored `ci.yml` cannot take a copier answer, so it
   reads repository variable `K8S_VERSION` and falls back to the library's own
   literal. A cluster on a different Kubernetes minor sets that variable;
@@ -140,25 +136,26 @@ no AI review by design.
 
 ## Why the GitHub workflows are shaped as they are
 
-`ci.yml`, `release.yml` and `build-image.yml` are byte-identical library copies;
-`manifest-gates.yml` is this template's own. Their design lives here rather than
-in a banner each tenant carries.
+`ci.yml`, `release.yml` and `build-image.yml` are byte-identical library
+copies, and they are every workflow this shape ships. Their design lives here
+rather than in a banner each tenant carries.
 
-**`manifest-gates`.** This template's own workflow holds `contents: read`,
-runs on pull requests, pushes to main and `workflow_dispatch`, and drives the
-same three scripts the GitLab shape runs as `netpol-check`,
-`scrape-wiring-check` and `kustomization-check`. The vendored `ci.yml` carries
-a `manifest-gates` job of its own over `$MANIFEST_ROOT`, which defaults to the
-rendered tenant's `kubernetes/flux`, so on this shape the three gates run twice.
-The vendored job passes no `--namespace`, which the four template-owned callers
-do, so a ServiceMonitor scoped with `matchNames` reds it while they pass.
+**`manifest-gates`.** The vendored `ci.yml`'s job drives the same three scripts
+the GitLab shape runs as `netpol-check`, `scrape-wiring-check` and
+`kustomization-check`, over `$MANIFEST_ROOT`, which defaults to the rendered
+tenant's `kubernetes/flux`. It derives the scrape gate's namespace with
+`--namespace-from-tree` because a byte-identical copy cannot carry a tenant's
+answer, and the rendered tree ships no `Namespace` manifest — the platform
+operator owns the namespace — so a monitor scoped with `matchNames` reds that
+job while the three template-owned callers pass it. The generated
+`docs/ARCHITECTURE.md` tells the tenant to scope with `any: false` instead.
 
 **The `kustomization.yaml` resource list.** An emptied list renders nothing,
 kustomize and kubeconform both exit 0 on it, and the cluster-side Kustomization
 prunes with `prune: true`, so every object in the namespace is deleted, the
 PrometheusRule with it, and no alert fires. A manifest present but unlisted is
-never built. The `manifest-gates` workflow and the GitLab `kustomization-check`
-job both run it.
+never built. The GitLab `kustomization-check` job and the GitHub shape's
+`manifest-gates` job both run it.
 
 **Release trust.** `release.yml` runs on `ci` completing and holds
 `contents: write`, so three conditions must all hold: the `ci` run succeeded,

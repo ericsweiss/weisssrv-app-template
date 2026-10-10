@@ -78,7 +78,6 @@ sha256 pins are literals there. Re-vendor those three files and every file
 under `scripts/` from the library tag you move to, in one {{ change_request }}.
 They come from the shared **weisssrv-lib** project, and this repo records no
 library ref, so name the tag you vendored in the {{ change_request }}.
-`.github/workflows/manifest-gates.yml` is this repo's own, not a library copy.
 
 No hand edit to a vendored workflow is needed. `ci.yml` reads the Kubernetes
 minor from repository variable `K8S_VERSION`, falling back to the library's own

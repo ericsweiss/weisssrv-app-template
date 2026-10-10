@@ -1,7 +1,7 @@
-"""Hold the GitHub shape's template-owned workflow and the one PyYAML pin.
+"""Hold the GitHub shape's manifest-gate run and the one PyYAML pin.
 
-`.github/workflows/manifest-gates.yml` is the shape's only CI run of the three manifest
-gates, and its PyYAML pin is held equal to the GitLab pipeline's and the pre-commit hooks'.
+The vendored `.github/workflows/ci.yml`'s `manifest-gates` job is the shape's only CI run
+of the three gates, and its PyYAML pin is the one the other two sources follow.
 """
 
 from __future__ import annotations
@@ -16,18 +16,20 @@ import yaml
 
 import render_app
 
-WORKFLOW = Path(".github/workflows/manifest-gates.yml")
+WORKFLOW = Path(".github/workflows/ci.yml")
 
 # The gates the GitLab shape runs as netpol-check, scrape-wiring-check and
-# kustomization-check. A dropped step leaves its invariant ungated on this
-# shape while every other job still greens.
+# kustomization-check. The vendored job warns and skips a gate the repo does not
+# ship, so a render that stops shipping one leaves its invariant ungated green.
 EXPECTED_GATES = {
-    "scripts/check-netpol-except-parity.py",
-    "scripts/check-scrape-wiring.py",
-    "scripts/check-kustomization.py",
+    "check-netpol-except-parity.py",
+    "check-scrape-wiring.py",
+    "check-kustomization.py",
 }
 
-SCRIPT_PATH = re.compile(r"scripts/[\w.-]+\.py")
+# The job calls each gate through its own `run_gate <script> [args...]` helper,
+# which prefixes `scripts/` itself.
+RUN_GATE = re.compile(r"run_gate ([\w.-]+\.py)")
 
 
 @pytest.fixture(scope="session")
@@ -63,21 +65,20 @@ def _workflow(root: Path) -> dict:
     return yaml.safe_load((root / WORKFLOW).read_text(encoding="utf-8"))
 
 
-def _gate_paths(workflow: dict) -> set[str]:
-    paths: set[str] = set()
-    for job in workflow["jobs"].values():
-        for step in job["steps"]:
-            paths.update(SCRIPT_PATH.findall(step.get("run") or ""))
-    return paths
+def _gate_names(workflow: dict) -> set[str]:
+    names: set[str] = set()
+    for step in workflow["jobs"]["manifest-gates"]["steps"]:
+        names.update(RUN_GATE.findall(step.get("run") or ""))
+    return names
 
 
 def _check_gates(workflow: dict, root: Path) -> None:
-    """Assert the workflow runs exactly the three gates and each one is there."""
-    paths = _gate_paths(workflow)
-    missing = sorted(path for path in paths if not (root / path).is_file())
+    """Assert the job runs exactly the three gates and the render ships each."""
+    names = _gate_names(workflow)
+    missing = sorted(name for name in names if not (root / "scripts" / name).is_file())
     assert not missing, f"{WORKFLOW} names scripts the render does not ship: {missing}"
-    assert paths == EXPECTED_GATES, (
-        f"{WORKFLOW} runs {sorted(paths)}, not the three manifest gates "
+    assert names == EXPECTED_GATES, (
+        f"{WORKFLOW} runs {sorted(names)}, not the three manifest gates "
         f"{sorted(EXPECTED_GATES)}"
     )
 
@@ -120,29 +121,37 @@ def _check_one_pin(roots: list[Path]) -> None:
     assert len(versions) == 1, f"the shapes gate on different PyYAML releases: {pins}"
 
 
-def test_the_manifest_gates_workflow_runs_exactly_the_three_gates(github_render):
-    """Every named script exits non-zero on a path that is not there, and a
-    dropped step leaves its invariant ungated on this shape."""
+def test_the_manifest_gates_job_runs_exactly_the_three_gates(github_render):
+    """The job skips a gate the repo does not ship, so the render has to carry
+    all three, and a dropped call leaves its invariant ungated on this shape."""
     _check_gates(_workflow(github_render), github_render)
 
 
-def test_a_dropped_gate_step_fails_the_workflow_check(github_render):
-    workflow = copy.deepcopy(_workflow(github_render))
-    workflow["jobs"]["manifest-gates"]["steps"].pop()
+def _mutate(workflow: dict, old: str, new: str) -> dict:
+    """The job's gate calls live in one shell step; rewrite that step's text."""
+    workflow = copy.deepcopy(workflow)
+    steps = workflow["jobs"]["manifest-gates"]["steps"]
+    step = next(s for s in steps if RUN_GATE.search(s.get("run") or ""))
+    assert old in step["run"], f"the mutation missed: {old}"
+    step["run"] = step["run"].replace(old, new)
+    return workflow
+
+
+def test_a_dropped_gate_call_fails_the_job_check(github_render):
+    workflow = _mutate(_workflow(github_render), "run_gate check-kustomization.py", ":")
     with pytest.raises(AssertionError):
         _check_gates(workflow, github_render)
 
 
-def test_a_gate_step_naming_a_missing_script_fails_the_workflow_check(github_render):
-    workflow = copy.deepcopy(_workflow(github_render))
-    workflow["jobs"]["manifest-gates"]["steps"][-1]["run"] = (
-        "python3 scripts/check-nothing.py kubernetes/flux"
+def test_a_gate_call_naming_a_missing_script_fails_the_job_check(github_render):
+    workflow = _mutate(
+        _workflow(github_render), "run_gate check-kustomization.py", "run_gate check-nothing.py"
     )
     with pytest.raises(AssertionError):
         _check_gates(workflow, github_render)
 
 
-def test_the_manifest_gates_workflow_ships_only_in_the_github_shape(
+def test_the_ci_workflow_ships_only_in_the_github_shape(
     github_render, gitlab_render, none_render
 ):
     assert (github_render / WORKFLOW).is_file()
@@ -151,8 +160,8 @@ def test_the_manifest_gates_workflow_ships_only_in_the_github_shape(
 
 
 def test_one_pyyaml_pin_across_the_render(github_render, gitlab_render):
-    """The workflow's `PYYAML_VERSION` comment claims equality with the GitLab
-    pipeline's pin and the pre-commit hooks'. Nothing else holds it."""
+    """The vendored workflow's `PYYAML_VERSION` is the library's, and the GitLab
+    pipeline's pin and the pre-commit hooks' follow it. Nothing else holds them."""
     _check_one_pin([github_render, gitlab_render])
 
 

@@ -31,8 +31,7 @@ file under `template/`, the four seams, and what the render suite holds.
   `template/.github/workflows/` are byte-identical to weisssrv-lib, and
   `scripts/vendored-manifest.yml` here records every copy and every declared
   fork. Fix upstream and re-vendor; a local edit is reverted by the next
-  re-vendor and fails the gate. The `manifest-gates.yml` workflow is this
-  template's own, deliberately unregistered: fix that one here.
+  re-vendor and fails the gate.
 - **`copier.yml` is API.** Renaming or removing a question breaks every
   generated repo's `copier update` — that is a MAJOR
   ([`docs/VERSIONING.md`](docs/VERSIONING.md)).

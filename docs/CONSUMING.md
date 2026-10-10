@@ -202,14 +202,13 @@ Nothing stops you — it is your repository. Three things to know:
   byte-identical library copies. A generated repo carries no gate that notices an
   edit to one. A re-vendor overwrites it, and `copier update` quietly carries it
   forward as a fork nothing records. Change them upstream.
-  `.github/workflows/manifest-gates.yml` is not a copy: change that one here.
 
 ## The vendored library helpers
 
 Every helper under `template/scripts/` is a **byte-identical copy** of a
 [`eric/weisssrv-lib`](https://git.ericsweiss.com/eric/weisssrv-lib) file, so the
 copy is what executes. Some are run by the library's job templates from those
-paths; the three manifest gates are run by the generated repo's own jobs and by
+paths; the three manifest gates are run by the generated repo's pipeline and by
 `task lint`. `check-netpol-except-parity.py` imports `gate_common.py`, and
 `check-lib-pins.py` and `check-ci-include-job-names.py` both import
 `ci_yaml.py`, each from its own directory, so those sets ship together.

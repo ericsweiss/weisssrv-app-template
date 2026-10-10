@@ -16,8 +16,8 @@ CI shape is **`{{ ci_shape }}`**{% if ci_shape == 'gitlab_selfhosted' %}: every 
 `{{ lib_project }}` at a pinned tag. Do not re-inline one; change behaviour by
 bumping the `ref:` or adjusting the `inputs:`{% elif ci_shape == 'github' %}: `.github/workflows/{ci,release,build-image}.yml`
 are vendored copies of the shared library's workflows. Keep them byte-identical
-and re-vendor on a bump. `manifest-gates.yml` beside them is this repo's own.
-They take no hand edit: `ci.yml` reads repository variable `K8S_VERSION`,
+and re-vendor on a bump. They take no hand edit: `ci.yml` reads repository
+variable `K8S_VERSION`,
 which a byte-identical copy cannot take from an answer — see docs/VERSIONING.md{% else %}: there is no pipeline. `task lint` and the
 pre-commit hooks are the whole gate{% endif %}.
 
@@ -47,10 +47,8 @@ metrics — are `copier update` with the answer flipped, not hand-assembly.
   filesystem.
 - **Register every new manifest** in `kubernetes/flux/kustomization.yaml`.
 - **Never edit the vendored copies in place**: every file under `scripts/`{% if ci_shape == 'github' %}
-  and `.github/workflows/{ci,release,build-image}.yml`{% endif %}. They are
-  byte-identical library copies; a re-vendor overwrites a local edit.{% if ci_shape == 'github' %}
-  `.github/workflows/manifest-gates.yml` is this repo's own: fix that one
-  here.{% endif %}
+  and everything under `.github/workflows/`{% endif %}. They are
+  byte-identical library copies; a re-vendor overwrites a local edit.
 - **Run `task lint` before opening a {{ change_request }}.**
 
 ## Comments

@@ -113,7 +113,7 @@ loopback or cloud-metadata addresses.
 `task lint` runs it, the `netpol-check` job runs it, and so does the pre-commit
 hook after `pre-commit install`.
 {%- elif ci_shape == 'github' %}
-`task lint` runs it, and so does the `manifest-gates` workflow on every pull
+`task lint` runs it, and so does `ci.yml`'s `manifest-gates` job on every pull
 request and push to main. `pre-commit install` arms the same gate on every
 commit.
 {%- else %}
@@ -245,15 +245,20 @@ ingress:
   `TargetDown` page in the platform's Alertmanager, not here. The gate models a
   namespace-scoped peer only: a peer that also carries a `podSelector` fails it,
   so keep the namespace peer whole and narrow elsewhere. A
-  `spec.namespaceSelector` on the monitor may name this namespace
-  (`matchNames: [{{ app_namespace }}]`); a wider scrape has to be checked where
-  the policies covering it live.
+  `spec.namespaceSelector` on the monitor may narrow the scrape with
+  `any: false`; a wider one has to be checked where the policies covering it
+  live.
 {%- if ci_shape == 'gitlab_selfhosted' %}
-  The `scrape-wiring-check` job runs the same script on every change.
+  `matchNames: [{{ app_namespace }}]` also passes: `task scrape-wiring` and the
+  `scrape-wiring-check` job both pass the namespace, and the job runs the same
+  script on every change.
 {%- elif ci_shape == 'github' %}
-  The `manifest-gates` workflow runs the same script on every change.
+  `matchNames:` does NOT: `ci.yml`'s `manifest-gates` job runs the same script
+  on every change and derives the namespace from a `Namespace` manifest, which
+  this repo does not ship because the platform operator owns the namespace.
 {%- else %}
-  No CI job on this shape runs it. The pre-commit hook and `task lint` do.
+  `matchNames: [{{ app_namespace }}]` also passes: `task scrape-wiring` and the
+  pre-commit hook pass the namespace. No CI job on this shape runs it.
 {%- endif %}
 - `kustomization` fails on an empty `resources:` list, on a listed path that
   does not exist, and on a manifest present but unlisted. An emptied list
@@ -262,7 +267,7 @@ ingress:
 {%- if ci_shape == 'gitlab_selfhosted' %}
   The `kustomization-check` job runs the same script on every change.
 {%- elif ci_shape == 'github' %}
-  The `manifest-gates` workflow runs the same script on every change.
+  `ci.yml`'s `manifest-gates` job runs the same script on every change.
 {%- else %}
   No CI job on this shape runs it. The pre-commit hook and `task lint` do.
 {%- endif %}

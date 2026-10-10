@@ -778,13 +778,13 @@ def test_every_vendored_consumer_path_exists():
 
 # The scrape gate refuses a ServiceMonitor's `matchNames` without `--namespace`,
 # so a template-owned caller that omits the answer reds on a tenant's own
-# manifest. The vendored workflow takes no copier answer and passes none.
+# manifest. The vendored workflow takes no copier answer and derives it instead.
 SCRAPE_INVOCATION = re.compile(r"python3?\s+scripts/check-scrape-wiring\.py")
 
 
 def test_every_template_owned_scrape_caller_passes_the_namespace():
-    """The task, the pre-commit hook and both pipelines run the same gate, and
-    the answer is the only thing that tells it which namespace this tree
+    """The task, the pre-commit hook and the GitLab pipeline run the same gate,
+    and the answer is the only thing that tells it which namespace this tree
     deploys into."""
     document = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
     # Only the byte-identical copies: a declared fork is edited here.
@@ -805,7 +805,7 @@ def test_every_template_owned_scrape_caller_passes_the_namespace():
             continue
         if SCRAPE_INVOCATION.search(body):
             callers[relpath] = body
-    assert len(callers) >= 4, f"the scan found only {sorted(callers)}"
+    assert len(callers) >= 3, f"the scan found only {sorted(callers)}"
     missing = sorted(
         relpath
         for relpath, body in callers.items()

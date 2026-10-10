@@ -23,7 +23,7 @@ is recorded as `_src_path` in `.copier-answers.yml`, alongside the answers
 {%- if ci_shape == 'gitlab_selfhosted' %}
 | `.gitlab-ci.yml` | the pipeline, pulling its jobs from the shared CI library at a pinned tag |
 {%- elif ci_shape == 'github' %}
-| `.github/workflows/` | the pipeline (GitHub Actions): ci, release and build-image vendored from the shared library, manifest-gates this repo's own |
+| `.github/workflows/` | the pipeline (GitHub Actions): ci, release and build-image, all vendored from the shared library |
 {%- endif %}
 | `Taskfile.yml` | the local gates and the read-only cluster checks |
 

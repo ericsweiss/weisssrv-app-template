@@ -140,8 +140,8 @@ The vendored copies live in this repository, not in a generated one: the helpers
 at the root are what this repo lints and, where it has the tree for them, runs
 on itself; the same helpers under `template/scripts/` and the GitHub workflows
 are what it hands to a tenant. Every gate script is a byte-identical library copy, as are the `ci.yml`,
-`release.yml` and `build-image.yml` workflows. The `manifest-gates.yml` workflow
-is this template's own and is deliberately unregistered. That relationship is
+`release.yml` and `build-image.yml` workflows, which is every workflow the
+GitHub shape ships. That relationship is
 recorded HERE, in `scripts/vendored-manifest.yml`, and checked by the library's
 `check-vendored-copies.py`, which `tests/validate_render.py --lib-path` runs
 against a checkout at `copier.yml`'s `lib_ref` default.
@@ -178,8 +178,7 @@ egress fence (`scripts/check-netpol-except-parity.py`, run there by `task netpol
 and the GitLab shape's `netpol-check` job), the scrape-wiring gate
 (`task scrape-wiring` / `scrape-wiring-check`) and the kustomization gate
 (`task kustomization` / `kustomization-check`). The GitHub shape runs all three
-in this template's own `manifest-gates` workflow and again in the vendored
-`ci.yml`'s `manifest-gates` job —
+in the vendored `ci.yml`'s `manifest-gates` job, the one `release.yml` waits on —
 docs/CI-SHAPES.md § Why the GitHub workflows are shaped as they are has the
 detail. The generated `docs/ARCHITECTURE.md` says so where the tenant reads it.
 

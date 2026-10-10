@@ -66,10 +66,9 @@ what gates every newly generated repo, so a library MAJOR bump — a renamed
 template input, a changed default that alters a resolved job — is a MAJOR here.
 
 The GitHub shape's `ci.yml`, `release.yml` and `build-image.yml` are vendored
-byte-identically from the same library; re-vendor them in the same merge request
-that moves `lib_ref`'s default, or the two shapes gate on different tools.
-`manifest-gates.yml` is this template's own; the library's `ci.yml` carries a
-job of the same name, so the two overlap.
+byte-identically from the same library, and are every workflow that shape ships;
+re-vendor them in the same merge request that moves `lib_ref`'s default, or the
+two shapes gate on different tools.
 
 ## Vendored copies
 
