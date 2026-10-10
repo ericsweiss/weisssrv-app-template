@@ -42,28 +42,6 @@ test suite.
 `_envops.undefined` setting this template renders with. An older client fails
 `copier copy` and `copier update` with a version error.
 
-### Answer-set changes since the last release
-
-Every question removed, renamed, or given a different default since the newest
-tag is listed here, with what a repo on the previous release sees. The test
-suite fails a change that is not listed.
-
-- `change_request`, `git_host`, `registry_host` — the default keys on `forge`
-  rather than on `ci_shape`. A repo whose two answers agree resolves the same
-  value; one that picked GitHub Actions on a GitLab forge resolves the forge's
-  spelling and host.
-- `registry_pull_host` — the default is `registry_host`, so a repo that never
-  answered it stops pulling from a separate internal mirror.
-
-A recorded answer always wins over the default, so a repo that answered the
-question keeps its value through `copier update`.
-
-### Rendered-path changes since the last release
-
-- `.yamllint` moves to `lint/yamllint-relaxed.yml`, beside the other lint
-  profiles and at the path the library offers the file under. `copier update`
-  carries the move; tooling that names `.yamllint` by hand reads the new path.
-
 ## MAJOR / MINOR / PATCH
 
 | Level | Meaning here |
@@ -88,10 +66,9 @@ what gates every newly generated repo, so a library MAJOR bump — a renamed
 template input, a changed default that alters a resolved job — is a MAJOR here.
 
 The GitHub shape's `ci.yml`, `release.yml` and `build-image.yml` are vendored
-byte-identically from the same library; re-vendor them in the same merge request
-that moves `lib_ref`'s default, or the two shapes gate on different tools.
-`manifest-gates.yml` is this template's own; the library's `ci.yml` carries a
-job of the same name, so the two overlap — see Pending below.
+byte-identically from the same library, and are every workflow that shape ships;
+re-vendor them in the same merge request that moves `lib_ref`'s default, or the
+two shapes gate on different tools.
 
 ## Vendored copies
 
@@ -122,62 +99,22 @@ library's `scripts/check-scrape-netpol.py` checks the scrape invariant at
 namespace level over a cluster corpus; `check-scrape-wiring.py`, the copy a
 tenant gets, resolves it per port.
 
-### Pending at the next library bump
-
-Each entry is deleted by the change that satisfies it. All three are unblocked
-at the pinned `lib_ref` and waiting on their own change.
-
-- The `flux-lint` include in the rendered `.gitlab-ci.yml` does not pass
-  `crd_catalog_ref`, so the pipeline takes the library's default while
-  `task flux-lint` takes `Taskfile.yml`'s `CRD_CATALOG_REF`. They agree today
-  because both pin the same commit, with nothing holding them equal. Pass the
-  input, and consider `expected_skipped_file` in the same change.
-- The library's `flux-lint` simple arm carries the empty-build guard, the
-  skipped-schema guard and the integer check on the skip budget, and the
-  rendered `Taskfile.yml` implements the same three in shell because a CI
-  template cannot serve a local task. Give the library a script form both can
-  call, or the two drift and only `tests/test_render.py` notices.
-- The vendored `ci.yml` carries a `manifest-gates` job running the same three
-  gates as this template's own `manifest-gates.yml`, over `$MANIFEST_ROOT`,
-  which defaults to the rendered tenant's `kubernetes/flux`. Every GitHub-shape
-  tenant therefore runs them twice. Drop the template's own workflow, or keep it
-  and say here why the duplication is wanted. Dropping it removes a rendered
-  file, so MAJOR, and it carries `tests/test_github_shape.py`, the parity rows
-  in docs/CI-SHAPES.md § Job parity and the design note in § Why the GitHub
-  workflows are shaped as they are. The vendored job also passes no
-  `--namespace`, which the four template-owned callers do, so a ServiceMonitor
-  scoped with `matchNames` reds it while they pass.
-
-## Which library release a template release was validated against
+## Which library release a template release is validated against
 
 `lib_ref` is an answer, so a generated repo can pin any library tag it likes.
-Exactly one pair per template release is proved to work: the one
-`validate-rendered-app` runs, which clones the library at `copier.yml`'s `lib_ref`
-default and runs the real toolchain over the render against it.
+Exactly one pair is proved, and it is the default: `validate-rendered-app`
+clones the library at `copier.yml`'s `lib_ref` default and runs the real
+toolchain over the render against it.
 
-| Template release | Rendered and validated against |
-|---|---|
-| `v0.1.0` | not a copier template yet |
-| `v0.1.1` | not a copier template yet |
-| `v0.2.0` | weisssrv-lib `v0.7.2` |
-| `v0.3.0` | weisssrv-lib `v0.8.0` |
-| `v0.4.0` | weisssrv-lib `v0.9.5` |
-| `main` (unreleased) | weisssrv-lib `v0.18.1` |
+The `lib_ref` default in `copier.yml` and this repository's own `include:` refs
+move together, in one merge request. `scripts/check-lib-pins.py --fix` syncs the
+includes and `validate-rendered-app` clones at the default, so the default is
+the tag actually proved. The test suite compares the two.
 
-Rules that keep the table meaningful:
-
-- The `lib_ref` default in `copier.yml` and this repository's own `include:`
-  refs move together, in one merge request. `scripts/check-lib-pins.py --fix`
-  syncs the includes and `validate-rendered-app` clones at the default, so the
-  default is the tag actually proved. The test suite compares the two.
-- Add the row in that same merge request, labelled `main` until the tag exists,
-  then relabel it when the release is cut. The release notes are generated from
-  commit subjects and carry no pin, so this table is the only place the pair is
-  written down.
-- **Other pairs are untested, not unsupported.** A repo on an older template
-  release answering a newer `lib_ref` is a combination nothing here exercised.
-  The library's own [VERSIONING.md](https://git.ericsweiss.com/eric/weisssrv-lib/-/blob/main/docs/VERSIONING.md)
-  is what says whether that bump is allowed to break it.
+**Other pairs are untested, not unsupported.** A repo on an older template
+release answering a newer `lib_ref` is a combination nothing here exercised.
+The library's own [VERSIONING.md](https://git.ericsweiss.com/eric/weisssrv-lib/-/blob/main/docs/VERSIONING.md)
+is what says whether that bump is allowed to break it.
 
 ## Releasing
 

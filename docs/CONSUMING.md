@@ -107,7 +107,7 @@ component is wired and a disabled one leaves nothing behind. There is no
 
 | Answer | Default | What it drives |
 |---|---|---|
-| `lib_ref` | `v0.18.1` | The tag every `include:` pins. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
+| `lib_ref` | `v0.19.0` | The tag every `include:` pins. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
 | `lib_project` | `eric/weisssrv-lib` | The library's project path. `include: project:` resolves instance-locally, so the library must live on the same GitLab as the repo. |
 
 ---
@@ -202,17 +202,16 @@ Nothing stops you — it is your repository. Three things to know:
   byte-identical library copies. A generated repo carries no gate that notices an
   edit to one. A re-vendor overwrites it, and `copier update` quietly carries it
   forward as a fork nothing records. Change them upstream.
-  `.github/workflows/manifest-gates.yml` is not a copy: change that one here.
 
 ## The vendored library helpers
 
 Every helper under `template/scripts/` is a **byte-identical copy** of a
 [`eric/weisssrv-lib`](https://git.ericsweiss.com/eric/weisssrv-lib) file, so the
 copy is what executes. Some are run by the library's job templates from those
-paths; the three manifest gates are run by the generated repo's own jobs and by
-`task lint`. `check-netpol-except-parity.py` imports `gate_common.py` and
-`check-lib-pins.py` imports `ci_yaml.py`, each from its own directory, so those
-pairs ship together.
+paths; the three manifest gates are run by the generated repo's pipeline and by
+`task lint`. `check-netpol-except-parity.py` imports `gate_common.py`, and
+`check-lib-pins.py` and `check-ci-include-job-names.py` both import
+`ci_yaml.py`, each from its own directory, so those sets ship together.
 
 Five are unconditional, so every generated repo carries them on every shape:
 `check-comment-length.py`, `check-doc-links.py`,
@@ -221,7 +220,7 @@ Five are unconditional, so every generated repo carries them on every shape:
 
 | `ci_shape` | What else ships |
 |---|---|
-| `gitlab_selfhosted` | `check-lib-pins.py` with `ci_yaml.py`, and `semantic-release.py` |
+| `gitlab_selfhosted` | `check-lib-pins.py` and `check-ci-include-job-names.py` with `ci_yaml.py`, and `semantic-release.py` |
 | `github` | `semantic-release.py` (the pin gate has no includes to gate) |
 | `none` | nothing further; `task lint` and the pre-commit hooks are the whole gate |
 

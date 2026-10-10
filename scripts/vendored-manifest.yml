@@ -6,6 +6,7 @@
 vendored:
   # The root copies are what this repo lints and, where it has the tree for
   # them, runs on ITSELF …
+  - scripts/check-ci-include-job-names.py
   - scripts/check-comment-length.py
   - scripts/check-doc-links.py
   - scripts/check-lib-pins.py
@@ -33,6 +34,8 @@ vendored:
   # without the companion every tenant's egress fence exits 2 on import.
   - lib: scripts/gate_common.py
     consumer: template/scripts/gate_common.py
+  - lib: scripts/check-ci-include-job-names.py
+    consumer: "template/scripts/{% if ci_shape == 'gitlab_selfhosted' %}check-ci-include-job-names.py{% endif %}"
   - lib: scripts/check-lib-pins.py
     consumer: "template/scripts/{% if ci_shape == 'gitlab_selfhosted' %}check-lib-pins.py{% endif %}"
   # One line, quoted: a folded scalar reconstructs the literal filename only if

@@ -563,14 +563,14 @@ def test_render_b_carries_no_fixture_a_values(request, answers, label):
 
 
 def test_the_fixture_a_scan_reaches_a_template_owned_file(tmp_path, request, answers):
-    """The vendored exemption is per file, not per directory: a value dropped
-    into the template-owned workflow beside the vendored ones is still found."""
+    """The vendored exemption is per file, not per directory: a value in a file
+    beside the vendored workflows, and not registered as one, is still found."""
     root = tmp_path / "render"
     shutil.copytree(request.getfixturevalue("rendered_b"), root)
-    target = root / ".github" / "workflows" / "manifest-gates.yml"
-    target.write_text(f"{target.read_text()}# {answers['app_slug']}\n")
+    target = root / ".github" / "workflows" / "tenant-owned.yml"
+    target.write_text(f"# {answers['app_slug']}\n")
     leaks = _fixture_a_leaks(root, answers, request.getfixturevalue("answers_b"))
-    assert [leak for leak in leaks if "manifest-gates.yml" in leak], leaks
+    assert [leak for leak in leaks if "tenant-owned.yml" in leak], leaks
 
 
 # Reference-cluster spellings, named outright: the A/B diff above cannot see a
@@ -1254,14 +1254,24 @@ def test_pull_secret_is_wired_into_the_pod(repo):
 # shape -> (files it must ship, files it must not)
 SHAPE_FILES = {
     "gitlab_selfhosted": (
-        [".gitlab-ci.yml", ".gitlab/secret-detection-ruleset.toml", "scripts/check-lib-pins.py"],
+        [
+            ".gitlab-ci.yml",
+            ".gitlab/secret-detection-ruleset.toml",
+            "scripts/check-lib-pins.py",
+            "scripts/check-ci-include-job-names.py",
+        ],
         [".github/workflows/ci.yml"],
     ),
     # build-image.yml is not listed here: it is gated on `enable_image_build`
     # as well as the shape, so it has its own test below.
     "github": (
-        [".github/workflows/ci.yml", ".github/workflows/manifest-gates.yml"],
-        [".gitlab-ci.yml", ".gitlab/secret-detection-ruleset.toml", "scripts/check-lib-pins.py"],
+        [".github/workflows/ci.yml"],
+        [
+            ".gitlab-ci.yml",
+            ".gitlab/secret-detection-ruleset.toml",
+            "scripts/check-lib-pins.py",
+            "scripts/check-ci-include-job-names.py",
+        ],
     ),
     # Issue and change-request templates are NOT here: they follow the `forge`
     # answer, which test_forge_metadata_follows_the_forge holds.
@@ -1270,16 +1280,16 @@ SHAPE_FILES = {
         [
             ".gitlab-ci.yml",
             ".github/workflows/ci.yml",
-            ".github/workflows/manifest-gates.yml",
             ".gitlab/secret-detection-ruleset.toml",
             "scripts/semantic-release.py",
+            "scripts/check-ci-include-job-names.py",
         ],
     ),
 }
 
-# Sentences the tenant-side docs may only carry on a shape where no pipeline
-# runs the three manifest gates. On `github` the `manifest-gates` workflow does,
-# so a doc that still claims otherwise sends the tenant looking for a gate it has.
+# Sentences the tenant-side docs may only carry on a shape where no pipeline runs
+# the three manifest gates. On `github` the vendored ci.yml's `manifest-gates`
+# job does, so a doc claiming otherwise hides a gate the tenant has.
 NO_PIPELINE_GATE_CLAIMS = (
     "No CI job on this shape runs it",
     "the vendored GitHub workflow has no step",
@@ -1655,6 +1665,27 @@ def test_k8s_version_reaches_the_gitlab_shape(rendered, answers):
     assert flux_lint[0]["inputs"]["k8s_version"] == answers["k8s_version"]
     taskfile = yaml.safe_load((rendered / "Taskfile.yml").read_text())
     assert taskfile["vars"]["K8S_VERSION"] == answers["k8s_version"]
+
+
+def test_the_crd_catalog_pin_reaches_the_gitlab_shape(rendered):
+    """The include and the Taskfile hold the catalog commit as two literals, so
+    only this test stops the job and `task flux-lint` resolving different CR
+    schemas — and the include taking the library's own default silently."""
+    ci = render_app.load_ci(rendered / ".gitlab-ci.yml")
+    flux_lint = [
+        i for i in ci["include"]
+        if isinstance(i, dict) and str(i.get("file", "")).endswith("flux-lint.yml")
+    ]
+    passed = flux_lint[0]["inputs"].get("crd_catalog_ref")
+    assert passed, (
+        "the flux-lint include passes no crd_catalog_ref, so the job takes the "
+        "library default while `task flux-lint` reads Taskfile.yml's pin"
+    )
+    taskfile = yaml.safe_load((rendered / "Taskfile.yml").read_text())
+    assert passed == taskfile["vars"]["CRD_CATALOG_REF"], (
+        f"the flux-lint include pins {passed} but Taskfile.yml pins "
+        f"{taskfile['vars']['CRD_CATALOG_REF']}"
+    )
 
 
 # Include inputs whose value is a path in the render. Register a new
@@ -2806,9 +2837,9 @@ def test_the_tenant_docs_name_the_egress_gate(repo):
     architecture = (repo.path / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     assert "check-netpol-except-parity.py" in architecture
     if repo.answers["ci_shape"] == "github":
-        workflow = repo.path / ".github" / "workflows" / "manifest-gates.yml"
+        workflow = repo.path / ".github" / "workflows" / "ci.yml"
         assert workflow.is_file(), "the workflow the doc points the tenant at is missing"
-        assert "manifest-gates" in architecture, "the workflow running the gate is unnamed"
+        assert "manifest-gates" in architecture, "the job running the gate is unnamed"
 
 
 def test_the_platform_contract_names_what_the_manifests_bind_to(repo):

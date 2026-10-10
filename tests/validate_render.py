@@ -20,6 +20,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import copier_render
 import render_app
 
 CATALOG_TEMPLATE = (
@@ -31,8 +32,9 @@ REQUIRED_TOOLS = ("yamllint", "kustomize", "kubeconform", "ruff", "git")
 # This repository's vendored-copy manifest, read by the library's engine.
 VENDORED_MANIFEST = "scripts/vendored-manifest.yml"
 
-# Width of the gate-name column every verdict line is printed in.
-LABEL_WIDTH = 24
+# Width of the gate-name column every verdict line is printed in, the
+# vendored helper's own, so its row lines up with the rest.
+LABEL_WIDTH = 22
 
 
 class Runner:
@@ -189,62 +191,20 @@ def validate(root: Path, answers: dict) -> list[str]:
 
 
 def check_registered_copies(
-    lib_path: Path,
-    expected_ref: str | None = None,
-    allow_ref_mismatch: bool = False,
-    checkout: tuple[bool, list[str]] | None = None,
+    lib_path: Path, expected_ref: str | None, label: str = "registered copies"
 ) -> list[str]:
-    """Run the library's comparison engine over this repository's copy manifest.
+    """Put the library's comparison engine over this repository's copy manifest.
 
-    Byte-identity is a claim about `expected_ref`, so an unverified checkout is
-    reported as unverified, never as ok.
+    The engine reads the library side at `expected_ref`, so byte-identity is a
+    claim about the pinned tag whatever the checkout is at.
     """
-    label = "registered copies"
-    checker = lib_path / "scripts" / "check-vendored-copies.py"
-    if not checker.is_file():
-        return [
-            f"{lib_path} ships no scripts/check-vendored-copies.py — the vendored-copy "
-            "gate cannot run, and it must not silently skip"
-        ]
-    manifest = render_app.REPO_ROOT / VENDORED_MANIFEST
-    if not manifest.is_file():
-        return [
-            f"{manifest} is missing — this repository's vendored copies would go "
-            "ungated, and the gate must not silently skip"
-        ]
     if not expected_ref:
         print(f"  {label:<{LABEL_WIDTH}} FAILED")
         print("    this repository pins no library ref, so byte-identity has no subject")
         return [label]
-    ok, failures = checkout or _report_checkout(
-        label, lib_path, expected_ref, allow_ref_mismatch
+    return copier_render.check_registered_copies(
+        lib_path, render_app.REPO_ROOT, VENDORED_MANIFEST, label, ref=expected_ref
     )
-    if failures:
-        return [label]
-    if not ok:
-        print(f"  {label:<{LABEL_WIDTH}} SKIPPED (ref unverified)")
-        return []
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(checker),
-            "--manifest",
-            str(manifest),
-            "--repo-root",
-            str(render_app.REPO_ROOT),
-            "--lib-path",
-            str(lib_path),
-        ],
-        capture_output=True,
-        text=True,
-    )
-    status = "ok" if result.returncode == 0 else "FAILED"
-    print(f"  {label:<{LABEL_WIDTH}} {status}")
-    if result.returncode:
-        sys.stdout.write(result.stdout)
-        sys.stderr.write(result.stderr)
-        return [label]
-    return []
 
 
 _INPUT_REF = re.compile(r"^\$\[\[\s*inputs\.([A-Za-z0-9_-]+)\s*\]\]$")
@@ -316,8 +276,8 @@ def _report_checkout(
 ) -> tuple[bool, list[str]]:
     """-> (the checkout is verifiably at `expected_ref` and clean, gate failures).
 
-    Every gate reading library files has the same subject, so an unverified checkout is
-    either a failure or, waived, a warning the caller must not print as a verdict.
+    The include-contract gates read library templates out of the working tree, so an
+    unverified one is a failure, or — waived — a warning, never a verdict.
     """
     try:
         actual = _checkout_ref(lib_path)
@@ -451,7 +411,7 @@ def check_own_include_contract(
     otherwise first appear as a pipeline-creation failure on the ref bump.
     """
     own = render_app.REPO_ROOT / ".gitlab-ci.yml"
-    label = "include contract (self)"
+    label = "own include contract"
     if not own.is_file():
         return []
     ref = _own_lib_ref()
@@ -478,14 +438,14 @@ def main() -> int:
     parser.add_argument(
         "--lib-path",
         type=Path,
-        help="weisssrv-lib checkout AT the pinned ref — enables the vendored-copy "
-        "and include-contract gates.",
+        help="weisssrv-lib checkout — enables the vendored-copy and include-contract "
+        "gates, and the include-contract ones read it AT the pinned ref.",
     )
     parser.add_argument(
         "--allow-ref-mismatch",
         action="store_true",
         help="Warn instead of failing when --lib-path is not at the pinned ref. The "
-        "vendored-copy gate then reports the ref unverified rather than a verdict.",
+        "include-contract gates then report the ref unverified rather than a verdict.",
     )
     args = parser.parse_args()
 
@@ -520,8 +480,9 @@ def main() -> int:
         root = render_app.render(scratch, answers=args.answers, data=overrides)
         failures = validate(root, answers)
         if args.lib_path:
-            # One verdict per distinct ref: three gates ask the same question of
-            # the same checkout, and each would re-probe git and reprint it.
+            # One verdict per distinct ref: both include-contract gates read
+            # library templates from the working tree, and each would otherwise
+            # re-probe git and reprint the same answer.
             own_ref, render_ref = _own_lib_ref(), answers.get("lib_ref")
             verdicts = {
                 ref: _report_checkout(
@@ -529,12 +490,7 @@ def main() -> int:
                 )
                 for ref in dict.fromkeys(ref for ref in (own_ref, render_ref) if ref)
             }
-            failures += check_registered_copies(
-                args.lib_path,
-                own_ref,
-                args.allow_ref_mismatch,
-                checkout=verdicts.get(own_ref),
-            )
+            failures += check_registered_copies(args.lib_path, own_ref)
             if (root / ".gitlab-ci.yml").is_file() and not render_ref:
                 print(f"  {'include contract':<{LABEL_WIDTH}} FAILED")
                 print("    lib_ref is unset in the answers, so the pinned ref is unverified")

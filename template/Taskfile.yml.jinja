@@ -13,6 +13,9 @@ vars:
   K8S_VERSION: "{{ k8s_version }}"
   # The datreeio CRD-catalog revision kubeconform reads CR schemas from.
   # Pinned to a sha: a catalog rewrite must not change what this gate accepts.
+{%- if ci_shape == 'gitlab_selfhosted' %}
+  # .gitlab-ci.yml's flux-lint include passes the same commit; bump both.
+{%- endif %}
   CRD_CATALOG_REF: "ad3b08c5045129d7bb1eeffd8e61719b2c8dd1e2"
   # Resources kubeconform may validate against no schema. Raise it for a CR
   # the public catalog does not carry; see docs/ARCHITECTURE.md.
@@ -47,6 +50,7 @@ tasks:
       - task: kustomization
 {%- if ci_shape == 'gitlab_selfhosted' %}
       - task: lib-pins
+      - task: ci-job-names
 {%- endif %}
 
   yaml-lint:
@@ -165,6 +169,17 @@ tasks:
       - *needs_pyyaml
     cmds:
       - python3 scripts/check-lib-pins.py --project {{ lib_project }}
+
+  ci-job-names:
+    desc: "Every optional `needs:` resolves to a job an include creates (needs pyyaml + a library checkout)."
+    # GitLab ignores an optional need naming no job, so a renamed library job
+    # stops the review waiting for lint and nothing says so.
+    preconditions:
+      - *needs_pyyaml
+      - sh: test -d "$WEISSSRV_LIB_PATH"
+        msg: "set WEISSSRV_LIB_PATH to a {{ lib_project }} checkout at {{ lib_ref }}"
+    cmds:
+      - python3 scripts/check-ci-include-job-names.py --require-optional-needs
 {%- endif %}
 
   render:

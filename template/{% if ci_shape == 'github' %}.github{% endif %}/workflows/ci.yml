@@ -25,12 +25,12 @@ env:
   # or the pre-commit rev for gitleaks) by tests/test_pin_parity.py — bump both
   # sides together.
   YAMLLINT_VERSION: "1.38.0"
-  KUSTOMIZE_VERSION: "5.8.1"
-  KUSTOMIZE_SHA256: "029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d"
+  KUSTOMIZE_VERSION: "5.8.2"
+  KUSTOMIZE_SHA256: "06af0a202c2b831207d0173f9c9cdb1b30abceca0747cb3fbb72792d26055c95"
   KUBECONFORM_VERSION: "0.8.0"
   KUBECONFORM_SHA256: "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883"
-  SHELLCHECK_VERSION: "0.10.0"
-  SHELLCHECK_SHA256: "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87"
+  SHELLCHECK_VERSION: "0.11.0"
+  SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
   RUFF_VERSION: "0.16.7"
   GITLEAKS_VERSION: "8.30.1"
   GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
@@ -182,7 +182,10 @@ jobs:
           else
             run_gate check-netpol-except-parity.py "$MANIFEST_ROOT"
           fi
-          run_gate check-scrape-wiring.py "$MANIFEST_ROOT"
+          # --namespace-from-tree, not --namespace: a byte-identical copy cannot
+          # carry a tenant's namespace, and a monitor scoped with matchNames is
+          # refused without one.
+          run_gate check-scrape-wiring.py --namespace-from-tree "$MANIFEST_ROOT"
           run_gate check-kustomization.py "$MANIFEST_ROOT"
           if [ "$ran" -eq 0 ]; then
             echo "ERROR: no manifest gate ran — scripts/ ships none of them, so this job proves nothing"
@@ -250,9 +253,26 @@ jobs:
           fi
           ruff check --no-cache --output-format concise scripts
 
-  # --- docs-link-check: relative Markdown cross-links resolve ---------------
-  docs-link-check:
-    name: docs-link-check
+  # --- comment-length: the comment convention, over the whole tree ----------
+  # The GitLab twin is ci/lint/comment-length.yml. Same vendored gate, same
+  # whole-tree scan, and no config, so the stdlib-only run needs no PyYAML.
+  comment-length:
+    name: comment-length
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          # This job executes PR-controlled repository content
+          # (scripts/check-comment-length.py), and nothing here pushes.
+          persist-credentials: false
+      - name: Check comment length
+        # The gate exits 2 when it found no scannable file, so a repo whose
+        # tree stopped resolving fails instead of reporting green.
+        run: python3 scripts/check-comment-length.py .
+
+  # --- lint-docs-links: relative Markdown cross-links resolve ---------------
+  lint-docs-links:
+    name: lint-docs-links
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0

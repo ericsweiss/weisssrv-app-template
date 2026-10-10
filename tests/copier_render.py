@@ -77,11 +77,12 @@ def cli_main(repo_root: Path, answers: Path, prefix: str,
 
 def check_registered_copies(lib_path: Path, repo_root: Path,
                             manifest_relpath: str = "scripts/vendored-manifest.yml",
-                            label: str = "registered copies") -> List[str]:
+                            label: str = "registered copies",
+                            ref: Optional[str] = None) -> List[str]:
     """Run the library's comparison engine over this repository's manifest.
 
-    The consumer owns the manifest; the engine and offer list stay library-side
-    and a missing engine is a failure, never a skip.
+    The consumer owns the manifest and a missing engine is a failure, never a
+    skip. `ref` is the consumer's own pin, so the compare target is that release.
     """
     checker = lib_path / "scripts" / "check-vendored-copies.py"
     if not checker.is_file():
@@ -95,13 +96,15 @@ def check_registered_copies(lib_path: Path, repo_root: Path,
             "%s does not exist — the vendored-copy gate has nothing to check, "
             "and it must not silently skip" % manifest
         ]
-    result = subprocess.run(
-        [sys.executable, str(checker),
-         "--manifest", str(manifest),
-         "--repo-root", str(repo_root),
-         "--lib-path", str(lib_path)],
-        capture_output=True, text=True,
-    )
+    argv = [
+        sys.executable, str(checker),
+        "--manifest", str(manifest),
+        "--repo-root", str(repo_root),
+        "--lib-path", str(lib_path),
+    ]
+    if ref:
+        argv += ["--ref", str(ref)]
+    result = subprocess.run(argv, capture_output=True, text=True)
     print("  %-22s %s" % (label, "ok" if result.returncode == 0 else "FAILED"))
     if result.returncode:
         sys.stdout.write(result.stdout)

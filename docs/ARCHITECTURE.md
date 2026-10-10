@@ -120,9 +120,11 @@ python3 tests/validate_render.py --lib-path /path/to/lib       # + vendored copi
 python3 tests/validate_render.py --lib-path ../weisssrv-lib --allow-ref-mismatch # warn, do not fail
 ```
 
-`--lib-path` needs a checkout AT the pinned ref; `--allow-ref-mismatch` turns
-that failure into a printed warning, for validating against an unreleased
-library. CI never passes it.
+The vendored-copy gate compares against the library's blobs AT the pinned tag,
+so the checkout `--lib-path` names may sit anywhere. The include-contract gates
+read library templates out of that working tree instead, so they need it at the
+pinned ref; `--allow-ref-mismatch` turns that failure into a printed warning,
+for validating against an unreleased library. CI never passes it.
 
 The render is `git init`-ed before the gates run. The doc-link checker reads
 `git ls-files`, and an untracked tree would silently narrow it to `docs/` and
@@ -138,8 +140,8 @@ The vendored copies live in this repository, not in a generated one: the helpers
 at the root are what this repo lints and, where it has the tree for them, runs
 on itself; the same helpers under `template/scripts/` and the GitHub workflows
 are what it hands to a tenant. Every gate script is a byte-identical library copy, as are the `ci.yml`,
-`release.yml` and `build-image.yml` workflows. The `manifest-gates.yml` workflow
-is this template's own and is deliberately unregistered. That relationship is
+`release.yml` and `build-image.yml` workflows, which is every workflow the
+GitHub shape ships. That relationship is
 recorded HERE, in `scripts/vendored-manifest.yml`, and checked by the library's
 `check-vendored-copies.py`, which `tests/validate_render.py --lib-path` runs
 against a checkout at `copier.yml`'s `lib_ref` default.
@@ -176,9 +178,9 @@ egress fence (`scripts/check-netpol-except-parity.py`, run there by `task netpol
 and the GitLab shape's `netpol-check` job), the scrape-wiring gate
 (`task scrape-wiring` / `scrape-wiring-check`) and the kustomization gate
 (`task kustomization` / `kustomization-check`). The GitHub shape runs all three
-in its template-owned `manifest-gates` workflow, which has no library
-counterpart. The generated `docs/ARCHITECTURE.md` says so where the tenant reads
-it.
+in the vendored `ci.yml`'s `manifest-gates` job, the one `release.yml` waits on —
+docs/CI-SHAPES.md § Why the GitHub workflows are shaped as they are has the
+detail. The generated `docs/ARCHITECTURE.md` says so where the tenant reads it.
 
 ## What this template does not do
 

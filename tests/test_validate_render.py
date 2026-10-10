@@ -247,7 +247,7 @@ def test_a_ref_mismatch_can_be_waived(tmp_path, capsys, monkeypatch) -> None:
 
 
 def test_a_library_without_the_engine_is_reported(tmp_path) -> None:
-    problems = validate_render.check_registered_copies(tmp_path / "lib")
+    problems = validate_render.check_registered_copies(tmp_path / "lib", LIB_REF)
     assert problems and "check-vendored-copies.py" in problems[0]
 
 
@@ -257,83 +257,67 @@ def test_a_missing_manifest_is_reported(tmp_path, monkeypatch) -> None:
     checker.parent.mkdir(parents=True)
     checker.write_text("")
     monkeypatch.setattr(validate_render.render_app, "REPO_ROOT", tmp_path / "empty")
-    problems = validate_render.check_registered_copies(tmp_path / "lib")
-    assert problems and "vendored-manifest.yml is missing" in problems[0]
+    problems = validate_render.check_registered_copies(tmp_path / "lib", LIB_REF)
+    assert problems and "vendored-manifest.yml does not exist" in problems[0]
+
+
+def _engine(tmp_path: Path, body: str) -> Path:
+    """A library checkout whose comparison engine is `body`."""
+    checker = tmp_path / "lib" / "scripts" / "check-vendored-copies.py"
+    checker.parent.mkdir(parents=True)
+    checker.write_text(body)
+    return tmp_path / "lib"
 
 
 def _copies_engine(tmp_path: Path) -> Path:
-    """A library checkout whose comparison engine passes, so the verdict under
-    test comes from the ref check rather than the engine."""
-    checker = tmp_path / "lib" / "scripts" / "check-vendored-copies.py"
-    checker.parent.mkdir(parents=True)
-    checker.write_text("raise SystemExit(0)\n")
-    return tmp_path / "lib"
+    """An engine that passes, so the verdict comes from how it was invoked."""
+    return _engine(tmp_path, "raise SystemExit(0)\n")
 
 
 def _drifting_copies_engine(tmp_path: Path) -> Path:
-    """A library checkout whose comparison engine reports drift, so the verdict
-    under test comes from the engine rather than the ref check."""
-    checker = tmp_path / "lib" / "scripts" / "check-vendored-copies.py"
-    checker.parent.mkdir(parents=True)
-    checker.write_text(
+    """An engine that reports drift, so the verdict comes from the engine."""
+    return _engine(
+        tmp_path,
         'import sys\nprint("drift: scripts/check-doc-links.py", file=sys.stderr)\n'
-        "raise SystemExit(1)\n"
+        "raise SystemExit(1)\n",
     )
-    return tmp_path / "lib"
 
 
-def test_the_copies_gate_reports_drift_the_engine_found(tmp_path, capsys, monkeypatch) -> None:
+def test_the_copies_gate_reports_drift_the_engine_found(tmp_path, capsys) -> None:
     """A local edit to a byte-identical library copy must red the gate, and the
     engine's own diff must reach the log."""
-    _stub_git(monkeypatch, [LIB_REF])
-    failures = validate_render.check_registered_copies(_drifting_copies_engine(tmp_path), LIB_REF)
+    failures = validate_render.check_registered_copies(
+        _drifting_copies_engine(tmp_path), LIB_REF
+    )
     captured = capsys.readouterr()
     assert failures == ["registered copies"]
     assert f"{'registered copies':<{validate_render.LABEL_WIDTH}} FAILED" in captured.out
     assert "drift: scripts/check-doc-links.py" in captured.err
 
 
-def test_the_copies_gate_passes_when_the_engine_finds_nothing(
-    tmp_path, capsys, monkeypatch
-) -> None:
-    """The other direction: an engine that exits 0 on a verified checkout is the
-    only shape that may print `ok`."""
-    _stub_git(monkeypatch, [LIB_REF])
+def test_the_copies_gate_passes_when_the_engine_finds_nothing(tmp_path, capsys) -> None:
+    """The other direction: an engine that exits 0 is the only shape that may
+    print `ok`."""
     assert validate_render.check_registered_copies(_copies_engine(tmp_path), LIB_REF) == []
     assert f"{'registered copies':<{validate_render.LABEL_WIDTH}} ok" in capsys.readouterr().out
 
 
-def test_the_copies_gate_fails_on_a_checkout_at_another_tag(tmp_path, capsys, monkeypatch) -> None:
-    """Byte-identity is a claim about the pinned ref: computed against another
-    tree it is not that claim, so the row must not read `ok`."""
-    lib = _copies_engine(tmp_path)
-    monkeypatch.setattr(validate_render, "_checkout_ref", lambda path: ["v9.9.9"])
-    failures = validate_render.check_registered_copies(lib, LIB_REF)
-    out = capsys.readouterr().out
-    assert failures == ["registered copies"]
-    assert "the wrong templates" in out
-    assert "registered copies      ok" not in out
-
-
-def test_a_copies_ref_mismatch_is_reported_unverified_when_waived(
-    tmp_path, capsys, monkeypatch
-) -> None:
-    """`--allow-ref-mismatch` is the path docs/ARCHITECTURE.md sends people
-    down, so it must not print an authoritative-looking verdict."""
-    lib = _copies_engine(tmp_path)
-    monkeypatch.setattr(validate_render, "_checkout_ref", lambda path: ["v9.9.9"])
-    failures = validate_render.check_registered_copies(lib, LIB_REF, allow_ref_mismatch=True)
-    out = capsys.readouterr().out
-    assert failures == []
-    assert "warning:" in out
-    assert "SKIPPED (ref unverified)" in out
-    assert "registered copies      ok" not in out
+def test_the_copies_gate_compares_at_the_pinned_ref(tmp_path, capsys) -> None:
+    """Byte-identity is a claim about the pinned tag, so the engine has to be
+    told which one; against the checkout's working tree it is not that claim."""
+    engine = _engine(
+        tmp_path,
+        "import sys\n"
+        f"raise SystemExit(0 if '--ref' in sys.argv and {LIB_REF!r} in sys.argv else 1)\n",
+    )
+    assert validate_render.check_registered_copies(engine, LIB_REF) == []
+    assert f"{'registered copies':<{validate_render.LABEL_WIDTH}} ok" in capsys.readouterr().out
 
 
 def test_a_copies_gate_with_no_pinned_ref_is_reported(tmp_path, capsys) -> None:
     """No pinned ref means byte-identity has no subject, and the gate must say
     so rather than compare against whatever is checked out."""
-    failures = validate_render.check_registered_copies(_copies_engine(tmp_path))
+    failures = validate_render.check_registered_copies(_copies_engine(tmp_path), None)
     assert failures == ["registered copies"]
     assert "pins no library ref" in capsys.readouterr().out
 
@@ -389,7 +373,7 @@ def test_a_pipeline_with_no_lib_ref_variable_fails_the_self_check(
     (root / ".gitlab-ci.yml").write_text(yaml.safe_dump({"stages": ["lint"], "include": []}))
     monkeypatch.setattr(validate_render.render_app, "REPO_ROOT", root)
     assert validate_render.check_own_include_contract(tmp_path / "lib") == [
-        "include contract (self)"
+        "own include contract"
     ]
     assert "WEISSSRV_LIB_REF is unset" in capsys.readouterr().out
 
