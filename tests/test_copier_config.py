@@ -6,7 +6,6 @@ rather than after three renders. The render invariants are test_render.py.
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import sys
@@ -188,112 +187,6 @@ def test_library_pin_is_the_same_in_the_pipeline_and_the_answer_default():
     want = CONFIG["lib_ref"]["default"]
     assert pinned, "variables.WEISSSRV_LIB_REF is unset — this gate examined nothing"
     assert pinned == want, f".gitlab-ci.yml pins {pinned} but copier.yml lib_ref default is {want}"
-
-
-def _version(tag: str) -> tuple:
-    parts = tag.lstrip("v").split(".")
-    return tuple(int(part) for part in parts if part.isdigit())
-
-
-def test_every_template_release_has_a_validated_pair_row():
-    """Nothing at tag time writes the row, so a release cut without relabelling
-    the `main` row leaves the pair unrecorded. The NEWEST tag is exempt: the
-    `main` row is its pair until the following change relabels it."""
-    tags = subprocess.run(
-        ["git", "tag", "-l", "v*"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert tags.returncode == 0, (
-        "git could not list tags, so this gate verified nothing: " + tags.stderr.strip()
-    )
-    if not tags.stdout.strip():
-        if os.environ.get("CI"):
-            pytest.fail("no tags in this checkout, so the validated-pair table went unchecked")
-        pytest.skip("no tags in this checkout (shallow clone)")
-    table = (REPO_ROOT / "docs" / "VERSIONING.md").read_text(encoding="utf-8")
-    rows = {
-        cell.strip().strip("`")
-        for line in table.splitlines()
-        if line.strip().startswith("|")
-        for cell in [line.split("|")[1]]
-    }
-    released = sorted(tags.stdout.split(), key=_version)
-    missing = [tag for tag in released[:-1] if tag not in rows]
-    assert not missing, (
-        "docs/VERSIONING.md's validated-pair table has no row for: " + ", ".join(missing)
-    )
-
-
-def _default_of(question) -> object:
-    """A question's default, whatever shorthand declares it."""
-    return question.get("default") if isinstance(question, dict) else question
-
-
-def _answer_set_changes(previous: dict, current: dict) -> list[str]:
-    """Answer-set changes a generated repo cannot absorb by reviewing a diff: a
-    question gone (a rename reads as one), or a default that resolves anew."""
-    changes = [f"{name} (removed or renamed)" for name in sorted(set(previous) - set(current))]
-    changes += [
-        f"{name} (default changed)"
-        for name in sorted(set(previous) & set(current))
-        if _default_of(previous[name]) != _default_of(current[name])
-    ]
-    return changes
-
-
-def _questions_at(ref: str) -> dict:
-    """copier.yml's question set at a git ref."""
-    result = subprocess.run(
-        ["git", "show", f"{ref}:copier.yml"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, (
-        f"git could not read copier.yml at {ref}, so this gate verified nothing: "
-        + result.stderr.strip()
-    )
-    config = yaml.safe_load(result.stdout)
-    return {k: v for k, v in config.items() if not k.startswith("_")}
-
-
-def test_every_answer_set_change_since_the_last_release_is_recorded():
-    """The answer set is the template's public API: copier replays it on every
-    update, so a question gone or a default resolving anew is work the operator
-    does by hand. docs/VERSIONING.md is where they read about it."""
-    tags = subprocess.run(
-        ["git", "tag", "-l", "v*"], cwd=REPO_ROOT, capture_output=True, text=True, check=False
-    )
-    assert tags.returncode == 0, (
-        "git could not list tags, so this gate verified nothing: " + tags.stderr.strip()
-    )
-    if not tags.stdout.strip():
-        if os.environ.get("CI"):
-            pytest.fail("no tags in this checkout, so the answer-set diff went unchecked")
-        pytest.skip("no tags in this checkout (shallow clone)")
-    newest = max(tags.stdout.split(), key=_version)
-    changes = _answer_set_changes(_questions_at(newest), QUESTIONS)
-    versioning = (REPO_ROOT / "docs" / "VERSIONING.md").read_text(encoding="utf-8")
-    unrecorded = [change for change in changes if change.split()[0] not in versioning]
-    assert not unrecorded, (
-        f"these answers changed since {newest} and docs/VERSIONING.md names none of them — "
-        "add each under Answer-set changes since the last release: " + ", ".join(unrecorded)
-    )
-
-
-def test_the_answer_set_diff_notices_a_rename_and_a_flipped_default():
-    """The gate above passes vacuously whenever the answer set is unchanged, so
-    the diff itself is exercised on a mutated pair."""
-    previous = {"old_name": {"default": "x"}, "enable_thing": {"type": "bool", "default": False}}
-    current = {"new_name": {"default": "x"}, "enable_thing": {"type": "bool", "default": True}}
-    changes = _answer_set_changes(previous, current)
-    assert "old_name (removed or renamed)" in changes
-    assert "enable_thing (default changed)" in changes
-    assert _answer_set_changes(previous, previous) == []
 
 
 def _referenced_questions(text: str) -> set[str]:
@@ -827,34 +720,16 @@ def test_conditional_paths_name_declared_questions():
 _TAG_LITERAL = re.compile(r"\bv\d+\.\d+\.\d+\b")
 
 
-def _is_historical(path, line: str) -> bool:
-    """Lines recording what a past release pinned, not what to pin now.
-
-    A `_commit:` marker, or a validated-pair row whose first cell is a released
-    template tag. The `main` row and every other table stay scanned.
-    """
-    stripped = line.strip()
-    if stripped.startswith("_commit:"):
-        return True
-    if not (stripped.startswith("|") and path.name == "VERSIONING.md"):
-        return False
-    cells = stripped.split("|")
-    return len(cells) > 1 and "main" not in cells[1] and bool(_TAG_LITERAL.search(cells[1]))
-
-
 def test_docs_quote_only_the_current_library_tag():
     """Every library tag quoted in the docs equals the `lib_ref` default.
 
-    Nothing else ties the docs to that default. `_commit:` markers in
-    .copier-answers.yml examples name superseded tags and stay exempt.
+    Nothing else ties the docs to that default.
     """
     want = CONFIG["lib_ref"]["default"]
     stale = []
     found = 0
     for path in [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").glob("*.md"))]:
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if _is_historical(path, line):
-                continue
             for tag in _TAG_LITERAL.findall(line):
                 found += 1
                 if tag != want:
@@ -866,25 +741,6 @@ def test_docs_quote_only_the_current_library_tag():
     assert not stale, (
         f"docs quote a library tag other than copier.yml's lib_ref default ({want}):\n  "
         + "\n  ".join(stale)
-    )
-
-
-def test_the_unreleased_pair_row_quotes_the_current_library_tag():
-    """The validated-pair table is the only place the pair a release ships is
-    written down, and a library bump has to relabel the `main` row by hand."""
-    want = CONFIG["lib_ref"]["default"]
-    rows = [
-        line.strip().split("|")
-        for line in (REPO_ROOT / "docs" / "VERSIONING.md").read_text(encoding="utf-8").splitlines()
-        if line.strip().startswith("|") and "main" in line.strip().split("|")[1]
-    ]
-    assert len(rows) == 1, (
-        f"the validated-pair table has {len(rows)} `main` rows, not one — this gate "
-        "no longer knows which row records the unreleased pair"
-    )
-    assert _TAG_LITERAL.findall(rows[0][2]) == [want], (
-        "the `main` validated-pair row does not quote copier.yml's lib_ref default "
-        f"({want}): {rows[0][2].strip()}"
     )
 
 
@@ -922,7 +778,7 @@ def test_every_vendored_consumer_path_exists():
 
 # The scrape gate refuses a ServiceMonitor's `matchNames` without `--namespace`,
 # so a template-owned caller that omits the answer reds on a tenant's own
-# manifest. The vendored workflow takes no answer: docs/VERSIONING.md, Pending.
+# manifest. The vendored workflow takes no copier answer and passes none.
 SCRAPE_INVOCATION = re.compile(r"python3?\s+scripts/check-scrape-wiring\.py")
 
 

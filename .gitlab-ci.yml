@@ -30,8 +30,8 @@ workflow:
 
 variables:
   LIB_PROJECT: "eric/weisssrv-lib"
-  # Full clone: the copier.yml release gates read `git tag -l` and
-  # `git show <tag>:copier.yml`, and a shallow fetch creates no tag refs.
+  # Full clone: the semantic-release job scans the commit range since the newest
+  # tag, and a shallow fetch creates no tag refs.
   GIT_DEPTH: "0"
   # Single source for the library pin. `include:` cannot read it, so each entry
   # below repeats the tag as a literal and scripts/check-lib-pins.py fails the
