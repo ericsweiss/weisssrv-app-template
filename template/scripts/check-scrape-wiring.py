@@ -21,6 +21,37 @@ DEFAULT_OBSERVABILITY_NS = "observability"
 WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet")
 ENDPOINT_KEYS = {"PodMonitor": "podMetricsEndpoints", "ServiceMonitor": "endpoints"}
 
+# kustomize's own documents are build inputs, not resources, and share a kind
+# name with the namespaced Flux CR, so they are recognised by API group.
+KUSTOMIZE_GROUP = "kustomize.config.k8s.io"
+
+# Kinds that exist outside any namespace. They carry none by definition, so they
+# are not grouped and cannot make a tree's namespaces ambiguous.
+CLUSTER_SCOPED_KINDS = frozenset(
+    {
+        "APIService",
+        "ClusterExternalSecret",
+        "ClusterIssuer",
+        "ClusterRole",
+        "ClusterRoleBinding",
+        "ClusterSecretStore",
+        "CSIDriver",
+        "CustomResourceDefinition",
+        "IngressClass",
+        "MutatingWebhookConfiguration",
+        "Namespace",
+        "Node",
+        "PersistentVolume",
+        "PriorityClass",
+        "ProxyClass",
+        "RuntimeClass",
+        "StorageClass",
+        "ValidatingAdmissionPolicy",
+        "ValidatingWebhookConfiguration",
+        "VolumeSnapshotClass",
+    }
+)
+
 # Policy shapes this gate only partly models, named in the failure message.
 UNMODELLED: list[str] = []
 
@@ -80,13 +111,13 @@ def load_documents(base: pathlib.Path) -> tuple[list[dict], list[str]]:
 
 def matching_workloads(
     documents: list[dict], pods: dict
-) -> tuple[dict[str, int], set[int], dict]:
+) -> tuple[dict[str, set[int]], set[int], dict]:
     """Port names, port numbers and widened labels of the workloads `pods` selects.
 
     A policy naming a label beyond the Service selector still admits the
     scrape, so the subset test runs against the pod labels, not the selector.
     """
-    names: dict[str, int] = {}
+    names: dict[str, set[int]] = {}
     numbers: set[int] = set()
     shared: dict | None = None
     for document in documents:
@@ -114,18 +145,31 @@ def matching_workloads(
                     continue
                 numbers.add(number)
                 if port.get("name"):
-                    names[port["name"]] = number
+                    names.setdefault(port["name"], set()).add(number)
+    for port_name, values in sorted(names.items()):
+        if len(values) > 1:
+            raise GateError(
+                f"the workloads carrying {pods} declare a port named {port_name!r} at "
+                f"{sorted(values)}: one name at two numbers, so a policy naming it "
+                "resolves to whichever workload was read last. Give each number its "
+                "own name, or split the Service."
+            )
     return names, numbers, {**pods, **(shared or {})}
 
 
-def spellings(port: int | str, names: dict[str, int]) -> set[int | str]:
+def spellings(port: int | str, names: dict[str, set[int]]) -> set[int | str]:
     """A port as a NetworkPolicy may legally name it: the number and its name."""
-    number = names.get(port, port)
-    return {number} | {name for name, value in names.items() if value == number}
+    numbers = names.get(port) or set()
+    number = sorted(numbers)[0] if numbers else port
+    return {number} | {name for name, values in names.items() if number in values}
 
 
 def services_for(documents: list[dict], selector: dict) -> list[dict]:
-    """Every Service carrying the monitor's labels."""
+    """Every Service carrying the monitor's labels.
+
+    Matched on labels only; whether one has a `spec.selector` the gate can
+    follow to a workload is `pod_port`'s to refuse.
+    """
     matched = []
     for document in documents:
         if document.get("kind") != "Service":
@@ -188,7 +232,15 @@ def pod_port(
     for service in services:
         subject = f" (Service {(service.get('metadata') or {}).get('name')})"
         service_spec = mapping(service.get("spec"), describe(service), "spec")
-        pods = mapping(service_spec.get("selector"), describe(service), "spec.selector") or selector
+        pods = mapping(service_spec.get("selector"), describe(service), "spec.selector")
+        if not pods:
+            raise Violation(
+                f"{name}{subject}: the Service declares no spec.selector, so its "
+                "endpoints are managed by hand and no workload here serves the "
+                "scraped port. Crediting a policy against it certifies nothing — "
+                "give the Service a selector, or move the scrape where the "
+                "endpoints are declared."
+            )
         if named is None:
             # `targetPort` names a pod port directly, by name or by number.
             targets.append((*resolve_target(documents, pods, target, name), subject))
@@ -313,13 +365,115 @@ def admits(policy: dict, pods: dict, accepted: set[int | str], scrape_ns: str) -
     return False
 
 
+def tree_namespace(documents: list[dict]) -> tuple[str | None, str | None]:
+    """The namespace a Namespace manifest in the tree names, else why not.
+
+    Derivation is only consulted when a monitor declares matchNames, so a tree
+    that ships no Namespace (the operator owns it) is unaffected.
+    """
+    named = sorted(
+        {
+            (document.get("metadata") or {}).get("name")
+            for document in documents
+            if document.get("kind") == "Namespace"
+        }
+        - {None, ""}
+    )
+    if len(named) == 1:
+        return named[0], None
+    if not named:
+        return None, (
+            "without a namespace: --namespace-from-tree found no named Namespace "
+            "manifest here, so ship the Namespace this tree deploys into, or pass "
+            "--namespace."
+        )
+    return None, (
+        f"without a namespace: --namespace-from-tree found {len(named)} of them here "
+        f"({', '.join(named)}), and the policies here cover one namespace only. Split "
+        "the tree, or pass --namespace."
+    )
+
+
+def unnamespaced(document: dict) -> bool:
+    """Can this document carry no namespace at all?"""
+    group = str(document.get("apiVersion") or "").split("/", 1)[0]
+    return group == KUSTOMIZE_GROUP or document.get("kind") in CLUSTER_SCOPED_KINDS
+
+
+def effective_namespace(document: dict, default: str | None) -> str | None:
+    """The namespace a document lands in: its own, else --namespace."""
+    metadata = document.get("metadata")
+    own = metadata.get("namespace") if isinstance(metadata, dict) else None
+    return str(own) if own else default
+
+
+def group_by_namespace(
+    documents: list[dict], namespace: str | None
+) -> dict[str | None, list[dict]]:
+    """Namespaced documents keyed by effective namespace: their own, else the tree's.
+
+    A policy admits only its own namespace's pods, so each group is judged
+    alone; a tree stating ONE namespace lends it to the documents naming none.
+    """
+    # A document that can hold no namespace is neither monitor nor policy, and
+    # reading its absent namespace as "unassigned" refuses a valid tree.
+    namespaced = [d for d in documents if not unnamespaced(d)]
+    stated = {effective_namespace(d, None) for d in namespaced} - {None}
+    default = namespace
+    if default is None and len(stated) == 1:
+        default = next(iter(stated))
+    groups: dict[str | None, list[dict]] = {}
+    for document in namespaced:
+        groups.setdefault(effective_namespace(document, default), []).append(document)
+    return groups
+
+
 def check(
     documents: list[dict],
     scrape_ns: str = DEFAULT_OBSERVABILITY_NS,
     namespace: str | None = None,
+    namespace_error: str | None = None,
 ) -> int:
-    """Every monitor's scraped port, against the policies beside it."""
+    """Every monitor's scraped port, against the policies in its own namespace."""
     UNMODELLED.clear()
+    groups = group_by_namespace(documents, namespace)
+    stated = sorted(ns for ns in groups if ns is not None)
+    if namespace and [ns for ns in stated if ns != namespace]:
+        raise GateError(
+            f"--namespace {namespace} disagrees with the namespaces the tree states "
+            f"({', '.join(stated)}): a document in another namespace cannot be judged "
+            "against it. Point the gate at one namespace's manifests, or drop "
+            "--namespace and let each document's own namespace stand."
+        )
+    if None in groups and len(groups) > 1:
+        unassigned = [describe(d) for d in groups[None]]
+        raise GateError(
+            f"the tree states namespaces {', '.join(stated)} but names none for "
+            f"{', '.join(unassigned)}: a document cannot be grouped by guess. Give "
+            "each one a namespace, pass --namespace, or split the tree."
+        )
+    monitors = 0
+    for group_ns in sorted(groups, key=lambda ns: ns or ""):
+        monitors += check_namespace(
+            groups[group_ns], scrape_ns, group_ns, namespace_error
+        )
+    if not monitors:
+        print(
+            f"{len(documents)} document(s), no ServiceMonitor or PodMonitor; "
+            "nothing to check"
+        )
+        return 0
+    print(f"{monitors} monitor(s); every scraped port is admitted from {scrape_ns}")
+    return 0
+
+
+def check_namespace(
+    documents: list[dict],
+    scrape_ns: str,
+    namespace: str | None,
+    namespace_error: str | None = None,
+) -> int:
+    """One namespace's monitors against its own policies; the count checked."""
     monitors = [d for d in documents if d.get("kind") in ENDPOINT_KEYS]
     if not monitors:
         declared = scrape_allow(documents, scrape_ns)
@@ -329,10 +483,6 @@ def check(
                 "or PodMonitor is present: a gate that checks nothing is not a gate. "
                 "Restore the monitor, or remove the scrape allow with it."
             )
-        print(
-            f"{len(documents)} document(s), no ServiceMonitor or PodMonitor; "
-            "nothing to check"
-        )
         return 0
 
     policies = [d for d in documents if d.get("kind") == "NetworkPolicy"]
@@ -342,8 +492,9 @@ def check(
         spec = mapping(monitor.get("spec"), describe(monitor), "spec")
         scope = mapping(spec.get("namespaceSelector"), describe(monitor), "spec.namespaceSelector")
         names = scope.get("matchNames") or []
-        # The tree names no namespace, so a matchNames entry is verified against
-        # --namespace or refused; an unverified name would certify another namespace.
+        # A matchNames entry must equal the namespace this group is judged in —
+        # the documents' own, --namespace, or the tree's Namespace — else it is
+        # refused; an unverified name would certify another namespace.
         if set(scope) - {"any", "matchNames"} or scope.get("any") or len(names) > 1:
             raise GateError(
                 f"{name}: spec.namespaceSelector scopes the scrape outside this directory, "
@@ -352,13 +503,15 @@ def check(
                 "`--namespace`; a wider scrape must be checked where those policies live."
             )
         if names and names != [namespace]:
+            if namespace:
+                detail = (f"against --namespace {namespace}: the policies here cover "
+                          "that namespace only.")
+            else:
+                detail = namespace_error or (
+                    "without --namespace: pass the namespace this tree deploys into.")
             raise GateError(
                 f"{name}: spec.namespaceSelector.matchNames {names} cannot be verified "
-                + (
-                    f"against --namespace {namespace}: the policies here cover that namespace only."
-                    if namespace
-                    else "without --namespace: pass the namespace this tree deploys into."
-                )
+                + detail
             )
         selector = mapping(
             mapping(spec.get("selector"), describe(monitor), "spec.selector").get("matchLabels"),
@@ -384,8 +537,7 @@ def check(
                 )
                 raise Violation("\n".join([message, *UNMODELLED]))
 
-    print(f"{len(monitors)} monitor(s); every scraped port is admitted from {scrape_ns}")
-    return 0
+    return len(monitors)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -401,9 +553,15 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_OBSERVABILITY_NS,
         help="namespace Prometheus scrapes from (default: %(default)s)",
     )
-    parser.add_argument(
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument(
         "--namespace",
         help="namespace this tree deploys into; a monitor's matchNames must equal it",
+    )
+    scope.add_argument(
+        "--namespace-from-tree",
+        action="store_true",
+        help="read that namespace from the one Namespace manifest under the directory",
     )
     arguments = parser.parse_args(argv)
 
@@ -429,8 +587,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    namespace, namespace_error = arguments.namespace, None
+    if arguments.namespace_from_tree:
+        namespace, namespace_error = tree_namespace(documents)
+
     try:
-        return check(documents, arguments.observability_namespace, arguments.namespace)
+        return check(
+            documents, arguments.observability_namespace, namespace, namespace_error
+        )
     except GateError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
