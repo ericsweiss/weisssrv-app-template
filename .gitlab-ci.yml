@@ -119,7 +119,6 @@ include:
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
-      job_name: lint-docs-links
       changes:
         - "docs/**/*"
         - "README.md"

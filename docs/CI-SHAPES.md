@@ -37,8 +37,8 @@ including the deploy-notes prompt about new secrets and cluster-side wiring.
 | `kustomize build` + kubeconform | `flux-lint` (library template) | `flux-lint` job | `task flux-lint` |
 | ruff | `python-lint` (library template) | `python-lint` job | `task python-lint` |
 | shellcheck | n/a — no GitLab counterpart; a tenant with shell scripts adds the library's `shellcheck` template | `shellcheck` job, skipped when the repo has no `.sh` files | n/a |
-| Markdown link check | `lint-docs-links` (library template, renamed via the `job_name` input) | `docs-link-check` job — the vendored `ci.yml` carries the library's job id and takes the name in the library release that changes the default | `task doc-links` |
-| Comment convention (`check-comment-length.py`) | `comment-length` (library template), plus `task comment-length` locally | n/a — the vendored `ci.yml` carries no counterpart; `task comment-length` locally | `task comment-length` |
+| Markdown link check | `lint-docs-links` (library template) | `lint-docs-links` job | `task doc-links` |
+| Comment convention (`check-comment-length.py`) | `comment-length` (library template), plus `task comment-length` locally | `comment-length` job, plus `task comment-length` locally | `task comment-length` |
 | Secret scanning | GitLab Secret Detection (gitleaks under the hood), findings block | gitleaks directly, same `.gitleaks.toml`, findings block | pre-commit gitleaks hook |
 | Library pin gate | `lib-pin-check`, plus `task lib-pins` locally | n/a — no includes to pin | n/a |
 | Optional-need gate (`check-ci-include-job-names.py`) | `ci-job-names-check`, plus `task ci-job-names` locally | n/a — a workflow `needs:` names a job in the same file | n/a |
@@ -119,7 +119,8 @@ The reasoning behind them lives here.
 **`lint-docs-links` image.** The library already defaults to the full
 `python:3.11`, which carries the `git` the tracked-Markdown scan shells out to.
 The `python:3.13` input is an interpreter bump, not a capability fix, and the
-checker raises rather than degrading when `git` is missing.
+checker raises rather than degrading when `git` is missing. The job name is the
+library's own default, so no `job_name` input restates it.
 
 **`cpu_selector` on secret detection and the image build.** gitleaks needs
 POPCNT/SSE4.2 and SIGILLs on older CPUs, so both jobs always emit a CPU node
