@@ -120,9 +120,11 @@ python3 tests/validate_render.py --lib-path /path/to/lib       # + vendored copi
 python3 tests/validate_render.py --lib-path ../weisssrv-lib --allow-ref-mismatch # warn, do not fail
 ```
 
-`--lib-path` needs a checkout AT the pinned ref; `--allow-ref-mismatch` turns
-that failure into a printed warning, for validating against an unreleased
-library. CI never passes it.
+The vendored-copy gate compares against the library's blobs AT the pinned tag,
+so the checkout `--lib-path` names may sit anywhere. The include-contract gates
+read library templates out of that working tree instead, so they need it at the
+pinned ref; `--allow-ref-mismatch` turns that failure into a printed warning,
+for validating against an unreleased library. CI never passes it.
 
 The render is `git init`-ed before the gates run. The doc-link checker reads
 `git ls-files`, and an untracked tree would silently narrow it to `docs/` and
