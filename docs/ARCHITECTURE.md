@@ -176,9 +176,10 @@ egress fence (`scripts/check-netpol-except-parity.py`, run there by `task netpol
 and the GitLab shape's `netpol-check` job), the scrape-wiring gate
 (`task scrape-wiring` / `scrape-wiring-check`) and the kustomization gate
 (`task kustomization` / `kustomization-check`). The GitHub shape runs all three
-in its template-owned `manifest-gates` workflow, which has no library
-counterpart. The generated `docs/ARCHITECTURE.md` says so where the tenant reads
-it.
+in this template's own `manifest-gates` workflow and again in the vendored
+`ci.yml`'s `manifest-gates` job —
+docs/CI-SHAPES.md § Why the GitHub workflows are shaped as they are has the
+detail. The generated `docs/ARCHITECTURE.md` says so where the tenant reads it.
 
 ## What this template does not do
 
