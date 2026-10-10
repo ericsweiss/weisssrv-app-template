@@ -50,6 +50,7 @@ tasks:
       - task: kustomization
 {%- if ci_shape == 'gitlab_selfhosted' %}
       - task: lib-pins
+      - task: ci-job-names
 {%- endif %}
 
   yaml-lint:
@@ -168,6 +169,17 @@ tasks:
       - *needs_pyyaml
     cmds:
       - python3 scripts/check-lib-pins.py --project {{ lib_project }}
+
+  ci-job-names:
+    desc: "Every optional `needs:` resolves to a job an include creates (needs pyyaml + a library checkout)."
+    # GitLab ignores an optional need naming no job, so a renamed library job
+    # stops the review waiting for lint and nothing says so.
+    preconditions:
+      - *needs_pyyaml
+      - sh: test -d "$WEISSSRV_LIB_PATH"
+        msg: "set WEISSSRV_LIB_PATH to a {{ lib_project }} checkout at {{ lib_ref }}"
+    cmds:
+      - python3 scripts/check-ci-include-job-names.py --require-optional-needs
 {%- endif %}
 
   render:

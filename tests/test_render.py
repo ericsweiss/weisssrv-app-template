@@ -1254,14 +1254,24 @@ def test_pull_secret_is_wired_into_the_pod(repo):
 # shape -> (files it must ship, files it must not)
 SHAPE_FILES = {
     "gitlab_selfhosted": (
-        [".gitlab-ci.yml", ".gitlab/secret-detection-ruleset.toml", "scripts/check-lib-pins.py"],
+        [
+            ".gitlab-ci.yml",
+            ".gitlab/secret-detection-ruleset.toml",
+            "scripts/check-lib-pins.py",
+            "scripts/check-ci-include-job-names.py",
+        ],
         [".github/workflows/ci.yml"],
     ),
     # build-image.yml is not listed here: it is gated on `enable_image_build`
     # as well as the shape, so it has its own test below.
     "github": (
         [".github/workflows/ci.yml", ".github/workflows/manifest-gates.yml"],
-        [".gitlab-ci.yml", ".gitlab/secret-detection-ruleset.toml", "scripts/check-lib-pins.py"],
+        [
+            ".gitlab-ci.yml",
+            ".gitlab/secret-detection-ruleset.toml",
+            "scripts/check-lib-pins.py",
+            "scripts/check-ci-include-job-names.py",
+        ],
     ),
     # Issue and change-request templates are NOT here: they follow the `forge`
     # answer, which test_forge_metadata_follows_the_forge holds.
@@ -1273,6 +1283,7 @@ SHAPE_FILES = {
             ".github/workflows/manifest-gates.yml",
             ".gitlab/secret-detection-ruleset.toml",
             "scripts/semantic-release.py",
+            "scripts/check-ci-include-job-names.py",
         ],
     ),
 }

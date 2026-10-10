@@ -210,9 +210,9 @@ Every helper under `template/scripts/` is a **byte-identical copy** of a
 [`eric/weisssrv-lib`](https://git.ericsweiss.com/eric/weisssrv-lib) file, so the
 copy is what executes. Some are run by the library's job templates from those
 paths; the three manifest gates are run by the generated repo's own jobs and by
-`task lint`. `check-netpol-except-parity.py` imports `gate_common.py` and
-`check-lib-pins.py` imports `ci_yaml.py`, each from its own directory, so those
-pairs ship together.
+`task lint`. `check-netpol-except-parity.py` imports `gate_common.py`, and
+`check-lib-pins.py` and `check-ci-include-job-names.py` both import
+`ci_yaml.py`, each from its own directory, so those sets ship together.
 
 Five are unconditional, so every generated repo carries them on every shape:
 `check-comment-length.py`, `check-doc-links.py`,
@@ -221,7 +221,7 @@ Five are unconditional, so every generated repo carries them on every shape:
 
 | `ci_shape` | What else ships |
 |---|---|
-| `gitlab_selfhosted` | `check-lib-pins.py` with `ci_yaml.py`, and `semantic-release.py` |
+| `gitlab_selfhosted` | `check-lib-pins.py` and `check-ci-include-job-names.py` with `ci_yaml.py`, and `semantic-release.py` |
 | `github` | `semantic-release.py` (the pin gate has no includes to gate) |
 | `none` | nothing further; `task lint` and the pre-commit hooks are the whole gate |
 

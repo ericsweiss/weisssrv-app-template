@@ -217,6 +217,35 @@ lib-pin-check:
         - "scripts/check-lib-pins.py"
     - if: '$CI_COMMIT_BRANCH == "main"'
 
+# Every optional `needs:` must name a job some include creates: GitLab ignores
+# one that names nothing, so a renamed library job stops the review waiting for
+# lint and the pipeline stays green.
+ci-job-names-check:
+  extends: .pyyaml-gate
+  # python:3.13-slim ships no git, and the gate reads the library's own files.
+  image: python:3.13
+  # The shared before_script plus the checkout; `extends` replaces the key, so
+  # the install line is repeated rather than referenced.
+  before_script:
+    - pip install --user --quiet --no-cache-dir "pyyaml==$PYYAML_VERSION"
+    - |
+      # CI_JOB_TOKEN reads {{ lib_project }} only while that project lists this
+      # one under Settings > CI/CD > Job token permissions.
+      git clone --depth 1 --branch "$WEISSSRV_LIB_REF" \
+        "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/{{ lib_project }}.git" \
+        "$CI_PROJECT_DIR/.tmp/weisssrv-lib" \
+        || { echo "cannot clone {{ lib_project }}: add this project to its CI_JOB_TOKEN allowlist" >&2; exit 1; }
+  script:
+    - >-
+      python3 scripts/check-ci-include-job-names.py --require-optional-needs
+      --lib-path "$CI_PROJECT_DIR/.tmp/weisssrv-lib"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - ".gitlab-ci.yml"
+        - "scripts/check-ci-include-job-names.py"
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
 # The egress fence: networkpolicy.yaml's except-list is the only thing keeping
 # this pod off the LAN, the tailnet and the cloud-metadata address, and it is
 # the file a tenant edits to add an egress rule.

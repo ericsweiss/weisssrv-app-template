@@ -227,7 +227,7 @@ ingress:
 
 ## Local gates
 
-`task lint` runs every gate this repo has. Three are worth knowing:
+`task lint` runs every gate this repo has.{% if ci_shape == 'gitlab_selfhosted' %} Four{% else %} Three{% endif %} are worth knowing:
 
 - `flux-lint` fails when kubeconform validated more resources against no schema
   than `ALLOWED_SKIPS` in `Taskfile.yml` allows. A CR your own operator defines
@@ -265,6 +265,13 @@ ingress:
   The `manifest-gates` workflow runs the same script on every change.
 {%- else %}
   No CI job on this shape runs it. The pre-commit hook and `task lint` do.
+{%- endif %}
+{%- if ci_shape == 'gitlab_selfhosted' %}
+- `ci-job-names` resolves every `needs: optional: true` in `.gitlab-ci.yml`
+  against the jobs the includes create, so it needs `WEISSSRV_LIB_PATH` pointed
+  at a `{{ lib_project }}` checkout at `{{ lib_ref }}`. GitLab ignores a need
+  naming no job, so a renamed library job stops blocking the review in silence.
+  The `ci-job-names-check` job runs the same script on a pipeline-file change.
 {%- endif %}
 
 ## Platform contract

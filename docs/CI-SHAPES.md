@@ -5,7 +5,7 @@ outside `kubernetes/`. Three values:
 
 | `ci_shape` | Pipeline | Ships |
 |---|---|---|
-| `gitlab_selfhosted` (default) | self-hosted GitLab, jobs included from `eric/weisssrv-lib` at a pinned tag | `.gitlab-ci.yml`, `.gitlab/secret-detection-ruleset.toml`, `scripts/check-lib-pins.py`, `scripts/semantic-release.py` |
+| `gitlab_selfhosted` (default) | self-hosted GitLab, jobs included from `eric/weisssrv-lib` at a pinned tag | `.gitlab-ci.yml`, `.gitlab/secret-detection-ruleset.toml`, `scripts/check-lib-pins.py`, `scripts/check-ci-include-job-names.py`, `scripts/semantic-release.py` |
 | `github` | GitHub Actions, workflows vendored from the same library | `.github/workflows/{ci,manifest-gates,release}.yml` — plus `build-image.yml` when `enable_image_build` is on — and `scripts/semantic-release.py` |
 | `none` | none | neither pipeline; `scripts/check-comment-length.py`, `scripts/check-doc-links.py`, `scripts/check-kustomization.py`, `scripts/check-netpol-except-parity.py` and `scripts/check-scrape-wiring.py` still ship, and `task lint` plus the pre-commit hooks are the whole gate |
 
@@ -41,6 +41,7 @@ including the deploy-notes prompt about new secrets and cluster-side wiring.
 | Comment convention (`check-comment-length.py`) | `comment-length` (library template), plus `task comment-length` locally | n/a — the vendored `ci.yml` carries no counterpart; `task comment-length` locally | `task comment-length` |
 | Secret scanning | GitLab Secret Detection (gitleaks under the hood), findings block | gitleaks directly, same `.gitleaks.toml`, findings block | pre-commit gitleaks hook |
 | Library pin gate | `lib-pin-check`, plus `task lib-pins` locally | n/a — no includes to pin | n/a |
+| Optional-need gate (`check-ci-include-job-names.py`) | `ci-job-names-check`, plus `task ci-job-names` locally | n/a — a workflow `needs:` names a job in the same file | n/a |
 | Egress fence (`check-netpol-except-parity.py`) | `netpol-check`, plus `task netpol` locally | `manifest-gates` job, plus `task netpol` locally | `task netpol` |
 | Scrape wiring (`check-scrape-wiring.py`) | `scrape-wiring-check`, plus `task scrape-wiring` locally | `manifest-gates` job, plus `task scrape-wiring` locally | `task scrape-wiring` |
 | `kustomization.yaml` resource list | `kustomization-check`, plus `task kustomization` locally | `manifest-gates` job, plus `task kustomization` locally | `task kustomization` |
