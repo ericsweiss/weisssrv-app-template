@@ -28,7 +28,11 @@ act.
 validates against, and `CRD_CATALOG_REF` is the datreeio CRD-catalog commit it
 reads CR schemas from. Both are deliberate bumps: move `CRD_CATALOG_REF` when a
 CR you ship gains or moves a schema, in a change a person reviews.
-
+{% if ci_shape == 'gitlab_selfhosted' %}
+`.gitlab-ci.yml`'s `flux-lint` include passes that same commit as
+`crd_catalog_ref`, so bump the two together: apart, the job and `task flux-lint`
+accept different schema sets.
+{% endif %}
 ## What a version means here
 
 Your API is **your app**: its HTTP routes, its config keys, its database schema,

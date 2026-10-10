@@ -54,9 +54,8 @@ vendored `ci.yml` reads repository variable `ALLOWED_SKIPS`. The generated
 `task flux-lint` fails on the same budget and on an empty build in every shape,
 and `tests/validate_render.py` fails on any skip, so a green `task lint` is
 still the strictest of the three. `task flux-lint` resolves CR schemas from the
-catalog commit `Taskfile.yml` pins; the library's job has a `crd_catalog_ref`
-input the rendered include does not pass, so the two can still disagree about
-what has a schema — docs/VERSIONING.md § Pending at the next library bump.
+catalog commit `Taskfile.yml` pins, and the GitLab shape passes that same commit
+to the include's `crd_catalog_ref`, so both read one schema set.
 
 Both pipelined shapes drive the **same** vendored `scripts/semantic-release.py`
 with `--platform {gitlab,github}`, so there is one implementation to audit

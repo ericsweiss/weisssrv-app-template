@@ -124,14 +124,9 @@ tenant gets, resolves it per port.
 
 ### Pending at the next library bump
 
-Each entry is deleted by the change that satisfies it. All three are unblocked
-at the pinned `lib_ref` and waiting on their own change.
+Each entry is deleted by the change that satisfies it. Both are unblocked at
+the pinned `lib_ref` and waiting on their own change.
 
-- The `flux-lint` include in the rendered `.gitlab-ci.yml` does not pass
-  `crd_catalog_ref`, so the pipeline takes the library's default while
-  `task flux-lint` takes `Taskfile.yml`'s `CRD_CATALOG_REF`. They agree today
-  because both pin the same commit, with nothing holding them equal. Pass the
-  input, and consider `expected_skipped_file` in the same change.
 - The library's `flux-lint` simple arm carries the empty-build guard, the
   skipped-schema guard and the integer check on the skip budget, and the
   rendered `Taskfile.yml` implements the same three in shell because a CI

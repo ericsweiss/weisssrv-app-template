@@ -1657,6 +1657,27 @@ def test_k8s_version_reaches_the_gitlab_shape(rendered, answers):
     assert taskfile["vars"]["K8S_VERSION"] == answers["k8s_version"]
 
 
+def test_the_crd_catalog_pin_reaches_the_gitlab_shape(rendered):
+    """The include and the Taskfile hold the catalog commit as two literals, so
+    only this test stops the job and `task flux-lint` resolving different CR
+    schemas — and the include taking the library's own default silently."""
+    ci = render_app.load_ci(rendered / ".gitlab-ci.yml")
+    flux_lint = [
+        i for i in ci["include"]
+        if isinstance(i, dict) and str(i.get("file", "")).endswith("flux-lint.yml")
+    ]
+    passed = flux_lint[0]["inputs"].get("crd_catalog_ref")
+    assert passed, (
+        "the flux-lint include passes no crd_catalog_ref, so the job takes the "
+        "library default while `task flux-lint` reads Taskfile.yml's pin"
+    )
+    taskfile = yaml.safe_load((rendered / "Taskfile.yml").read_text())
+    assert passed == taskfile["vars"]["CRD_CATALOG_REF"], (
+        f"the flux-lint include pins {passed} but Taskfile.yml pins "
+        f"{taskfile['vars']['CRD_CATALOG_REF']}"
+    )
+
+
 # Include inputs whose value is a path in the render. Register a new
 # path-bearing input here, or nothing holds it to a directory that exists.
 PATH_INPUTS = ("targets", "kustomize_path", "cluster_dir")

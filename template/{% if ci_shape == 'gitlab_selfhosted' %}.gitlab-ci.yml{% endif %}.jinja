@@ -73,6 +73,10 @@ include:
       # Inert in simple mode; passed so the include reads the same in substitute mode.
       cluster_dir: "kubernetes/flux"
       k8s_version: "{{ k8s_version }}"
+      # The same catalog commit Taskfile.yml's CRD_CATALOG_REF pins, so this job
+      # and `task flux-lint` accept the same CR schemas. tests/test_render.py
+      # holds the two equal.
+      crd_catalog_ref: "ad3b08c5045129d7bb1eeffd8e61719b2c8dd1e2"
       changes:
         - "kubernetes/**/*"
         # The k8s_version input and the library ref live in this file, so a
