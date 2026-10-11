@@ -1,0 +1,14 @@
+---
+# Files outside .gitlab-ci.yml that repeat the library tag, for
+# scripts/check-lib-pins.py: it holds each captured ref equal to the pipeline
+# header's lib_ref default, and --bump rewrites them with it.
+
+# An entry whose glob or pattern matches nothing FAILS: a pin going unchecked
+# reads the same as no pin. Delete the entry when you delete the sentence.
+sites:
+  # The checkout `task ci-job-names` reads the library's own job names from. A
+  # stale tag there sends the gate at the wrong templates.
+  - path: Taskfile.yml
+    pattern: 'checkout at (v\d+\.\d+\.\d+)'
+  - path: docs/ARCHITECTURE.md
+    pattern: 'checkout at `(v\d+\.\d+\.\d+)`'

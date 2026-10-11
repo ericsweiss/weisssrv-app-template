@@ -107,7 +107,7 @@ component is wired and a disabled one leaves nothing behind. There is no
 
 | Answer | Default | What it drives |
 |---|---|---|
-| `lib_ref` | `v0.19.0` | The tag every `include:` pins. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
+| `lib_ref` | `v0.20.0` | The tag the generated pipeline declares in its `spec:` header and every `include:` reads. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
 | `lib_project` | `eric/weisssrv-lib` | The library's project path. `include: project:` resolves instance-locally, so the library must live on the same GitLab as the repo. |
 
 ---
@@ -209,14 +209,15 @@ Every helper under `template/scripts/` is a **byte-identical copy** of a
 [`eric/weisssrv-lib`](https://git.ericsweiss.com/eric/weisssrv-lib) file, so the
 copy is what executes. Some are run by the library's job templates from those
 paths; the three manifest gates are run by the generated repo's pipeline and by
-`task lint`. `check-netpol-except-parity.py` imports `gate_common.py`, and
-`check-lib-pins.py` and `check-ci-include-job-names.py` both import
+`task lint`, and `flux-lint.sh` by both at once — the `flux-lint` include runs
+the repo's own copy. `check-netpol-except-parity.py` imports `gate_common.py`,
+and `check-lib-pins.py` and `check-ci-include-job-names.py` both import
 `ci_yaml.py`, each from its own directory, so those sets ship together.
 
-Five are unconditional, so every generated repo carries them on every shape:
+Six are unconditional, so every generated repo carries them on every shape:
 `check-comment-length.py`, `check-doc-links.py`,
-`check-netpol-except-parity.py`, `check-scrape-wiring.py` and
-`check-kustomization.py`. The rest are shape-gated —
+`check-netpol-except-parity.py`, `check-scrape-wiring.py`,
+`check-kustomization.py` and `flux-lint.sh`. The rest are shape-gated —
 
 | `ci_shape` | What else ships |
 |---|---|

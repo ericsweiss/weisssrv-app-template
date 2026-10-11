@@ -30,6 +30,11 @@ vendored:
     consumer: template/scripts/check-netpol-except-parity.py
   - lib: scripts/check-scrape-wiring.py
     consumer: template/scripts/check-scrape-wiring.py
+  # The render/scan/kubeconform program `task flux-lint` and the pipeline's
+  # flux-lint job both run. Simple mode needs no companion; substitute mode
+  # calls flux-render.sh and kubeconform-skipped.py by path.
+  - lib: scripts/flux-lint.sh
+    consumer: template/scripts/flux-lint.sh
   # check-netpol-except-parity.py imports gate_common from its own directory:
   # without the companion every tenant's egress fence exits 2 on import.
   - lib: scripts/gate_common.py

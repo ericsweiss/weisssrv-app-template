@@ -1,4 +1,11 @@
 ---
+spec:
+  inputs:
+    lib_ref:
+      # Single source for every {{ lib_project }} pin below. An input
+      # interpolates before `include:` resolves; a variable does not exist yet.
+      default: {{ lib_ref }}
+---
 # CI for {{ app_slug }}: it gates, never deploys. Flux reconciles the tree into
 # namespace {{ app_namespace }}. The generic jobs come from `{{ lib_project }}`
 # at a pinned tag and are TAG-LESS, so they land on the shared runner.
@@ -42,15 +49,15 @@ workflow:
     # clause could only ever ask GitLab for a pipeline with zero jobs.
 
 variables:
-  # Single source for the library pin. `include:` cannot read it (GitLab
-  # resolves includes before variables exist), so scripts/check-lib-pins.py
-  # keeps the literal `ref:` entries in step.
-  WEISSSRV_LIB_REF: "{{ lib_ref }}"
+  # The pin job scripts interpolate at run time, read from the header input so
+  # it cannot drift from the `include:` entries. Move the tag with
+  # `scripts/check-lib-pins.py --bump vX.Y.Z`.
+  WEISSSRV_LIB_REF: $[[ inputs.lib_ref ]]
 
 include:
   # -- yaml-lint: lint the whole tree against lint/yamllint-relaxed.yml ------
   - project: {{ lib_project }}
-    ref: {{ lib_ref }}
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
@@ -64,7 +71,7 @@ include:
   # substitute: false — a tenant pins literal tags, so nothing needs envsubst.
   # kustomize_path is the dir this mode builds.
   - project: {{ lib_project }}
-    ref: {{ lib_ref }}
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/validate/flux-lint.yml
     inputs:
       tags: []
@@ -87,7 +94,7 @@ include:
   # No `config:` input — ruff discovers the vendored ./ruff.toml. `changes:`
   # must name the same surface as `targets:`, or the job skips a source commit.
   - project: {{ lib_project }}
-    ref: {{ lib_ref }}
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/python-lint.yml
     inputs:
       tags: []
@@ -100,7 +107,7 @@ include:
   # -- comment-length: the comment convention, over the whole tree -----------
   # No `config:`, so the gate is stdlib-only and the PyYAML install is skipped.
   - project: {{ lib_project }}
-    ref: {{ lib_ref }}
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/comment-length.yml
     inputs:
       tags: []
@@ -114,7 +121,7 @@ include:
   # python:3.13 overrides the library's python:3.11; drop the input to take the
   # library's interpreter.
   - project: {{ lib_project }}
-    ref: {{ lib_ref }}
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
@@ -128,7 +135,7 @@ include:
   # Findings FAIL the job at the pinned ref, so this blocks the merge. Tuned by
   # .gitleaks.toml via .gitlab/secret-detection-ruleset.toml.
   - project: {{ lib_project }}
-    ref: {{ lib_ref }}
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/security/secret-detection.yml
     inputs:
       tags: []
@@ -140,7 +147,7 @@ include:
   # Pushes $CI_REGISTRY_IMAGE:<short-sha> (+ :latest on main); point
   # deployment.yaml's `image:` at that tag. The one PRIVILEGED job.
   - project: {{ lib_project }}
-    ref: {{ lib_ref }}
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/build/docker-build.yml
     inputs:
       tags: ["{{ privileged_runner_tag }}"]
@@ -153,7 +160,7 @@ include:
   # Merging to main cuts the tag and the Release from the conventional commits
   # since the last one; nothing releasable means no tag and a green pipeline.
   - project: {{ lib_project }}
-    ref: {{ lib_ref }}
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/release/semantic-release.yml
     inputs:
       tags: []
@@ -162,7 +169,7 @@ include:
   # CREATED only when both masked CI/CD variables are set. Do not override
   # openai_key/gitlab_token: a renamed variable means no job and no review.
   - project: {{ lib_project }}
-    ref: {{ lib_ref }}
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/review/pr-agent.yml
     inputs:
       tags: []
@@ -203,8 +210,9 @@ include:
         - ".gitlab-ci.yml"
     - if: '$CI_COMMIT_BRANCH == "main"'
 
-# The library-pin gate: every include above must pin exactly
-# variables.WEISSSRV_LIB_REF, as a release tag.
+# The library-pin gate: the header's lib_ref default must be a release tag, and
+# every include above plus the variable must read that input. It also holds the
+# refs scripts/lib-ref-sites.yml names equal to it.
 lib-pin-check:
   extends: .pyyaml-gate
   script:
@@ -214,11 +222,14 @@ lib-pin-check:
       changes:
         - ".gitlab-ci.yml"
         - "scripts/check-lib-pins.py"
+        - "scripts/lib-ref-sites.yml"
+        - "Taskfile.yml"
+        - "docs/ARCHITECTURE.md"
     - if: '$CI_COMMIT_BRANCH == "main"'
 
 # Every optional `needs:` must name a job some include creates: GitLab ignores
-# one that names nothing, so a renamed library job stops the review waiting for
-# lint and the pipeline stays green.
+# one that names nothing, so a renamed library job stops gating the review. The
+# blind spot declared below is GitLab's own Secret-Detection template.
 ci-job-names-check:
   extends: .pyyaml-gate
   # python:3.13-slim ships no git, and the gate reads the library's own files.
@@ -238,6 +249,8 @@ ci-job-names-check:
     - >-
       python3 scripts/check-ci-include-job-names.py --require-optional-needs
       --lib-path "$CI_PROJECT_DIR/.tmp/weisssrv-lib"
+      --allow-unreadable-include 'Jobs/Secret-Detection.gitlab-ci.yml=GitLab
+      ships this template with the instance, so it is in neither checkout'
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -262,10 +275,9 @@ scrape-wiring-check:
       python3 scripts/check-scrape-wiring.py kubernetes/flux
       --namespace {{ app_namespace }}
 
-# CRITICAL: the included `flux-lint` JOB passes on an empty render (kustomize
-# and kubeconform both exit 0 on one) and the cluster-side Kustomization prunes,
-# so an emptied `resources:` list would delete every object in
-# {{ app_namespace }}. A manifest present but unlisted is never built.
+# CRITICAL: an emptied `resources:` list renders nothing and the cluster-side
+# Kustomization's prune then deletes every object in {{ app_namespace }}.
+# A manifest present but unlisted is never built.
 kustomization-check:
   extends: .manifest-gate
   script:

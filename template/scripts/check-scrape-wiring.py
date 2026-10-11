@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Assert the scrape NetworkPolicy admits Prometheus on the port the monitor scrapes.
 
-Port granularity; check-scrape-netpol.py is the namespace half. An unmodelled
-peer or selector shape is not credited. Exit codes and shapes: docs/SCRIPTS.md.
+Port granularity (check-scrape-netpol.py is the namespace half), over a single
+tree or a rendered cluster `--corpus`. Shapes and exit codes: docs/SCRIPTS.md.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 import sys
+from typing import NamedTuple
 
 try:
     import yaml
@@ -18,6 +19,7 @@ except ImportError:
     raise SystemExit(2) from None
 
 DEFAULT_OBSERVABILITY_NS = "observability"
+DEFAULT_TREE = "kubernetes/flux"
 WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet")
 ENDPOINT_KEYS = {"PodMonitor": "podMetricsEndpoints", "ServiceMonitor": "endpoints"}
 
@@ -64,6 +66,28 @@ class Violation(Exception):
     """The scrape wiring in this repo is wrong."""
 
 
+class Workload(NamedTuple):
+    """One selected workload: its pod labels and the container ports it declares.
+
+    A port name is unique within a pod, so each name here holds one number.
+    """
+
+    labels: dict
+    names: dict[str, int]
+    numbers: set[int]
+    subject: str
+
+
+class Target(NamedTuple):
+    """One scrape target: the pods reached, the port number, and its spellings."""
+
+    namespace: str | None
+    labels: dict
+    number: int
+    spellings: set[int | str]
+    subject: str
+
+
 def note(message: str) -> None:
     if message not in UNMODELLED:
         UNMODELLED.append(message)
@@ -76,6 +100,11 @@ def describe(document: dict) -> str:
     return f"{document.get('kind')} {name or '<unnamed>'}"
 
 
+def located(parts: list[str]) -> str:
+    """The bracketed `(Service x, Deployment y)` a failure message carries."""
+    return f" ({', '.join(parts)})" if parts else ""
+
+
 def mapping(value: object, subject: str, field: str) -> dict:
     """A field the gate reads as a mapping; a scalar or list there cannot be checked."""
     if value is None:
@@ -83,6 +112,17 @@ def mapping(value: object, subject: str, field: str) -> dict:
     if not isinstance(value, dict):
         raise GateError(f"{subject}: {field} is not a mapping")
     return value
+
+
+def load_stream(handle, source: str) -> tuple[list[dict], list[str]]:
+    """Every kinded document in one stream, else why it would not read."""
+    try:
+        loaded = list(yaml.safe_load_all(handle))
+    except (OSError, UnicodeDecodeError) as error:
+        return [], [f"{source}: unreadable: {error}"]
+    except yaml.YAMLError as error:
+        return [], [f"{source}: unparseable YAML: {error}"]
+    return [d for d in loaded if isinstance(d, dict) and d.get("kind")], []
 
 
 def load_documents(base: pathlib.Path) -> tuple[list[dict], list[str]]:
@@ -94,32 +134,39 @@ def load_documents(base: pathlib.Path) -> tuple[list[dict], list[str]]:
     errors: list[str] = []
     for extension in ("*.yaml", "*.yml", "*.json"):
         for path in sorted(base.rglob(extension)):
+            # The handle, not the text: PyYAML names the stream in its mark,
+            # so a parse error points at the file, not at "<unicode string>".
             try:
-                # The handle, not the text: PyYAML names the stream in its mark,
-                # so a parse error points at the file, not at "<unicode string>".
                 with path.open(encoding="utf-8") as handle:
-                    loaded = list(yaml.safe_load_all(handle))
-            except (OSError, UnicodeDecodeError) as error:
-                errors.append(f"{path}: unreadable: {error}")
-                continue
-            except yaml.YAMLError as error:
-                errors.append(f"{path}: unparseable YAML: {error}")
-                continue
-            documents += [d for d in loaded if isinstance(d, dict) and d.get("kind")]
+                    loaded, problems = load_stream(handle, str(path))
+            except OSError as error:
+                loaded, problems = [], [f"{path}: unreadable: {error}"]
+            documents += loaded
+            errors += problems
     return documents, errors
 
 
-def matching_workloads(
-    documents: list[dict], pods: dict
-) -> tuple[dict[str, set[int]], set[int], dict]:
-    """Port names, port numbers and widened labels of the workloads `pods` selects.
+def load_corpus(target: str) -> tuple[list[dict], list[str]]:
+    """A rendered corpus: a multi-document stream, '-' for stdin, or a directory."""
+    if target == "-":
+        return load_stream(sys.stdin, "<stdin>")
+    path = pathlib.Path(target)
+    if path.is_dir():
+        return load_documents(path)
+    try:
+        with path.open(encoding="utf-8") as handle:
+            return load_stream(handle, str(path))
+    except OSError as error:
+        return [], [f"{path}: unreadable: {error}"]
 
-    A policy naming a label beyond the Service selector still admits the
-    scrape, so the subset test runs against the pod labels, not the selector.
+
+def selected_workloads(documents: list[dict], pods: dict) -> list[Workload]:
+    """Every workload whose pod labels carry `pods`, one record each.
+
+    Per workload, not merged: pods behind one Service may declare the same port
+    name at different numbers, and a policy matches pod labels, not a selector.
     """
-    names: dict[str, set[int]] = {}
-    numbers: set[int] = set()
-    shared: dict | None = None
+    selected: list[Workload] = []
     for document in documents:
         if document.get("kind") not in WORKLOAD_KINDS:
             continue
@@ -133,11 +180,9 @@ def matching_workloads(
         )
         if not pods.items() <= labels.items():
             continue
-        if shared is None:
-            shared = dict(labels)
-        else:
-            shared = {key: value for key, value in shared.items() if labels.get(key) == value}
         pod = mapping(template.get("spec"), subject, "spec.template.spec")
+        names: dict[str, int] = {}
+        numbers: set[int] = set()
         for container in pod.get("containers") or []:
             for port in container.get("ports") or []:
                 number = port.get("containerPort")
@@ -145,23 +190,52 @@ def matching_workloads(
                     continue
                 numbers.add(number)
                 if port.get("name"):
-                    names.setdefault(port["name"], set()).add(number)
-    for port_name, values in sorted(names.items()):
-        if len(values) > 1:
-            raise GateError(
-                f"the workloads carrying {pods} declare a port named {port_name!r} at "
-                f"{sorted(values)}: one name at two numbers, so a policy naming it "
-                "resolves to whichever workload was read last. Give each number its "
-                "own name, or split the Service."
+                    names[port["name"]] = number
+        selected.append(Workload(dict(labels), names, numbers, subject))
+    return selected
+
+
+def spellings(number: int, names: dict[str, int]) -> set[int | str]:
+    """A port as a NetworkPolicy may legally name it: the number and its names."""
+    return {number} | {name for name, value in names.items() if value == number}
+
+
+def resolve_target(
+    documents: list[dict],
+    namespace: str | None,
+    pods: dict,
+    port: int | str,
+    name: str,
+    where: list[str],
+) -> list[Target]:
+    """One target per selected workload that serves the port.
+
+    A name a workload does not declare is no endpoint of its pods, so only a
+    name NO selected workload declares is a finding.
+    """
+    workloads = selected_workloads(documents, pods)
+    if port is None:
+        raise Violation(f"{name}: a Service port names no pod port, so nothing is scraped")
+    if isinstance(port, str):
+        if not any(port in workload.names for workload in workloads):
+            raise Violation(f"{name}: no workload carrying {pods} declares a port named {port!r}")
+    elif not any(port in workload.numbers for workload in workloads):
+        raise Violation(f"{name}: no workload carrying {pods} declares a port {port}")
+    targets = []
+    for workload in workloads:
+        number = workload.names.get(port) if isinstance(port, str) else port
+        if number is None:
+            continue
+        targets.append(
+            Target(
+                namespace,
+                workload.labels,
+                number,
+                spellings(number, workload.names),
+                located([*where, workload.subject]),
             )
-    return names, numbers, {**pods, **(shared or {})}
-
-
-def spellings(port: int | str, names: dict[str, set[int]]) -> set[int | str]:
-    """A port as a NetworkPolicy may legally name it: the number and its name."""
-    numbers = names.get(port) or set()
-    number = sorted(numbers)[0] if numbers else port
-    return {number} | {name for name, values in names.items() if number in values}
+        )
+    return targets
 
 
 def services_for(documents: list[dict], selector: dict) -> list[dict]:
@@ -181,24 +255,99 @@ def services_for(documents: list[dict], selector: dict) -> list[dict]:
     return matched
 
 
-def resolve_target(
-    documents: list[dict], pods: dict, port: int | str, name: str
-) -> tuple[set[int | str], dict]:
-    """The pod port's spellings and the labels of the pods that serve it."""
-    names, numbers, labels = matching_workloads(documents, pods)
-    if port is None:
-        raise Violation(f"{name}: a Service port names no pod port, so nothing is scraped")
-    if isinstance(port, str) and port not in names:
-        raise Violation(f"{name}: no workload carrying {pods} declares a port named {port!r}")
-    if isinstance(port, int) and port not in numbers:
-        raise Violation(f"{name}: no workload carrying {pods} declares a port {port}")
-    return spellings(port, names), labels
+def endpoints_by_hand(documents: list[dict], service: str | None) -> list[dict]:
+    """The objects declaring this Service's endpoints by hand.
+
+    An EndpointSlice is tied to its Service by label and an Endpoints object by
+    name; either way the addresses are the operator's, not a selector's.
+    """
+    if not service:
+        return []
+    found: list[dict] = []
+    for document in documents:
+        kind = document.get("kind")
+        if kind not in ("Endpoints", "EndpointSlice"):
+            continue
+        metadata = mapping(document.get("metadata"), describe(document), "metadata")
+        if kind == "Endpoints":
+            if metadata.get("name") == service:
+                found.append(document)
+            continue
+        labels = mapping(metadata.get("labels"), describe(document), "metadata.labels")
+        if labels.get("kubernetes.io/service-name") == service:
+            found.append(document)
+    return found
+
+
+def _subsets(document: dict) -> list[tuple[int, list]]:
+    """[(addresses, port entries)] for either kind; a slice is one subset.
+
+    An Endpoints object pairs addresses with ports per subset, so a port in one
+    subset says nothing about the addresses in another.
+    """
+    if document.get("kind") == "Endpoints":
+        return [
+            (len(subset.get("addresses") or []), subset.get("ports") or [])
+            for subset in document.get("subsets") or []
+            if isinstance(subset, dict)
+        ]
+    addresses = sum(
+        len(entry.get("addresses") or [])
+        for entry in document.get("endpoints") or []
+        if isinstance(entry, dict)
+    )
+    return [(addresses, document.get("ports") or [])]
+
+
+def _substituted(document: dict) -> bool:
+    """Are this object's addresses or ports a substitution rather than a list?
+
+    A `${...}` placeholder parses as a scalar, so what it holds is unknown here
+    and the object is credited rather than read as empty.
+    """
+    field = "subsets" if document.get("kind") == "Endpoints" else "endpoints"
+    for key in (field, "ports"):
+        if isinstance(document.get(key), str):
+            note(f"{describe(document)}: its {key} is a substitution, not a list here")
+            return True
+    return False
+
+
+def endpoint_serves(document: dict, named: object, target: object) -> bool:
+    """Does this hand-written object hold an address on the scraped port?
+
+    Prometheus keeps an endpoint target by the port's NAME, so a monitor's
+    `port:` must be named here; a `targetPort:` matches the number instead.
+    """
+    if _substituted(document):
+        return True
+    for addresses, ports in _subsets(document):
+        if not addresses:
+            continue
+        for port in ports:
+            if not isinstance(port, dict):
+                continue
+            # A `port:` monitor keeps the target by name, whatever the number.
+            if named is not None:
+                if port.get("name") == named:
+                    return True
+                continue
+            # Unnamed: an entry carrying no number is read as every port.
+            if port.get("port") is None or target in (port.get("name"), port.get("port")):
+                return True
+    return False
 
 
 def pod_port(
-    documents: list[dict], selector: dict, endpoint: dict, kind: str, name: str
-) -> list[tuple[set[int | str], dict, str]]:
-    """One (port spellings, pod labels, subject) triple per target this endpoint creates.
+    documents: list[dict],
+    namespace: str | None,
+    where: list[str],
+    selector: dict,
+    endpoint: dict,
+    kind: str,
+    name: str,
+) -> tuple[list[Target], int]:
+    """The targets one endpoint creates in one namespace, and its hand-written count.
 
     prometheus-operator scrapes EVERY Service a ServiceMonitor selects, so a
     policy proven for one of them says nothing about the rest.
@@ -218,44 +367,58 @@ def pod_port(
     if kind == "PodMonitor":
         # A PodMonitor names a container port directly: there is no Service hop.
         direct = named if named is not None else (number if number is not None else target)
-        return [(*resolve_target(documents, selector, direct, name), "")]
+        return resolve_target(documents, namespace, selector, direct, name, where), 0
 
     # A ServiceMonitor's selector picks SERVICES, so the pods are the ones each
     # chosen Service selects, not whatever carries the monitor labels.
     services = services_for(documents, selector)
     if not services:
         raise Violation(
-            f"{name}: no Service carries the monitor's labels {selector}: "
+            f"{name}{located(where)}: no Service carries the monitor's labels {selector}: "
             "the scrape has no target"
         )
-    targets = []
+    targets: list[Target] = []
+    by_hand = 0
     for service in services:
-        subject = f" (Service {(service.get('metadata') or {}).get('name')})"
+        service_name = (service.get("metadata") or {}).get("name")
+        here = [*where, f"Service {service_name}"]
         service_spec = mapping(service.get("spec"), describe(service), "spec")
         pods = mapping(service_spec.get("selector"), describe(service), "spec.selector")
         if not pods:
+            declared = endpoints_by_hand(documents, service_name)
+            if declared:
+                if not any(endpoint_serves(e, named, target) for e in declared):
+                    raise Violation(
+                        f"{name}{located(here)}: the Service declares no spec.selector and its "
+                        f"hand-written endpoints hold no address on {named or target!r}: the "
+                        "scrape has no target. Name the scraped port in the EndpointSlice and "
+                        "give it an address."
+                    )
+                # Endpoints written here rather than derived from a selector: the
+                # addresses are the operator's and no pod here serves the port.
+                by_hand += 1
+                continue
             raise Violation(
-                f"{name}{subject}: the Service declares no spec.selector, so its "
-                "endpoints are managed by hand and no workload here serves the "
-                "scraped port. Crediting a policy against it certifies nothing — "
-                "give the Service a selector, or move the scrape where the "
-                "endpoints are declared."
+                f"{name}{located(here)}: the Service declares no spec.selector and nothing "
+                "here declares its endpoints, so no workload serves the scraped port. "
+                "Crediting a policy against it certifies nothing — give the Service a "
+                "selector, or ship the EndpointSlice that names its addresses."
             )
         if named is None:
             # `targetPort` names a pod port directly, by name or by number.
-            targets.append((*resolve_target(documents, pods, target, name), subject))
+            targets += resolve_target(documents, namespace, pods, target, name, here)
             continue
         for port in service_spec.get("ports") or []:
             if port.get("name") == named:
                 # An absent or null targetPort defaults to the Service port.
                 resolved = port.get("targetPort") or port.get("port")
-                targets.append((*resolve_target(documents, pods, resolved, name), subject))
+                targets += resolve_target(documents, namespace, pods, resolved, name, here)
                 break
     # A Service without the named port is no target, so only a monitor whose
     # every selected Service lacks it has nothing to scrape.
-    if not targets:
+    if not targets and not by_hand:
         raise Violation(f"{name}: no Service carrying {selector} declares a port named {named!r}")
-    return targets
+    return targets, by_hand
 
 
 def scrape_allow(documents: list[dict], scrape_ns: str) -> str | None:
@@ -312,12 +475,14 @@ def admits(policy: dict, pods: dict, accepted: set[int | str], scrape_ns: str) -
                 continue
             labels = namespaces.get("matchLabels") or {}
             if labels.get("kubernetes.io/metadata.name") == scrape_ns:
+                # A podSelector here narrows the namespace this policy already
+                # admits. Prometheus is chart-installed, so its pod labels are in
+                # no manifest: the port is credited, the narrowing is not read.
                 if peer.get("podSelector"):
                     note(
-                        f"{name}: its scrape peer scopes the namespace with a podSelector "
-                        "this gate does not model"
+                        f"{name}: its scrape peer narrows namespace {scrape_ns} with a "
+                        "podSelector, which this gate does not resolve to a pod"
                     )
-                    continue
                 scoped = True
             # An empty namespaceSelector selects every namespace, observability
             # included, but only a peer with no podSelector admits every pod.
@@ -428,13 +593,176 @@ def group_by_namespace(
     return groups
 
 
+def monitor_scope(
+    monitor: dict,
+    group_ns: str | None,
+    groups: dict[str | None, list[dict]],
+    corpus: bool,
+    namespace: str | None,
+    namespace_error: str | None,
+) -> list[str | None]:
+    """The namespaces whose pods this monitor scrapes.
+
+    A tree covers one namespace, so a wider scope is refused there; a corpus
+    carries them all, so `matchNames` and `any` resolve against it.
+    """
+    name = (monitor.get("metadata") or {}).get("name")
+    spec = mapping(monitor.get("spec"), describe(monitor), "spec")
+    scope = mapping(spec.get("namespaceSelector"), describe(monitor), "spec.namespaceSelector")
+    names = scope.get("matchNames") or []
+    if corpus:
+        unknown = sorted(set(scope) - {"any", "matchNames"})
+        if unknown:
+            raise GateError(
+                f"{name}: spec.namespaceSelector carries {', '.join(unknown)}, which is "
+                "not part of a monitor's namespace selector, so the scrape's scope "
+                "cannot be resolved."
+            )
+        if scope.get("any"):
+            return sorted(groups, key=lambda ns: ns or "")
+        if not names:
+            return [group_ns]
+        missing = [entry for entry in names if entry not in groups]
+        if missing:
+            raise GateError(
+                f"{name}: spec.namespaceSelector.matchNames names {', '.join(missing)}, "
+                "which this corpus holds no object in: either the name is stale or the "
+                "render is partial, and a namespace absent from the corpus cannot be "
+                "checked."
+            )
+        return list(names)
+    # A matchNames entry must equal the namespace this group is judged in — the
+    # documents' own, --namespace, or the tree's Namespace — else it is refused;
+    # an unverified name would certify another namespace.
+    if set(scope) - {"any", "matchNames"} or scope.get("any") or len(names) > 1:
+        raise GateError(
+            f"{name}: spec.namespaceSelector scopes the scrape outside this directory, "
+            "whose NetworkPolicies cover one namespace only. Leave it out, scope it "
+            "to this namespace with `any: false` or `matchNames: [<namespace>]` and "
+            "`--namespace`, or judge the whole cluster with `--corpus`."
+        )
+    if names and names != [group_ns]:
+        if namespace:
+            detail = (f"against --namespace {namespace}: the policies here cover "
+                      "that namespace only.")
+        else:
+            detail = namespace_error or (
+                "without --namespace: pass the namespace this tree deploys into.")
+        raise GateError(
+            f"{name}: spec.namespaceSelector.matchNames {names} cannot be verified "
+            + detail
+        )
+    return [group_ns]
+
+
+def check_monitor(
+    monitor: dict,
+    group_ns: str | None,
+    namespaces: list[str | None],
+    groups: dict[str | None, list[dict]],
+    policies: dict[str | None, list[dict]],
+    scrape_ns: str,
+    corpus: bool = False,
+) -> tuple[int, int]:
+    """One monitor's endpoints against the policies where its pods live.
+
+    Returns the count of hand-written-endpoint targets and of endpoints whose
+    pods a chart renders: no pod here serves either, so neither has a policy.
+    """
+    kind = monitor["kind"]
+    name = (monitor.get("metadata") or {}).get("name")
+    spec = mapping(monitor.get("spec"), describe(monitor), "spec")
+    selector = mapping(
+        mapping(spec.get("selector"), describe(monitor), "spec.selector").get("matchLabels"),
+        describe(monitor),
+        "spec.selector.matchLabels",
+    )
+    if not selector:
+        raise GateError(
+            f"{name}: the monitor selects every pod, so no policy can be matched to it"
+        )
+    endpoints = spec.get(ENDPOINT_KEYS[kind]) or []
+    if not endpoints:
+        raise GateError(f"{name}: the monitor declares no endpoints, so nothing is checked")
+    hand_written = 0
+    chart_rendered = 0
+    for endpoint in endpoints:
+        targets: list[Target] = []
+        by_hand = 0
+        unrendered = 0
+        problems: list[str] = []
+        for target_ns in namespaces:
+            members = groups.get(target_ns) or []
+            where = [] if target_ns == group_ns else [f"namespace {target_ns}"]
+            try:
+                found, counted = pod_port(
+                    members, target_ns, where, selector, endpoint, kind, name
+                )
+            except Violation as error:
+                # A chart's workloads reach no manifest, so a namespace the
+                # corpus carries without one states nothing about these pods;
+                # a Service it does carry for the monitor is judged as written.
+                if (
+                    corpus
+                    and not any(d.get("kind") in WORKLOAD_KINDS for d in members)
+                    and (kind == "PodMonitor" or not services_for(members, selector))
+                ):
+                    unrendered += 1
+                    continue
+                # One namespace: its answer is the monitor's. Several: a
+                # namespace holding no target contributes nothing to the union.
+                if len(namespaces) == 1:
+                    raise
+                problems.append(str(error))
+                continue
+            targets += found
+            by_hand += counted
+        if not targets and not by_hand:
+            # Only when NO namespace in scope renders a workload: one that does
+            # is a namespace whose answer the monitor has to live with.
+            if unrendered == len(namespaces):
+                chart_rendered += 1
+                continue
+            raise Violation("\n".join(problems))
+        hand_written += by_hand
+        for target in targets:
+            if any(
+                admits(policy, target.labels, target.spellings, scrape_ns)
+                for policy in policies.get(target.namespace) or []
+            ):
+                continue
+            message = (
+                f"{name}{target.subject}: no NetworkPolicy admits namespace {scrape_ns} "
+                f"on port {target.number}, so Prometheus cannot reach this target"
+            )
+            raise Violation("\n".join([message, *UNMODELLED]))
+    return hand_written, chart_rendered
+
+
+def refuse_vacuous(
+    groups: dict[str | None, list[dict]], targeted: set[str | None], scrape_ns: str
+) -> None:
+    """A namespace that declares a scrape while no monitor here targets it."""
+    for group_ns in sorted(groups, key=lambda ns: ns or ""):
+        if group_ns in targeted:
+            continue
+        declared = scrape_allow(groups[group_ns], scrape_ns)
+        if declared:
+            raise GateError(
+                f"{declared} admits namespace {scrape_ns} but no ServiceMonitor "
+                "or PodMonitor scrapes its namespace: a gate that checks nothing is not "
+                "a gate. Restore the monitor, or remove the scrape allow with it."
+            )
+
+
 def check(
     documents: list[dict],
     scrape_ns: str = DEFAULT_OBSERVABILITY_NS,
     namespace: str | None = None,
     namespace_error: str | None = None,
+    corpus: bool = False,
 ) -> int:
-    """Every monitor's scraped port, against the policies in its own namespace."""
+    """Every monitor's scraped port, against the policies where its pods live."""
     UNMODELLED.clear()
     groups = group_by_namespace(documents, namespace)
     stated = sorted(ns for ns in groups if ns is not None)
@@ -452,92 +780,45 @@ def check(
             f"{', '.join(unassigned)}: a document cannot be grouped by guess. Give "
             "each one a namespace, pass --namespace, or split the tree."
         )
-    monitors = 0
-    for group_ns in sorted(groups, key=lambda ns: ns or ""):
-        monitors += check_namespace(
-            groups[group_ns], scrape_ns, group_ns, namespace_error
-        )
+    monitors = [
+        (group_ns, document)
+        for group_ns in sorted(groups, key=lambda ns: ns or "")
+        for document in groups[group_ns]
+        if document.get("kind") in ENDPOINT_KEYS
+    ]
     if not monitors:
+        refuse_vacuous(groups, set(), scrape_ns)
         print(
             f"{len(documents)} document(s), no ServiceMonitor or PodMonitor; "
             "nothing to check"
         )
         return 0
-    print(f"{monitors} monitor(s); every scraped port is admitted from {scrape_ns}")
-    return 0
-
-
-def check_namespace(
-    documents: list[dict],
-    scrape_ns: str,
-    namespace: str | None,
-    namespace_error: str | None = None,
-) -> int:
-    """One namespace's monitors against its own policies; the count checked."""
-    monitors = [d for d in documents if d.get("kind") in ENDPOINT_KEYS]
-    if not monitors:
-        declared = scrape_allow(documents, scrape_ns)
-        if declared:
-            raise GateError(
-                f"{declared} admits namespace {scrape_ns} but no ServiceMonitor "
-                "or PodMonitor is present: a gate that checks nothing is not a gate. "
-                "Restore the monitor, or remove the scrape allow with it."
-            )
-        return 0
-
-    policies = [d for d in documents if d.get("kind") == "NetworkPolicy"]
-    for monitor in monitors:
-        kind = monitor["kind"]
-        name = (monitor.get("metadata") or {}).get("name")
-        spec = mapping(monitor.get("spec"), describe(monitor), "spec")
-        scope = mapping(spec.get("namespaceSelector"), describe(monitor), "spec.namespaceSelector")
-        names = scope.get("matchNames") or []
-        # A matchNames entry must equal the namespace this group is judged in —
-        # the documents' own, --namespace, or the tree's Namespace — else it is
-        # refused; an unverified name would certify another namespace.
-        if set(scope) - {"any", "matchNames"} or scope.get("any") or len(names) > 1:
-            raise GateError(
-                f"{name}: spec.namespaceSelector scopes the scrape outside this directory, "
-                "whose NetworkPolicies cover one namespace only. Leave it out, or scope it "
-                "to this namespace with `any: false` or `matchNames: [<namespace>]` and "
-                "`--namespace`; a wider scrape must be checked where those policies live."
-            )
-        if names and names != [namespace]:
-            if namespace:
-                detail = (f"against --namespace {namespace}: the policies here cover "
-                          "that namespace only.")
-            else:
-                detail = namespace_error or (
-                    "without --namespace: pass the namespace this tree deploys into.")
-            raise GateError(
-                f"{name}: spec.namespaceSelector.matchNames {names} cannot be verified "
-                + detail
-            )
-        selector = mapping(
-            mapping(spec.get("selector"), describe(monitor), "spec.selector").get("matchLabels"),
-            describe(monitor),
-            "spec.selector.matchLabels",
+    policies = {
+        group_ns: [d for d in members if d.get("kind") == "NetworkPolicy"]
+        for group_ns, members in groups.items()
+    }
+    targeted: set[str | None] = set()
+    hand_written = 0
+    chart_rendered = 0
+    for group_ns, monitor in monitors:
+        namespaces = monitor_scope(
+            monitor, group_ns, groups, corpus, namespace, namespace_error
         )
-        if not selector:
-            raise GateError(
-                f"{name}: the monitor selects every pod, so no policy can be matched to it"
-            )
-        endpoints = spec.get(ENDPOINT_KEYS[kind]) or []
-        if not endpoints:
-            raise GateError(f"{name}: the monitor declares no endpoints, so nothing is checked")
-        for endpoint in endpoints:
-            for accepted, pods, subject in pod_port(documents, selector, endpoint, kind, name):
-                if any(admits(policy, pods, accepted, scrape_ns) for policy in policies):
-                    continue
-                numbers = sorted(v for v in accepted if not isinstance(v, str))
-                port = numbers[0] if numbers else sorted(accepted)[0]
-                message = (
-                    f"{name}{subject}: no NetworkPolicy admits namespace {scrape_ns} "
-                    f"on port {port}, so Prometheus cannot reach this target"
-                )
-                raise Violation("\n".join([message, *UNMODELLED]))
-
-    return len(monitors)
+        targeted |= set(namespaces)
+        counted, charted = check_monitor(
+            monitor, group_ns, namespaces, groups, policies, scrape_ns, corpus
+        )
+        hand_written += counted
+        chart_rendered += charted
+    # Corpus-wide only: a chart renders monitors a corpus does not carry, so a
+    # single namespace's allow cannot be paired with one the way a tree's is.
+    if not corpus:
+        refuse_vacuous(groups, targeted, scrape_ns)
+    tail = f"; {hand_written} target(s) have hand-written endpoints" if hand_written else ""
+    if chart_rendered:
+        tail += f"; {chart_rendered} endpoint(s) scrape pods a chart renders"
+    print(f"{len(monitors)} monitor(s); every scraped port is admitted from {scrape_ns}{tail}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -545,8 +826,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "directory",
         nargs="?",
-        default="kubernetes/flux",
-        help="manifest directory to check (default: %(default)s)",
+        help=f"manifest directory to check (default: {DEFAULT_TREE})",
     )
     parser.add_argument(
         "--observability-namespace",
@@ -563,25 +843,45 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="read that namespace from the one Namespace manifest under the directory",
     )
+    scope.add_argument(
+        "--corpus",
+        metavar="PATH",
+        help="rendered cluster corpus to check instead of a tree — a multi-document "
+             "file, '-' for stdin, or a directory; every namespace in it is judged, "
+             "so a monitor's matchNames resolves against it",
+    )
     arguments = parser.parse_args(argv)
 
-    base = pathlib.Path(arguments.directory)
-    if not base.is_dir():
+    if arguments.corpus and arguments.directory:
         print(
-            f"ERROR: {base} is not a directory: the gate was pointed at a path that "
-            "does not exist",
+            "ERROR: --corpus replaces the manifest directory, and the two are read "
+            "under different namespace rules: pass one or the other",
             file=sys.stderr,
         )
         return 2
 
-    documents, errors = load_documents(base)
+    if arguments.corpus:
+        inspected = arguments.corpus
+        documents, errors = load_corpus(arguments.corpus)
+    else:
+        base = pathlib.Path(arguments.directory or DEFAULT_TREE)
+        if not base.is_dir():
+            print(
+                f"ERROR: {base} is not a directory: the gate was pointed at a path that "
+                "does not exist",
+                file=sys.stderr,
+            )
+            return 2
+        inspected = str(base)
+        documents, errors = load_documents(base)
+
     if errors:
         print("ERROR: a manifest could not be read:", file=sys.stderr)
         print("\n".join(errors), file=sys.stderr)
         return 2
     if not documents:
         print(
-            f"ERROR: no manifest under {base} carries a `kind` — a gate that checks "
+            f"ERROR: no manifest in {inspected} carries a `kind` — a gate that checks "
             "nothing is not a gate; check that the manifests are still there.",
             file=sys.stderr,
         )
@@ -593,7 +893,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return check(
-            documents, arguments.observability_namespace, namespace, namespace_error
+            documents,
+            arguments.observability_namespace,
+            namespace,
+            namespace_error,
+            bool(arguments.corpus),
         )
     except GateError as error:
         print(f"ERROR: {error}", file=sys.stderr)

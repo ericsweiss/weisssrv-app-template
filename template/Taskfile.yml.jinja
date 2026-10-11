@@ -20,7 +20,6 @@ vars:
   # Resources kubeconform may validate against no schema. Raise it for a CR
   # the public catalog does not carry; see docs/ARCHITECTURE.md.
   ALLOWED_SKIPS: "0"
-  CRD_CATALOG: 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/{% raw %}{{.CRD_CATALOG_REF}}/{{`{{.Group}}`}}/{{`{{.ResourceKind}}`}}_{{`{{.ResourceAPIVersion}}`}}{% endraw %}.json'
 
 # Precondition anchors aliased by the gates below.
 x-preconditions:
@@ -61,46 +60,24 @@ tasks:
   flux-lint:
     desc: kustomize build + kubeconform over the manifests Flux reconciles.
     # CRITICAL: kubeconform exits 0 on empty input and on a resource it skipped
-    # for want of a schema, so the size check and the skip count are the gate.
-{%- if ci_shape == 'none' %}
-    # No pipeline here, so this task is the whole manifest gate.
+    # for want of a schema, so the render's size and the skip count are the
+    # gate. scripts/flux-lint.sh is where both floors live.
+{%- if ci_shape == 'gitlab_selfhosted' %}
+    # The pipeline's flux-lint job runs this same file, so local lint and CI
+    # share one implementation rather than two copies of it.
+{%- elif ci_shape == 'github' %}
+    # The vendored ci.yml's flux-lint job runs the same checks inline, against
+    # the same catalog commit and the same skip budget.
 {%- else %}
-    # The pipeline runs the same two commands without these guards, so a green
-    # `task lint` is stricter than a green pipeline.
+    # No pipeline here, so this task is the whole manifest gate.
 {%- endif %}
     cmds:
-      - |
-        out="$(mktemp -d)"
-        trap 'rm -rf "$out"' EXIT
-        kustomize build kubernetes/flux >"$out/render.yaml"
-        if [ ! -s "$out/render.yaml" ]; then
-          echo 'kustomize build produced no resources' >&2
-          exit 1
-        fi
-        if ! summary="$(kubeconform -strict -ignore-missing-schemas \
-          -kubernetes-version {% raw %}{{.K8S_VERSION}}{% endraw %} \
-          -schema-location default \
-          -schema-location '{% raw %}{{.CRD_CATALOG}}{% endraw %}' \
-          -summary "$out/render.yaml")"; then
-          echo "$summary" >&2
-          exit 1
-        fi
-        echo "$summary"
-        skipped="$(printf '%s\n' "$summary" | sed -n 's/.*Skipped: \([0-9][0-9]*\).*/\1/p')"
-        # A non-integer budget makes the comparison below error, and an `if`
-        # condition swallows that into the else branch, so the gate would pass.
-        case {% raw %}"{{.ALLOWED_SKIPS}}"{% endraw %} in
-          ''|*[!0-9]*)
-            echo 'ALLOWED_SKIPS must be a non-negative integer' >&2
-            exit 1
-            ;;
-        esac
-        if [ -z "$skipped" ] || [ "$skipped" -gt {% raw %}"{{.ALLOWED_SKIPS}}"{% endraw %} ]; then
-          echo "kubeconform validated ${skipped:-?} resources against no schema: the" >&2
-          echo "catalog at {% raw %}{{.CRD_CATALOG_REF}}{% endraw %} was unreachable or moved, or the CR has none" >&2
-          echo 'add a -schema-location for them, or raise ALLOWED_SKIPS in Taskfile.yml' >&2
-          exit 1
-        fi
+      - >-
+        bash scripts/flux-lint.sh --mode simple
+        --kustomize-path kubernetes/flux
+        --allowed-skips {% raw %}"{{.ALLOWED_SKIPS}}"{% endraw %}
+        --k8s-version {% raw %}"{{.K8S_VERSION}}"{% endraw %}
+        --crd-catalog-ref {% raw %}"{{.CRD_CATALOG_REF}}"{% endraw %}
 
   python-lint:
     desc: Lint the helper scripts in scripts/ with ruff, using ./ruff.toml.
@@ -164,7 +141,7 @@ tasks:
 {%- if ci_shape == 'gitlab_selfhosted' %}
 
   lib-pins:
-    desc: "Every include ref matches variables.WEISSSRV_LIB_REF (needs pyyaml)."
+    desc: "Every library pin reads the pipeline's declared lib_ref (needs pyyaml)."
     preconditions:
       - *needs_pyyaml
     cmds:
@@ -173,13 +150,17 @@ tasks:
   ci-job-names:
     desc: "Every optional `needs:` resolves to a job an include creates (needs pyyaml + a library checkout)."
     # GitLab ignores an optional need naming no job, so a renamed library job
-    # stops the review waiting for lint and nothing says so.
+    # stops the review waiting for lint and nothing says so. The declared blind
+    # spot is GitLab's own Secret-Detection template, which neither checkout holds.
     preconditions:
       - *needs_pyyaml
       - sh: test -d "$WEISSSRV_LIB_PATH"
         msg: "set WEISSSRV_LIB_PATH to a {{ lib_project }} checkout at {{ lib_ref }}"
     cmds:
-      - python3 scripts/check-ci-include-job-names.py --require-optional-needs
+      - >-
+        python3 scripts/check-ci-include-job-names.py --require-optional-needs
+        --allow-unreadable-include 'Jobs/Secret-Detection.gitlab-ci.yml=GitLab
+        ships this template with the instance, so it is in neither checkout'
 {%- endif %}
 
   render:

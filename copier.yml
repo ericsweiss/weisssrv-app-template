@@ -577,16 +577,16 @@ lib_ref:
   type: str
   when: "{{ ci_shape == 'gitlab_selfhosted' }}"
   help: >-
-    weisssrv-lib ref every `include:` in the generated pipeline pins. Use a
-    RELEASE TAG (vX.Y.Z): the library's include contract is explicit that a
-    branch is never a valid pin, and a branch deleted after merge takes every
-    include with it.
-  default: "v0.19.0"
+    weisssrv-lib ref the generated pipeline declares, and every `include:` in
+    it reads. Use a RELEASE TAG (vX.Y.Z): the library's include contract is
+    explicit that a branch is never a valid pin, and a branch deleted after
+    merge takes every include with it.
+  default: "v0.20.0"
   validator: >-
     {% if not (lib_ref | regex_search('^v\\d+\\.\\d+\\.\\d+$')) %}
     lib_ref must be a release TAG of the form vX.Y.Z (e.g. v1.2.3). The
-    generated repo's scripts/check-lib-pins.py enforces the same shape on every
-    `include:` entry, so a branch answered here fails the very first pipeline.
+    generated repo's scripts/check-lib-pins.py holds the declared ref to the
+    same shape, so a branch answered here fails the very first pipeline.
     {% endif %}
 
 lib_project:

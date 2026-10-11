@@ -1,4 +1,11 @@
 ---
+spec:
+  inputs:
+    lib_ref:
+      # Single source for every weisssrv-lib pin below. An input interpolates
+      # before `include:` resolves; a variable does not exist yet there.
+      default: v0.20.0
+---
 # CI for the template itself. The generic jobs come from the shared library, so
 # the template is linted by the same tooling it hands to a generated repo.
 # Every job is tag-less and non-root safe, so they land on the shared runner.
@@ -33,10 +40,10 @@ variables:
   # Full clone: the semantic-release job scans the commit range since the newest
   # tag, and a shallow fetch creates no tag refs.
   GIT_DEPTH: "0"
-  # Single source for the library pin. `include:` cannot read it, so each entry
-  # below repeats the tag as a literal and scripts/check-lib-pins.py fails the
-  # pipeline on drift or a branch pin. Bump here, then run that with --fix.
-  WEISSSRV_LIB_REF: "v0.19.0"
+  # The pin job scripts interpolate at run time, read from the header input so
+  # it cannot drift from the `include:` entries. Move the tag with
+  # `scripts/check-lib-pins.py --bump vX.Y.Z`.
+  WEISSSRV_LIB_REF: $[[ inputs.lib_ref ]]
   # Library checkout the python-tests job clones into, read by
   # tests/test_validate_render.py's include-contract gate, which fails rather
   # than skips once $CI is set.
@@ -51,7 +58,7 @@ include:
   # conditional paths are not valid names until rendered. validate-rendered-app
   # yamllints the rendered tree, which is where template/ gets covered.
   - project: eric/weisssrv-lib
-    ref: v0.19.0
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
@@ -69,7 +76,7 @@ include:
         - "scripts/vendored-manifest.yml"
 
   - project: eric/weisssrv-lib
-    ref: v0.19.0
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/python-lint.yml
     inputs:
       tags: []
@@ -88,7 +95,7 @@ include:
   # The comment convention, over the whole tree. No `--config`, so the gate is
   # stdlib-only and the PyYAML install is skipped.
   - project: eric/weisssrv-lib
-    ref: v0.19.0
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/comment-length.yml
     inputs:
       tags: []
@@ -97,7 +104,7 @@ include:
   # copier.yml schema checks + the render invariants. Everything in the
   # repository feeds a render, hence the catch-all `changes`.
   - project: eric/weisssrv-lib
-    ref: v0.19.0
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/test/python-tests.yml
     inputs:
       tags: []
@@ -115,7 +122,7 @@ include:
   # and its own docs carry the same relative cross-links. It scans every tracked
   # *.md, so `template/**/*.md` is listed too.
   - project: eric/weisssrv-lib
-    ref: v0.19.0
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
@@ -128,7 +135,7 @@ include:
         - "scripts/check-doc-links.py"
 
   - project: eric/weisssrv-lib
-    ref: v0.19.0
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/security/secret-detection.yml
     inputs:
       tags: []
@@ -138,7 +145,7 @@ include:
       cpu_selector: "esweiss.com/cpu=modern"
 
   - project: eric/weisssrv-lib
-    ref: v0.19.0
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/review/pr-agent.yml
     inputs:
       tags: []
@@ -159,14 +166,14 @@ include:
   # tag a generated repo's `copier update` resolves to. Untagged, copier falls
   # back to HEAD. See docs/VERSIONING.md.
   - project: eric/weisssrv-lib
-    ref: v0.19.0
+    ref: $[[ inputs.lib_ref ]]
     file: /ci/release/semantic-release.yml
     inputs:
       tags: []
 
 # The library-pin gate, kept as a job of its own so it runs whatever happens to
-# tests/. It reads variables.WEISSSRV_LIB_REF and requires every include above
-# to pin exactly it, as a release tag.
+# tests/. It reads the header's lib_ref default, requires a release tag, and
+# requires every include above and the variable to read that input.
 lib-pin-check:
   stage: lint
   image: python:3.13-slim

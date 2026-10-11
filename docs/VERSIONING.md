@@ -106,10 +106,11 @@ Exactly one pair is proved, and it is the default: `validate-rendered-app`
 clones the library at `copier.yml`'s `lib_ref` default and runs the real
 toolchain over the render against it.
 
-The `lib_ref` default in `copier.yml` and this repository's own `include:` refs
-move together, in one merge request. `scripts/check-lib-pins.py --fix` syncs the
-includes and `validate-rendered-app` clones at the default, so the default is
-the tag actually proved. The test suite compares the two.
+The `lib_ref` default in `copier.yml` and the ref this repository's own pipeline
+declares move together, in one merge request. `scripts/check-lib-pins.py --bump
+vX.Y.Z` moves the declared ref and everything that reads it, and
+`validate-rendered-app` clones at the copier default, so the default is the tag
+actually proved. The test suite compares the two.
 
 **Other pairs are untested, not unsupported.** A repo on an older template
 release answering a newer `lib_ref` is a combination nothing here exercised.

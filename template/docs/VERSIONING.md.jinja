@@ -60,13 +60,16 @@ available to a tenant repo.
 ## The library pin
 
 Every `include:` in `.gitlab-ci.yml` pins a release tag of `{{ lib_project }}`,
-and moving those pins changes what gates this repo. The tag lives in **one** place —
-`variables.WEISSSRV_LIB_REF`. GitLab forbids a variable in `include: ref:`, so
-`scripts/check-lib-pins.py --fix` syncs those literals and the `lib-pin-check`
-job fails the pipeline on any that drift or pin a branch. A bump is one edit plus
-`--fix`, and re-vendoring the library copies under `scripts/` from the new tag in
-the same {{ change_request }}: every file under `scripts/`. No gate here
-notices an edit to a vendored file; a re-vendor overwrites it.
+and moving those pins changes what gates this repo. The tag is declared **once**,
+as `spec.inputs.lib_ref.default` in the pipeline's header document: an input
+interpolates before `include:` resolves, so every entry reads
+`$[[ inputs.lib_ref ]]` rather than repeating the tag.
+`scripts/check-lib-pins.py --bump vX.Y.Z` moves the declared tag and rewrites
+everything that reads it, `scripts/lib-ref-sites.yml`'s sites included, and the
+`lib-pin-check` job fails the pipeline on a pin that drifts or names a branch.
+A bump is that one command plus re-vendoring the library copies under `scripts/`
+from the new tag in the same {{ change_request }}: every file under `scripts/`.
+No gate here notices an edit to a vendored file; a re-vendor overwrites it.
 {%- elif ci_shape == 'github' %}
 
 ## Vendored workflows

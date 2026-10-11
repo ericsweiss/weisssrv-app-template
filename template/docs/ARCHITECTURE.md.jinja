@@ -230,8 +230,9 @@ ingress:
 `task lint` runs every gate this repo has.{% if ci_shape == 'gitlab_selfhosted' %} Four{% else %} Three{% endif %} are worth knowing:
 
 - `flux-lint` fails when kubeconform validated more resources against no schema
-  than `ALLOWED_SKIPS` in `Taskfile.yml` allows. A CR your own operator defines
-  is not in the public CRD catalog: add a `-schema-location` for it, or raise
+  than `ALLOWED_SKIPS` in `Taskfile.yml` allows, and when the build rendered no
+  document at all. A CR your own operator defines is not in the public CRD
+  catalog: point `CRD_CATALOG_REF` at a catalog that carries it, or raise
   `ALLOWED_SKIPS`.
 {%- if ci_shape == 'gitlab_selfhosted' %}
   The pipeline carries its own budget: raise it by passing `allowed_skips` to the
@@ -242,9 +243,11 @@ ingress:
 {%- endif %}
 - `scrape-wiring` fails when no NetworkPolicy admits the `observability`
   namespace on the port `servicemonitor.yaml` scrapes. A drifted pair is a
-  `TargetDown` page in the platform's Alertmanager, not here. The gate models a
-  namespace-scoped peer only: a peer that also carries a `podSelector` fails it,
-  so keep the namespace peer whole and narrow elsewhere. A
+  `TargetDown` page in the platform's Alertmanager, not here. A peer that names
+  the namespace and also carries a `podSelector` keeps its credit, the narrowing
+  left unresolved: Prometheus is chart-installed, so its pod labels are in no
+  manifest here. A peer combining an EMPTY `namespaceSelector` with a
+  `podSelector` names no namespace to credit and fails. A
   `spec.namespaceSelector` on the monitor may narrow the scrape with
   `any: false`; a wider one has to be checked where the policies covering it
   live.

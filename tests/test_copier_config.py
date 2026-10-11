@@ -179,14 +179,15 @@ def test_answer_fixtures_pin_the_default_library_tag():
 
 
 def test_library_pin_is_the_same_in_the_pipeline_and_the_answer_default():
-    """This repo's own `include:` refs and what a fresh render pins move
-    together: validate-rendered-app clones at the answer default, so a partial bump
-    lints the template with one library and hands tenants another."""
-    ci = render_app.load_ci(REPO_ROOT / ".gitlab-ci.yml")
-    pinned = ci["variables"]["WEISSSRV_LIB_REF"]
+    """The ref this repo's own pipeline declares and what a fresh render pins
+    move together: validate-rendered-app clones at the answer default, so a partial
+    bump lints the template with one library and hands tenants another."""
+    pinned = render_app.declared_lib_ref(REPO_ROOT / ".gitlab-ci.yml")
     want = CONFIG["lib_ref"]["default"]
-    assert pinned, "variables.WEISSSRV_LIB_REF is unset — this gate examined nothing"
-    assert pinned == want, f".gitlab-ci.yml pins {pinned} but copier.yml lib_ref default is {want}"
+    assert pinned, "spec.inputs.lib_ref.default is unset — this gate examined nothing"
+    assert pinned == want, (
+        f".gitlab-ci.yml declares {pinned} but copier.yml lib_ref default is {want}"
+    )
 
 
 def _referenced_questions(text: str) -> set[str]:
@@ -820,13 +821,13 @@ TEMPLATE_OWNED: set[str] = set()
 
 
 def _script_paths(root) -> set[str]:
-    """Every Python gate under scripts/ and template/scripts/, repo-relative."""
+    """Every gate under scripts/ and template/scripts/, repo-relative."""
     return {
         path.relative_to(root).as_posix()
         for directory in ("scripts", "template/scripts")
         for path in (root / directory).iterdir()
         # The conditional copies carry `{% endif %}` after the suffix.
-        if path.is_file() and ".py" in path.name
+        if path.is_file() and (".py" in path.name or ".sh" in path.name)
     }
 
 

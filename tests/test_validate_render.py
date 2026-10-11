@@ -363,11 +363,11 @@ def test_a_library_working_tree_git_cannot_read_is_reported(tmp_path, capsys, mo
     assert "cannot read" in capsys.readouterr().out
 
 
-def test_a_pipeline_with_no_lib_ref_variable_fails_the_self_check(
+def test_a_pipeline_that_declares_no_lib_ref_fails_the_self_check(
     tmp_path, capsys, monkeypatch
 ) -> None:
-    """With WEISSSRV_LIB_REF gone the ref is None, and the contract gate would
-    otherwise validate against whatever the checkout happens to be at."""
+    """With no `spec:` header the declared ref is None, and the contract gate
+    would otherwise validate against whatever the checkout happens to be at."""
     root = tmp_path / "self"
     root.mkdir()
     (root / ".gitlab-ci.yml").write_text(yaml.safe_dump({"stages": ["lint"], "include": []}))
@@ -375,7 +375,25 @@ def test_a_pipeline_with_no_lib_ref_variable_fails_the_self_check(
     assert validate_render.check_own_include_contract(tmp_path / "lib") == [
         "own include contract"
     ]
-    assert "WEISSSRV_LIB_REF is unset" in capsys.readouterr().out
+    assert "spec.inputs.lib_ref.default is unset" in capsys.readouterr().out
+
+
+def test_the_self_check_reads_the_header_not_the_variable(tmp_path, monkeypatch) -> None:
+    """The variable reads the input, so after conversion it holds the literal
+    `$[[ inputs.lib_ref ]]` — truthy, and no tag at all."""
+    root = tmp_path / "self"
+    root.mkdir()
+    (root / ".gitlab-ci.yml").write_text(
+        "spec:\n"
+        "  inputs:\n"
+        f"    lib_ref:\n      default: {LIB_REF}\n"
+        "---\n"
+        "variables:\n"
+        "  WEISSSRV_LIB_REF: $[[ inputs.lib_ref ]]\n"
+        "include: []\n"
+    )
+    monkeypatch.setattr(validate_render.render_app, "REPO_ROOT", root)
+    assert validate_render._own_lib_ref() == LIB_REF
 
 
 def test_a_repo_with_no_pipeline_of_its_own_is_not_a_failure(tmp_path, monkeypatch) -> None:

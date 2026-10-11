@@ -29,9 +29,9 @@ def test_this_repos_own_doc_links_resolve():
 
 
 def test_this_repos_own_lib_pins_match_the_single_source():
-    """The smoke test test_check_lib_pins.py assigns to the consumer. The
-    include refs are literals GitLab will not interpolate, so a bump without
-    --fix leaves a stale pin behind."""
+    """The smoke test test_check_lib_pins.py assigns to the consumer. Every pin
+    reads the `spec:` header's lib_ref, so a bump that moved the header without
+    --fix leaves a literal behind."""
     project = render_app.load_ci(REPO_ROOT / ".gitlab-ci.yml")["variables"]["LIB_PROJECT"]
     result = _run("scripts/check-lib-pins.py", "--project", project)
     assert result.returncode == 0, result.stdout + result.stderr

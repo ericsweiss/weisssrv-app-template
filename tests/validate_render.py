@@ -392,12 +392,12 @@ def check_include_contract(
 
 
 def _own_lib_ref() -> str | None:
-    """The library ref THIS repository pins, which is the ref its vendored
+    """The library ref THIS repository declares, which is the ref its vendored
     copies are byte-identical to."""
     own = render_app.REPO_ROOT / ".gitlab-ci.yml"
     if not own.is_file():
         return None
-    return (render_app.load_ci(own).get("variables") or {}).get("WEISSSRV_LIB_REF")
+    return render_app.declared_lib_ref(own)
 
 
 def check_own_include_contract(
@@ -417,7 +417,7 @@ def check_own_include_contract(
     ref = _own_lib_ref()
     if not ref:
         print(f"  {label:<{LABEL_WIDTH}} FAILED")
-        print("    variables.WEISSSRV_LIB_REF is unset, so the pinned ref is unverified")
+        print("    spec.inputs.lib_ref.default is unset, so the pinned ref is unverified")
         return [label]
     return check_include_contract(
         render_app.REPO_ROOT, lib_path, ref, allow_ref_mismatch, label=label, checkout=checkout

@@ -214,11 +214,25 @@ def test_a_stale_service_port_name_fails(tmp_path):
     assert result.returncode == 1, result.stdout + result.stderr
 
 
-def test_a_peer_combining_a_pod_selector_fails(tmp_path):
-    """An unmodelled peer shape must fail loudly rather than be credited."""
+def test_a_peer_narrowing_the_named_namespace_keeps_its_credit(tmp_path):
+    """Prometheus is chart-installed, so its pod labels are in no manifest here:
+    a podSelector narrowing the admitted namespace keeps the namespace and the
+    port credited, with the narrowing recorded as unresolved."""
     policy = _allow()
     policy["spec"]["ingress"][0]["from"][0]["podSelector"] = {
-        "matchLabels": {"app.kubernetes.io/name": "not-prometheus"}
+        "matchLabels": {"app.kubernetes.io/name": "prometheus"}
+    }
+    result = _run(_write(tmp_path, _base(_service_monitor(), policy)))
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_a_peer_combining_an_empty_namespace_selector_with_a_pod_selector_fails(tmp_path):
+    """An unmodelled peer shape must fail loudly rather than be credited: an
+    empty namespaceSelector plus a podSelector names no namespace to credit."""
+    policy = _allow()
+    policy["spec"]["ingress"][0]["from"][0] = {
+        "namespaceSelector": {},
+        "podSelector": {"matchLabels": {"app.kubernetes.io/name": "not-prometheus"}},
     }
     result = _run(_write(tmp_path, _base(_service_monitor(), policy)))
     assert result.returncode == 1, result.stdout + result.stderr

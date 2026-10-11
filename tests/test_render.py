@@ -1258,6 +1258,7 @@ SHAPE_FILES = {
             ".gitlab-ci.yml",
             ".gitlab/secret-detection-ruleset.toml",
             "scripts/check-lib-pins.py",
+            "scripts/lib-ref-sites.yml",
             "scripts/check-ci-include-job-names.py",
         ],
         [".github/workflows/ci.yml"],
@@ -1270,6 +1271,7 @@ SHAPE_FILES = {
             ".gitlab-ci.yml",
             ".gitlab/secret-detection-ruleset.toml",
             "scripts/check-lib-pins.py",
+            "scripts/lib-ref-sites.yml",
             "scripts/check-ci-include-job-names.py",
         ],
     ),
@@ -1282,6 +1284,7 @@ SHAPE_FILES = {
             ".github/workflows/ci.yml",
             ".gitlab/secret-detection-ruleset.toml",
             "scripts/semantic-release.py",
+            "scripts/lib-ref-sites.yml",
             "scripts/check-ci-include-job-names.py",
         ],
     ),
@@ -1422,16 +1425,26 @@ def test_manifests_are_identical_across_ci_shapes(rendered, rendered_none):
         assert path.read_text() == other.read_text(), f"{path.name} differs by CI shape"
 
 
+# The one string a library `include: ref:` is allowed to be: an input
+# interpolates before `include:` resolves, where a variable does not yet exist.
+LIB_REF_INPUT = "$[[ inputs.lib_ref ]]"
+
+
 def test_generated_pipeline_pins_the_library(rendered, answers):
-    ci = render_app.load_ci(rendered / ".gitlab-ci.yml")
-    assert ci["variables"]["WEISSSRV_LIB_REF"] == answers["lib_ref"]
+    pipeline = rendered / ".gitlab-ci.yml"
+    assert render_app.declared_lib_ref(pipeline) == answers["lib_ref"], (
+        "the `spec:` header does not declare the answered tag, so the pins below "
+        "read something else"
+    )
+    ci = render_app.load_ci(pipeline)
+    assert ci["variables"]["WEISSSRV_LIB_REF"] == LIB_REF_INPUT
     includes = [i for i in ci["include"] if isinstance(i, dict) and "project" in i]
     assert includes, "the pipeline includes no library templates"
     for include in includes:
         assert include["project"] == answers["lib_project"]
-        assert include["ref"] == answers["lib_ref"], (
-            "GitLab cannot interpolate a variable into `include: ref:`, so every "
-            "entry repeats the tag — and every one must match the single source"
+        assert include["ref"] == LIB_REF_INPUT, (
+            "every library include reads the declared ref, so the answered tag "
+            "reaches the pipeline through exactly one line"
         )
 
 
@@ -2492,20 +2505,20 @@ def test_the_manifest_gate_rejects_an_empty_build(repo, tmp_path):
         ["sh", "-c", script], cwd=repo.path, capture_output=True, text=True, env=env
     )
     assert result.returncode != 0, "flux-lint reported a build with no resources as clean"
-    assert "produced no resources" in result.stderr, result.stdout + result.stderr
+    assert "rendered no document" in result.stdout + result.stderr
 
 
 def test_the_manifest_gate_rejects_a_skipped_schema(repo, tmp_path):
     """kubeconform also exits 0 on a resource it skipped for want of a schema,
     which in a tenant repo is most of them. A budget over ALLOWED_SKIPS reds."""
     script = _flux_lint_script(repo)
-    assert "against no schema" in script, "flux-lint no longer reports a skipped resource"
+    assert "scripts/flux-lint.sh" in script, "the task no longer runs the vendored gate"
     env = _stubbed_path(tmp_path / "skips" / "bin", "kind: Service\n", SKIPPED_SUMMARY)
     result = subprocess.run(
         ["sh", "-c", script], cwd=repo.path, capture_output=True, text=True, env=env
     )
     assert result.returncode != 0, "flux-lint reported 3 unvalidated resources as clean"
-    assert "against no schema" in result.stderr, result.stdout + result.stderr
+    assert "against no schema" in result.stdout + result.stderr
 
 
 def test_the_manifest_gate_reports_an_invalid_resource(repo, tmp_path):
@@ -2519,7 +2532,7 @@ def test_the_manifest_gate_reports_an_invalid_resource(repo, tmp_path):
         ["sh", "-c", script], cwd=repo.path, capture_output=True, text=True, env=env
     )
     assert result.returncode != 0, "flux-lint reported an invalid resource as clean"
-    assert "Invalid: 1" in result.stderr, result.stdout + result.stderr
+    assert "Invalid: 1" in result.stdout + result.stderr
 
 
 def test_the_manifest_gate_rejects_a_non_integer_skip_budget(repo, tmp_path):
@@ -2531,7 +2544,7 @@ def test_the_manifest_gate_rejects_a_non_integer_skip_budget(repo, tmp_path):
         ["sh", "-c", script], cwd=repo.path, capture_output=True, text=True, env=env
     )
     assert result.returncode != 0, "flux-lint accepted a budget it cannot compare against"
-    assert "non-negative integer" in result.stderr, result.stdout + result.stderr
+    assert "non-negative integer" in result.stdout + result.stderr
 
 
 def test_the_manifest_gate_rejects_a_summary_without_a_skip_count(repo, tmp_path):
@@ -2543,7 +2556,54 @@ def test_the_manifest_gate_rejects_a_summary_without_a_skip_count(repo, tmp_path
         ["sh", "-c", script], cwd=repo.path, capture_output=True, text=True, env=env
     )
     assert result.returncode != 0, "flux-lint reported an unparsable summary as clean"
-    assert "against no schema" in result.stderr, result.stdout + result.stderr
+    assert "against no schema" in result.stdout + result.stderr
+
+
+# kubeconform chooses its parser by FILE EXTENSION. Handed a path carrying none
+# it reports "0 resource found in 0 file" and exits 0, so a gate that renders to
+# a bare mktemp file validates nothing and still passes its skip budget.
+KUBECONFORM_READS = (".yaml", ".yml", ".json")
+
+
+def test_the_manifest_gate_hands_kubeconform_a_file_it_parses(repo, tmp_path):
+    """The whole gate turns on this one argument: kubeconform skips a file whose
+    name it does not recognise without saying so, and `Skipped: 0` then clears
+    the budget. No positional argument at all is the stdin form, which it reads."""
+    bindir = tmp_path / "parses" / "bin"
+    bindir.mkdir(parents=True)
+    argv = tmp_path / "parses" / "argv"
+    (bindir / "kustomize").write_text("#!/bin/sh\nprintf '%s\\n' 'kind: Service'\n")
+    (bindir / "kubeconform").write_text(
+        f'#!/bin/sh\nfor arg in "$@"; do echo "$arg" >> "{argv}"; done\n'
+        f"printf '%s\\n' '{CLEAN_SUMMARY}'\n"
+    )
+    for name in ("kustomize", "kubeconform"):
+        (bindir / name).chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = f"{bindir}{os.pathsep}{env['PATH']}"
+    result = subprocess.run(
+        ["sh", "-c", _flux_lint_script(repo)],
+        cwd=repo.path,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert argv.is_file(), "kubeconform was never invoked"
+    args = argv.read_text().splitlines()
+    positional, skip = [], False
+    for arg in args:
+        if skip:
+            skip = False
+        elif arg in ("-kubernetes-version", "-schema-location", "-output"):
+            skip = True
+        elif not arg.startswith("-"):
+            positional.append(arg)
+    for target in positional:
+        assert target.endswith(KUBECONFORM_READS), (
+            f"the gate hands kubeconform {target!r}, whose extension it does not parse: "
+            "it reports 0 resources, exits 0, and the skip budget clears"
+        )
 
 
 def test_the_manifest_gate_passes_a_clean_render(repo, tmp_path):

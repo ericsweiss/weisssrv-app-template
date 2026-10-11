@@ -24,6 +24,14 @@ TEMPLATE_GATE = (
 )
 _HINT = "The python-tests job's setup_command clones the library into it."
 
+# GitLab ships Jobs/Secret-Detection.gitlab-ci.yml with the instance, so the
+# library's secret-detection template includes a file in neither checkout.
+# Undeclared, the gate stops at exit 2 rather than resolving a partial job set.
+SECRET_DETECTION_BLIND_SPOT = (
+    "Jobs/Secret-Detection.gitlab-ci.yml=GitLab ships this template with the "
+    "instance, so it is in neither checkout"
+)
+
 
 @pytest.fixture(scope="module")
 def lib_path() -> Path:
@@ -58,7 +66,15 @@ def test_both_vendored_copies_ship() -> None:
 def test_this_repos_optional_needs_resolve(lib_path) -> None:
     """The three optional needs on `pr-agent-review` name jobs two library
     includes create, so a `job_name` input or a rename upstream breaks them."""
-    result = _run(GATE, REPO_ROOT, "--lib-path", str(lib_path), "--require-optional-needs")
+    result = _run(
+        GATE,
+        REPO_ROOT,
+        "--lib-path",
+        str(lib_path),
+        "--require-optional-needs",
+        "--allow-unreadable-include",
+        SECRET_DETECTION_BLIND_SPOT,
+    )
     assert result.returncode == 0, f"{result.stdout}{result.stderr}"
 
 
@@ -68,7 +84,15 @@ def test_the_rendered_pipelines_optional_needs_resolve(lib_path, tmp_path_factor
     rendered = render_app.render(tmp_path_factory.mktemp("render-optional-needs"))
     gate = rendered / "scripts" / "check-ci-include-job-names.py"
     assert gate.is_file(), "the GitLab-shape render ships no check-ci-include-job-names.py"
-    result = _run(gate, rendered, "--lib-path", str(lib_path), "--require-optional-needs")
+    result = _run(
+        gate,
+        rendered,
+        "--lib-path",
+        str(lib_path),
+        "--require-optional-needs",
+        "--allow-unreadable-include",
+        SECRET_DETECTION_BLIND_SPOT,
+    )
     assert result.returncode == 0, f"{result.stdout}{result.stderr}"
 
 
