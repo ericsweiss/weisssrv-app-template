@@ -46,6 +46,7 @@ repos:
         entry: >-
           python scripts/check-scrape-wiring.py kubernetes/flux
           --namespace {{ app_namespace }}
+          --prometheus-pod-label app.kubernetes.io/name=prometheus
         language: python
         additional_dependencies: ["pyyaml==6.0.2"]
         pass_filenames: false

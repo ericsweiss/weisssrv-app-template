@@ -185,7 +185,7 @@ jobs:
           # --namespace-from-tree, not --namespace: a byte-identical copy cannot
           # carry a tenant's namespace, and a monitor scoped with matchNames is
           # refused without one.
-          run_gate check-scrape-wiring.py --namespace-from-tree "$MANIFEST_ROOT"
+          run_gate check-scrape-wiring.py --namespace-from-tree "$MANIFEST_ROOT" --prometheus-pod-label app.kubernetes.io/name=prometheus
           run_gate check-kustomization.py "$MANIFEST_ROOT"
           if [ "$ran" -eq 0 ]; then
             echo "ERROR: no manifest gate ran — scripts/ ships none of them, so this job proves nothing"

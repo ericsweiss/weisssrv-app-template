@@ -274,6 +274,7 @@ scrape-wiring-check:
     - >-
       python3 scripts/check-scrape-wiring.py kubernetes/flux
       --namespace {{ app_namespace }}
+      --prometheus-pod-label app.kubernetes.io/name=prometheus
 
 # CRITICAL: an emptied `resources:` list renders nothing and the cluster-side
 # Kustomization's prune then deletes every object in {{ app_namespace }}.

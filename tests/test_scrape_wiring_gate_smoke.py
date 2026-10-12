@@ -214,16 +214,20 @@ def test_a_stale_service_port_name_fails(tmp_path):
     assert result.returncode == 1, result.stdout + result.stderr
 
 
-def test_a_peer_narrowing_the_named_namespace_keeps_its_credit(tmp_path):
+def test_a_peer_narrowing_the_named_namespace_needs_the_declared_label(tmp_path):
     """Prometheus is chart-installed, so its pod labels are in no manifest here:
-    a podSelector narrowing the admitted namespace keeps the namespace and the
-    port credited, with the narrowing recorded as unresolved."""
+    a podSelector narrowing the admitted namespace is credited only against the
+    label the rendered gate declares, and refused without it."""
     policy = _allow()
     policy["spec"]["ingress"][0]["from"][0]["podSelector"] = {
         "matchLabels": {"app.kubernetes.io/name": "prometheus"}
     }
-    result = _run(_write(tmp_path, _base(_service_monitor(), policy)))
+    tree = _write(tmp_path, _base(_service_monitor(), policy))
+    result = _run(tree, "--prometheus-pod-label", "app.kubernetes.io/name=prometheus")
     assert result.returncode == 0, result.stdout + result.stderr
+    refused = _run(tree)
+    assert refused.returncode == 1
+    assert "declared scraper labels do not carry" in refused.stderr
 
 
 def test_a_peer_combining_an_empty_namespace_selector_with_a_pod_selector_fails(tmp_path):

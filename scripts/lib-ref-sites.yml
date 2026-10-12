@@ -1,0 +1,13 @@
+---
+# Every file beyond .gitlab-ci.yml that repeats the library release tag, read
+# by the vendored scripts/check-lib-pins.py; the paths are this repo's site data.
+sites:
+  # The copier default a generated tenant starts from.
+  - path: copier.yml
+    pattern: '\n  default: "(v\d+\.\d+\.\d+)"\n  validator: >-\n    \{% if not \(lib_ref'
+  # The answer fixtures the render tests drive.
+  - path: tests/answers-*.yml
+    pattern: '\nlib_ref: (v\d+\.\d+\.\d+)\n'
+  # The answer table in the consuming guide.
+  - path: docs/CONSUMING.md
+    pattern: '\| `lib_ref` \| `(v\d+\.\d+\.\d+)` \|'
