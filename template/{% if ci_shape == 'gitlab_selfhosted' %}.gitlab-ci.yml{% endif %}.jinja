@@ -118,14 +118,11 @@ include:
         - "**/*"
 
   # -- lint-docs-links: relative Markdown cross-links resolve -----------------
-  # python:3.13 overrides the library's python:3.11; drop the input to take the
-  # library's interpreter.
   - project: {{ lib_project }}
     ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/docs-link-check.yml
     inputs:
       tags: []
-      image: python:3.13
       changes:
         - "**/*.md"
         - "scripts/check-doc-links.py"
@@ -189,7 +186,7 @@ include:
 # one home.
 .pyyaml-gate:
   stage: lint
-  image: python:3.13-slim
+  image: python:3.14-slim
   tags: []
   needs: []
   variables:
@@ -232,8 +229,8 @@ lib-pin-check:
 # blind spot declared below is GitLab's own Secret-Detection template.
 ci-job-names-check:
   extends: .pyyaml-gate
-  # python:3.13-slim ships no git, and the gate reads the library's own files.
-  image: python:3.13
+  # python:3.14-slim ships no git, and the gate reads the library's own files.
+  image: python:3.14
   # The shared before_script plus the checkout; `extends` replaces the key, so
   # the install line is repeated rather than referenced.
   before_script:

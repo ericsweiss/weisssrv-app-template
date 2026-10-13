@@ -4,7 +4,7 @@ spec:
     lib_ref:
       # Single source for every weisssrv-lib pin below. An input interpolates
       # before `include:` resolves; a variable does not exist yet there.
-      default: v0.20.6
+      default: v0.21.0
 ---
 # CI for the template itself. The generic jobs come from the shared library, so
 # the template is linted by the same tooling it hands to a generated repo.
@@ -62,7 +62,7 @@ include:
     file: /ci/lint/yaml-lint.yml
     inputs:
       tags: []
-      image: python:3.13-slim
+      image: python:3.14-slim
       config: "-c lint/yamllint-relaxed.yml"
       targets: >-
         copier.yml tests/ .gitlab-ci.yml lint/ .pre-commit-config.yaml
@@ -80,7 +80,7 @@ include:
     file: /ci/lint/python-lint.yml
     inputs:
       tags: []
-      image: python:3.13-slim
+      image: python:3.14-slim
       # `scripts` is this repository's own vendored tooling. Under
       # template/scripts ruff sees the four plain-named files; the two with a
       # Jinja path for a filename are linted in each render that ships them.
@@ -108,12 +108,12 @@ include:
     file: /ci/test/python-tests.yml
     inputs:
       tags: []
-      image: python:3.13
+      image: python:3.14
       apt_packages: ""
       test_dir: "tests"
       pip_packages: "copier==9.17.0 jinja2"
       # The library checkout the include-contract gate compares against; the
-      # python:3.13 image already ships git.
+      # python:3.14 image already ships git.
       setup_command: 'python3 scripts/ci-fetch-tools.py kustomize kubeconform && mkdir -p "$(dirname "$WEISSSRV_LIB_PATH")" && git clone --depth 1 --branch "$WEISSSRV_LIB_REF" "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${LIB_PROJECT}.git" "$WEISSSRV_LIB_PATH"'
       changes:
         - "**/*"
@@ -176,7 +176,7 @@ include:
 # requires every include above and the variable to read that input.
 lib-pin-check:
   stage: lint
-  image: python:3.13-slim
+  image: python:3.14-slim
   tags: []
   needs: []
   script:
@@ -192,7 +192,7 @@ lib-pin-check:
 
 validate-rendered-app:
   stage: test
-  image: python:3.13
+  image: python:3.14
   tags: []
   needs: []
   # The largest limits in the pipeline, so on the quota-capped shared runner
