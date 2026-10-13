@@ -116,11 +116,11 @@ workflow holding `packages: write` must never run on one.
 The rendered `.gitlab-ci.yml` keeps its comments to the trap each block guards.
 The reasoning behind them lives here.
 
-**`lint-docs-links` image.** The library already defaults to the full
-`python:3.11`, which carries the `git` the tracked-Markdown scan shells out to.
-The `python:3.13` input is an interpreter bump, not a capability fix, and the
-checker raises rather than degrading when `git` is missing. The job name is the
-library's own default, so no `job_name` input restates it.
+**`lint-docs-links` image.** The library's default is the full `python:3.14`,
+which carries the `git` the tracked-Markdown scan shells out to, and the
+checker raises rather than degrading when `git` is missing; no `image` input
+restates it. The job name is the library's own default, so no `job_name` input
+restates it either.
 
 **`cpu_selector` on secret detection and the image build.** gitleaks needs
 POPCNT/SSE4.2 and SIGILLs on older CPUs, so both jobs always emit a CPU node
