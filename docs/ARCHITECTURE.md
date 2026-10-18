@@ -105,8 +105,9 @@ anywhere. `tests/validate_render.py` runs what a generated repo's own pipeline
 runs — yamllint, `kustomize build`, kubeconform, a second kubeconform pass over
 `docs/ONBOARDING.md`'s wiring block, ruff, the doc-link checker, the
 egress-fence, scrape-wiring and kustomization gates, the library-pin gate and,
-with `--lib-path`, the vendored-copy gate — against a
-render. That is the only way to learn that a repo this template produces would
+with `--lib-path`, the vendored-copy gate — against a render. A render carrying
+`kubernetes/db` also gets that tree built, schema-checked and run through the
+egress-fence, kustomization, CNPG-safeguard and storage-class gates. That is the only way to learn that a repo this template produces would
 fail its own gates.
 
 ```

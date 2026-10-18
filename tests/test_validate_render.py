@@ -538,6 +538,33 @@ def test_validate_runs_every_gate(tmp_path, monkeypatch) -> None:
     }
 
 
+def test_validate_builds_and_gates_the_database_tree(tmp_path, monkeypatch) -> None:
+    """kubernetes/db is reconciled by its own Kustomization, so the flux build
+    never reaches it: a render carrying the tree gets its own build and gates."""
+    labels: list[str] = []
+
+    def record(self, name, *command, stdin=None):
+        labels.append(name)
+        return _SUMMARY
+
+    monkeypatch.setattr(validate_render.Runner, "gate", record)
+    monkeypatch.setattr(validate_render, "_make_git_tree", lambda root: None)
+    monkeypatch.setattr(validate_render, "_catalog", lambda root: "catalog")
+    monkeypatch.setattr(validate_render, "_onboarding_wiring", lambda root: "---\n")
+    (tmp_path / "kubernetes" / "db").mkdir(parents=True)
+    (tmp_path / "kubernetes" / "db" / "cluster.yaml").write_text("---\n")
+    answers = {"k8s_version": "1.36.0", "lib_project": "x/y", "app_namespace": "ns"}
+    validate_render.validate(tmp_path, answers)
+    assert {
+        "kustomize build db",
+        "kubeconform db",
+        "netpol except db",
+        "kustomization db",
+        "cnpg clusters",
+        "pvc storageclass",
+    } <= set(labels)
+
+
 def _stub_main(monkeypatch, tmp_path: Path, failures: list[str]) -> None:
     """Run main() over a stubbed render, with the PATH check out of the way."""
     monkeypatch.setattr(sys, "argv", ["validate_render.py"])

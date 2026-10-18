@@ -133,6 +133,25 @@ def _catalog(root: Path) -> str:
     return CATALOG_TEMPLATE.format(ref=ref)
 
 
+def _validate_db(runner: Runner, root: Path, catalog: str, k8s_version) -> None:
+    """kubernetes/db is reconciled by its own Kustomization, so the flux build
+    never reaches it: build it, validate it and run the database gates over it."""
+    built = runner.gate("kustomize build db", "kustomize", "build", "kubernetes/db")
+    if "kustomize build db" not in runner.failures:
+        _kubeconform(runner, "kubeconform db", "kubeconform db skips", catalog, k8s_version, built)
+    runner.gate(
+        "netpol except db", sys.executable, "scripts/check-netpol-except-parity.py", "kubernetes/db"
+    )
+    runner.gate("kustomization db", sys.executable, "scripts/check-kustomization.py", "kubernetes/db")
+    manifests = "".join(
+        path.read_text(encoding="utf-8") for path in sorted((root / "kubernetes/db").glob("*.yaml"))
+    )
+    runner.gate("cnpg clusters", sys.executable, "scripts/check-cnpg-clusters.py", stdin=manifests)
+    runner.gate(
+        "pvc storageclass", sys.executable, "scripts/check-pvc-storageclass.py", stdin=manifests
+    )
+
+
 def validate(root: Path, answers: dict) -> list[str]:
     _make_git_tree(root)
     catalog = _catalog(root)
@@ -178,6 +197,9 @@ def validate(root: Path, answers: dict) -> list[str]:
     runner.gate(
         "kustomization", sys.executable, "scripts/check-kustomization.py", "kubernetes/flux"
     )
+
+    if (root / "kubernetes/db").is_dir():
+        _validate_db(runner, root, catalog, answers["k8s_version"])
 
     if (root / ".gitlab-ci.yml").is_file():
         runner.gate(

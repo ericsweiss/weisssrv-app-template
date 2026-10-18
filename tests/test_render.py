@@ -3426,3 +3426,18 @@ def test_the_pdb_leaves_the_database_pods_out(repo):
     assert _selects(selector, {"app.kubernetes.io/name": slug}), "the PDB lost the app pods"
     for pod, labels in _db_pods(slug).items():
         assert not _selects(selector, labels), f"the PDB counts the database {pod} pod"
+
+
+def test_generated_db_manifests_build(repo):
+    """kubernetes/db is built by its own Kustomization, so a tree kustomize cannot
+    build fails only here and in validate_render."""
+    _skip_without_db(repo.answers)
+    require_tool("kustomize", "generated-manifest build", _TOOLCHAIN_HINT, ci_optional=True)
+    result = _run(repo.path, "kustomize", "build", DB)
+    assert result.returncode == 0, result.stderr
+    kinds = {d["kind"] for d in yaml.safe_load_all(result.stdout) if d}
+    expected = {
+        "Cluster", "ObjectStore", "ScheduledBackup", "CronJob",
+        "PodMonitor", "PrometheusRule", "NetworkPolicy", "ExternalSecret",
+    }
+    assert expected <= kinds, sorted(expected - kinds)
