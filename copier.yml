@@ -582,6 +582,13 @@ database:
   choices:
     No database: none
     PostgreSQL on CloudNativePG: postgres
+  validator: >-
+    {% if database == 'postgres' and app_port | int in [5432, 8000, 9187] %}
+    app_port {{ app_port }} is a port the database pods listen on (5432 PostgreSQL,
+    8000 the CloudNativePG instance manager, 9187 its metrics), and the app's
+    scrape NetworkPolicy also selects those pods, so it would open that port to
+    the observability namespace. Choose another app_port.
+    {% endif %}
 
 db_name:
   type: str

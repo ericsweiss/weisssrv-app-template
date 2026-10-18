@@ -272,6 +272,49 @@ def test_app_port_rejects_ports_the_pod_cannot_bind(port, rejected):
     assert bool(_validator_message("app_port", app_port=port)) is rejected
 
 
+# The ports the CloudNativePG instance pods listen on: PostgreSQL, the instance
+# manager's status endpoint, and the metrics exporter.
+DB_POD_PORTS = (5432, 8000, 9187)
+
+
+@pytest.mark.parametrize(
+    "database,port,rejected",
+    [
+        ("postgres", 8080, False),
+        *[("postgres", port, True) for port in DB_POD_PORTS],
+        *[("none", port, False) for port in DB_POD_PORTS],
+    ],
+)
+def test_database_rejects_an_app_port_the_db_pods_listen_on(database, port, rejected):
+    """The scrape allow selects on the app's name label alone, which the db pods
+    carry too, so an app_port equal to a db port opens it to observability."""
+    message = _validator_message("database", database=database, app_port=port)
+    assert bool(message) is rejected, message or "accepted, but should not be"
+    if rejected:
+        assert "app_port" in message and str(port) in message, message
+
+
+def test_copier_rejects_a_db_port_as_app_port(tmp_path):
+    """The database validator is wired on a choice question, end to end."""
+    src = render_app.copy_source(tmp_path)
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "copier", "copy", "--defaults", "--trust",
+            "--data-file", str(render_app.ANSWERS),
+            "--data", "database=postgres",
+            "--data", "app_port=8000",
+            str(src), str(tmp_path / "out"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0, "app_port 8000 was accepted with a database"
+    assert "question 'database'" in result.stdout + result.stderr, (
+        "the render failed for some other reason:\n" + result.stdout + result.stderr
+    )
+    assert not (tmp_path / "out" / "kubernetes").exists(), "a rejected render wrote manifests"
+
+
 @pytest.mark.parametrize(
     "vault,rejected",
     [
@@ -583,6 +626,7 @@ def test_validator_accepts_and_rejects(case):
 DEDICATED_VALIDATOR_TESTS = {
     "app_slug": "test_app_slug_must_be_a_dns_label",
     "app_port": "test_app_port_rejects_ports_the_pod_cannot_bind",
+    "database": "test_database_rejects_an_app_port_the_db_pods_listen_on",
     "internal_domain": "test_internal_domain_rejects_a_colliding_pair",
     "onepassword_vault": "test_onepassword_vault_rejects_names_the_store_cannot_carry",
     "lib_ref": "test_lib_ref_takes_release_tags_only",

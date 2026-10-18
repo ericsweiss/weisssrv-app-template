@@ -107,7 +107,7 @@ component is wired and a disabled one leaves nothing behind. There is no
 
 | Answer | Default | What it drives |
 |---|---|---|
-| `database` | `none` | `postgres` renders `kubernetes/db/`: a one-instance CloudNativePG `Cluster`, its object store and nightly base backup, three role Secrets, network policies, a PodMonitor, a nightly `pg_dump` and an absence alert, plus the Deployment's file mounts and `/readyz` probe. Needs the cluster's CloudNativePG module and its `tenant-local` StorageClass (ONBOARDING O6b). |
+| `database` | `none` | `postgres` renders `kubernetes/db/`: a one-instance CloudNativePG `Cluster`, its object store and nightly base backup, three role Secrets, network policies, a PodMonitor, a nightly `pg_dump` and an absence alert, plus the Deployment's file mounts and `/readyz` probe. Needs the cluster's CloudNativePG module and its `tenant-local` StorageClass (ONBOARDING O6b). With `postgres`, `app_port` must not be 5432, 8000 or 9187: the app's scrape NetworkPolicy also selects the database pods, so it would open that database port to the observability namespace. |
 | `db_name` | the slug with `-` as `_` | The database name: a lowercase identifier, and not a YAML keyword such as `true` or `null`. |
 | `db_role_prefix` | `db_name` | The roles `<prefix>_migrate`, `<prefix>_app` and `<prefix>_ro`. |
 | `db_storage_size` | `20Gi` | The instance claim, requested from `tenant-local` and counted by the namespace's storage quota. |
