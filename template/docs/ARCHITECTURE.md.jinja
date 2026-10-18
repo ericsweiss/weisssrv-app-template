@@ -91,7 +91,7 @@ StorageClass.
 The app's state lives in the CloudNativePG cluster under `kubernetes/db`; see
 ONBOARDING step O6b for its backups and restore drill. The app itself
 soft-avoids the storage node (`{{ node_label_domain }}/nas`) and mounts no
-volume.
+persistent volume.
 {%- endif %} Persistent data is an operator-assisted step: the operator
 supplies the StorageClass or a pre-provisioned PV, and you add the PVC, the
 volume and its mount. A volume added this way is outside every backup set until

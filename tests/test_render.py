@@ -3197,6 +3197,7 @@ def test_the_docs_call_the_app_stateless_only_without_a_database(repo):
         assert ("stateless" in text) is not _wants_db(repo.answers), doc
         if _wants_db(repo.answers):
             assert "kubernetes/db" in text and "O6b" in text, doc
+        assert "mounts no volume" not in " ".join(text.split()), doc
     architecture = (REPO_ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     storage = architecture.split("**It does not ship storage**")[1].split("\n- ")[0]
     assert "database: postgres" in storage, "the template map still calls every render stateless"
