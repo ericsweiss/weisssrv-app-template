@@ -111,12 +111,13 @@ component is wired and a disabled one leaves nothing behind. There is no
 | `db_name` | the slug with `-` as `_` | The database name. |
 | `db_role_prefix` | `db_name` | The roles `<prefix>_migrate`, `<prefix>_app` and `<prefix>_ro`. |
 | `db_storage_size` | `20Gi` | The instance claim, requested from `tenant-local` and counted by the namespace's storage quota. |
-| `db_backup_bucket` | `<slug>-cnpg` | The bucket holding the WAL archive and base backups. |
+| `db_backup_bucket` | none, required | The bucket holding the WAL archive and base backups. Bucket names are global, so prefix it with the cluster: `<cluster>-cnpg-<slug>`. |
 | `db_backup_endpoint` | none, required | The bucket's S3 endpoint, `https://` with no path. |
 | `db_backup_item` | `CNPG Backup` | The 1Password item (`"<slug>: <item>"`) with `access-key-id` and `secret-access-key`. |
 | `db_roles_item` | `Database` | The 1Password item (`"<slug>: <item>"`) with `migrate-password`, `app-password` and `ro-password`. |
-| `db_apiserver_cidrs` | none | The API server node `/32`s the instance pods may reach on 6443. |
+| `db_apiserver_cidrs` | none, required | The API server node `/32`s the instance pods may reach on 6443. |
 | `db_dump_timezone` | `Etc/UTC` | The time zone of the 02:45 dump schedule. |
+| `db_runbook_url` | none, required | The `runbook_url` on the `DatabaseAbsent` alert: the cluster repo's CloudNativePG runbook, not the app runbook `runbook_url` names. |
 
 ### Library pin (GitLab shape only)
 
@@ -168,6 +169,18 @@ before the first reconcile succeeds.
 - **cert-manager controller metrics**, scraped by that Prometheus. The rendered
   repo declares no certificate alert of its own, because the platform already
   alerts cluster-wide on expiry and on a Certificate that never goes Ready.
+- **For `database: postgres`** (the `kubernetes/db` tree):
+  - the CloudNativePG operator and Barman Cloud plugin, with the
+    `postgresql.cnpg.io` and `barmancloud.cnpg.io` CRDs, which
+    `tenant-crd-editor` must also grant;
+  - the `monitoring.coreos.com` `PodMonitor` CRD, and Prometheus with
+    `podMonitorSelectorNilUsesHelmValues: false`. Left true, the PodMonitor is
+    never discovered, `cnpg_collector_up` is never scraped, and
+    `DatabaseAbsent` pages for ever on a healthy database;
+  - the operator in namespace `cnpg-system`, its pods labelled
+    `app.kubernetes.io/name: cloudnative-pg`, which the instance ingress policy
+    admits on port 8000;
+  - a `tenant-local` StorageClass for the instance claim.
   Without those metrics a Certificate that stops renewing is invisible.
 - **A resource-metrics API** (metrics-server) when `enable_hpa` or `enable_vpa`
   is on, plus the VPA recommender and admission controller for `enable_vpa`.

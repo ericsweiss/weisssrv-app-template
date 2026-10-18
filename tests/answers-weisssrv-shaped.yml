@@ -45,12 +45,13 @@ database: postgres
 db_name: recipe_box
 db_role_prefix: recipe_box
 db_storage_size: 20Gi
-db_backup_bucket: recipe-box-cnpg
+db_backup_bucket: weisssrv-cnpg-recipe-box
 db_backup_endpoint: https://s3.us-west-004.backblazeb2.com
 db_backup_item: CNPG Backup
 db_roles_item: Database
 db_apiserver_cidrs: 10.20.0.11/32,10.20.0.12/32,10.20.0.13/32
 db_dump_timezone: America/Los_Angeles
+db_runbook_url: https://git.ericsweiss.com/eric/weisssrv/-/blob/main/docs/48-cloudnative-pg.md#database-metrics-absent
 
 # copier.yml's lib_ref default, held there by test_copier_config.py.
 lib_ref: v0.21.1

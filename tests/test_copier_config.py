@@ -29,7 +29,17 @@ NO_DEFAULT = ("app_slug", "git_namespace", "copyright_holder")
 # Cluster facts, undefaulted for the same reason: a defaults-only render would
 # otherwise lint, build and reconcile while publishing hostnames in someone
 # else's zone and pulling from someone else's registry.
-CLUSTER_NO_DEFAULT = ("external_domain", "internal_domain", "internal_vip", "runbook_url")
+CLUSTER_NO_DEFAULT = (
+    "external_domain",
+    "internal_domain",
+    "internal_vip",
+    "runbook_url",
+    # The database's cluster facts: B2 bucket names are global, so a guessed one
+    # names a bucket nobody created, and the API server nodes are the site's own.
+    "db_backup_bucket",
+    "db_apiserver_cidrs",
+    "db_runbook_url",
+)
 
 # The rest of the cluster block, which composes from the answers above rather
 # than naming a site: derived is safe precisely because the literal is gone.
@@ -495,6 +505,25 @@ VALIDATOR_CASES = [
     ("db_backup_endpoint", "s3.us-west-004.backblazeb2.com", "no scheme, so Barman reads a bucket path", {}),
     ("db_apiserver_cidrs", "10.0.10.222/32,10.0.10.223/32", None, {}),
     ("db_apiserver_cidrs", "10.0.10.222", "a bare address is not a CIDR the ipBlock accepts", {}),
+    ("db_backup_bucket", "weisssrv-cnpg-recipe-box", None, {}),
+    ("db_backup_bucket", "Recipe_Box", "renders unquoted into s3://<bucket>/, and S3 names are lowercase", {}),
+    ("db_backup_bucket", "s3://box-cnpg", "a scheme is not a bucket name", {}),
+    ("db_dump_timezone", "America/Los_Angeles", None, {}),
+    ("db_dump_timezone", "Etc/GMT+8", None, {}),
+    ("db_dump_timezone", "Pacific Time", "renders unquoted into timeZone:, and the CronJob is refused at apply", {}),
+    (
+        "db_runbook_url",
+        "https://git.example.com/homelab/cluster/-/blob/main/docs/postgres.md#postgres-down",
+        None,
+        {},
+    ),
+    ("db_runbook_url", "git.example.com/docs", "no scheme, so the alert annotation is not a link", {}),
+    (
+        "db_runbook_url",
+        "https://git.example.com/it's",
+        "a single quote closes the quoted YAML scalar DatabaseAbsent renders it into",
+        {},
+    ),
 ]
 
 

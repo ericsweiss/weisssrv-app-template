@@ -64,6 +64,7 @@ db_backup_item: Archive Key
 db_roles_item: Role Passwords
 db_apiserver_cidrs: 192.0.2.10/32
 db_dump_timezone: Europe/Lisbon
+db_runbook_url: https://forge.brinemoor.test/seaworks/tidepool/-/blob/main/DATABASE.md
 
 # Never asked (the library is only included by the GitLab shape).
 lib_ref: v0.21.1

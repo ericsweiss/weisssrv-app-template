@@ -621,8 +621,16 @@ db_storage_size:
 db_backup_bucket:
   type: str
   when: "{{ database == 'postgres' }}"
-  help: The S3 bucket dedicated to this app's WAL archive and base backups.
-  default: "{{ app_slug }}-cnpg"
+  help: >-
+    The S3 bucket dedicated to this app's WAL archive and base backups. Bucket
+    names are global on B2 and S3, so prefix it with the cluster's name, as the
+    operator creates it: <cluster>-cnpg-<slug>.
+  placeholder: "<cluster>-cnpg-{{ app_slug }}"
+  validator: >-
+    {% if not (db_backup_bucket | regex_search('^[a-z0-9][a-z0-9-]{4,61}[a-z0-9]$')) %}
+    db_backup_bucket must be an S3 bucket name: 6 to 63 lowercase letters,
+    digits or hyphens, starting and ending with a letter or digit
+    {% endif %}
 
 db_backup_endpoint:
   type: str
@@ -657,7 +665,7 @@ db_apiserver_cidrs:
     Comma-separated /32s of the cluster's API server nodes. The instance manager
     talks to the API, and kube-proxy rewrites the Service address before policy
     applies, so the egress rule must name the node addresses.
-  default: ""
+  placeholder: 10.0.10.222/32,10.0.10.223/32
   validator: >-
     {% if not (db_apiserver_cidrs | regex_search('^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}(,([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2})*$')) %}
     db_apiserver_cidrs must be a comma-separated list of IPv4 CIDRs, for
@@ -669,6 +677,27 @@ db_dump_timezone:
   when: "{{ database == 'postgres' }}"
   help: The IANA time zone the nightly pg_dump schedule (02:45) runs in.
   default: Etc/UTC
+  validator: >-
+    {% if not (db_dump_timezone | regex_search('^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$')) %}
+    db_dump_timezone must be an IANA time zone name, for example Etc/UTC or
+    America/Los_Angeles
+    {% endif %}
+
+db_runbook_url:
+  type: str
+  when: "{{ database == 'postgres' and secrets_backend == 'onepassword' }}"
+  help: >-
+    URL the DatabaseAbsent alert carries as `runbook_url`: the cluster
+    repository's CloudNativePG runbook, not the generic app page runbook_url
+    names. No default, for the same reason runbook_url has none.
+  placeholder: "https://git.example.com/homelab/cluster/-/blob/main/docs/postgres.md#postgres-down"
+  validator: >-
+    {% if not (db_runbook_url | regex_search('^https?://[^\\s]+$')) %}
+    db_runbook_url must be an http(s) URL.
+    {% elif "'" in db_runbook_url %}
+    db_runbook_url must not contain a single quote: it renders inside the
+    single-quoted YAML scalar `runbook_url: '<url>'` on DatabaseAbsent.
+    {% endif %}
 
 # --------------------------------------------------------------------------
 # Library pin
