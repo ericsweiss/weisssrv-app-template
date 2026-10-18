@@ -2400,6 +2400,22 @@ def test_every_local_gate_has_a_pre_commit_hook(repo, hook_id):
     )
 
 
+def _hook_paths(hook: dict) -> list[str]:
+    """The repo paths a hook's entry names, read through an `sh -c` wrapper."""
+    tokens = shlex.split(hook["entry"])
+    if tokens[:2] == ["sh", "-c"]:
+        tokens = shlex.split(tokens[2])
+    return [token for token in tokens if token.startswith(("scripts/", "kubernetes/"))]
+
+
+def _hook_targets(repo: Repo, token: str) -> list[Path]:
+    """The files or directories one entry path names, a glob expanded."""
+    if "*" in token:
+        return sorted(repo.path.glob(token))
+    target = repo.path / token
+    return [target] if target.exists() else []
+
+
 def _hook_scanned_paths(repo: Repo, hook: dict) -> list[str]:
     """The render-relative paths a hook's `files:` filter has to match for
     pre-commit to invoke it: every Markdown file for doc-links, and the trees the
@@ -2407,12 +2423,10 @@ def _hook_scanned_paths(repo: Repo, hook: dict) -> list[str]:
     if hook["id"] == "doc-links":
         return [str(path.relative_to(repo.path)) for path in sorted(repo.path.rglob("*.md"))]
     scanned: list[str] = []
-    for token in hook["entry"].split():
-        if not token.startswith(("scripts/", "kubernetes/")):
-            continue
-        target = repo.path / token
-        found = [target] if target.is_file() else sorted(target.rglob("*.yaml"))
-        scanned += [str(path.relative_to(repo.path)) for path in found]
+    for token in _hook_paths(hook):
+        for target in _hook_targets(repo, token):
+            found = [target] if target.is_file() else sorted(target.rglob("*.yaml"))
+            scanned += [str(path.relative_to(repo.path)) for path in found]
     return scanned
 
 
@@ -2421,12 +2435,11 @@ def test_every_local_hook_runs_a_path_the_render_ships(repo):
     `github` and `none` the hooks are the only automatic runner. A `files:` that
     matches none of those paths is a hook pre-commit never invokes."""
     for hook in _local_hooks(repo):
-        for token in hook["entry"].split():
-            if token.startswith(("scripts/", "kubernetes/")):
-                assert (repo.path / token).exists(), (
-                    f"pre-commit hook {hook['id']} runs {token}, which the render "
-                    "does not ship"
-                )
+        for token in _hook_paths(hook):
+            assert _hook_targets(repo, token), (
+                f"pre-commit hook {hook['id']} runs {token}, which the render "
+                "does not ship"
+            )
         if "files" not in hook:
             continue
         scanned = _hook_scanned_paths(repo, hook)
@@ -3439,6 +3452,27 @@ def test_the_pdb_leaves_the_database_pods_out(repo):
     assert _selects(selector, {"app.kubernetes.io/name": slug}), "the PDB lost the app pods"
     for pod, labels in _db_pods(slug).items():
         assert not _selects(selector, labels), f"the PDB counts the database {pod} pod"
+
+
+def test_the_database_gates_have_a_pre_commit_hook(repo, tmp_path):
+    """On `github` and `none` the hook is the only automatic runner of the
+    kubernetes/db gates; it passes the render and reds a dropped safeguard."""
+    _skip_without_db(repo.answers)
+    hooks = {hook["id"]: hook for hook in _local_hooks(repo)}
+    assert "database" in hooks, "no pre-commit hook runs the kubernetes/db gates"
+    if not shutil.which("python"):
+        pytest.skip("no `python` on PATH to stand in for the hook venv's")
+    work = tmp_path / "hook"
+    shutil.copytree(repo.path, work)
+    command = shlex.split(hooks["database"]["entry"])
+    result = _run(work, *command)
+    assert result.returncode == 0, result.stdout + result.stderr
+    cluster_path = work / DB / "cluster.yaml"
+    cluster = yaml.safe_load(cluster_path.read_text())
+    _drop_prune_annotation(cluster)
+    cluster_path.write_text(yaml.safe_dump(cluster))
+    result = _run(work, *command)
+    assert result.returncode != 0, "the database hook passed a Cluster with no prune guard"
 
 
 def test_the_lint_tasks_run_their_database_arm(repo, tmp_path):

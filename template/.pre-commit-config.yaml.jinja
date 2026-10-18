@@ -28,9 +28,9 @@ repos:
         # `!reference` and Ansible's `!vault` custom tags do not false-fail.
         args: [--allow-multiple-documents, --unsafe]
 
-  # The local gates; `task lint` runs the same five. The three PyYAML ones
-  # install it into their own hook venv, so the host python3 needs none, and
-  # `always_run` keeps them on a deletion-only commit, which `files:` misses.
+  # The local gates, each also run by `task lint`. The PyYAML ones install it
+  # into their own hook venv, so the host python3 needs none, and `always_run`
+  # keeps them on a deletion-only commit, which `files:` misses.
   - repo: local
     hooks:
       - id: netpol-except-parity
@@ -60,6 +60,21 @@ repos:
         pass_filenames: false
         files: ^(kubernetes/|scripts/check-)
         always_run: true
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+      - id: database
+        name: database tree
+        # The hook venv's python leads PATH, so the bare `python` calls get PyYAML.
+        entry: >-
+          sh -c 'cat kubernetes/db/*.yaml | python scripts/check-cnpg-clusters.py
+          && cat kubernetes/db/*.yaml | python scripts/check-pvc-storageclass.py
+          && python scripts/check-kustomization.py kubernetes/db
+          && python scripts/check-netpol-except-parity.py kubernetes/db'
+        language: python
+        additional_dependencies: ["pyyaml==6.0.2"]
+        pass_filenames: false
+        files: ^(kubernetes/|scripts/check-)
+        always_run: true
+{%- endif %}
       - id: doc-links
         name: doc links
         entry: python3 scripts/check-doc-links.py
