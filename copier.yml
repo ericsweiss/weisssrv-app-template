@@ -592,6 +592,9 @@ db_name:
     {% if not (db_name | regex_search('^[a-z_][a-z0-9_]{0,62}$')) %}
     db_name must be a lowercase PostgreSQL identifier: a letter or underscore,
     then letters, digits or underscores, at most 63 characters
+    {% elif db_name | lower in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null'] %}
+    db_name must not be a YAML boolean or null keyword: it would render as a
+    non-string value in the database manifests
     {% endif %}
 
 db_role_prefix:

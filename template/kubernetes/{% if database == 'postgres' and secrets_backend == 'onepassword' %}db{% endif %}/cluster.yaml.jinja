@@ -23,7 +23,7 @@ spec:
       shared_buffers: 128MB
   bootstrap:
     initdb:
-      database: {{ db_name }}
+      database: {{ db_name | tojson }}
       owner: {{ db_role_prefix }}_migrate
       secret:
         name: {{ app_slug }}-db-migrate
