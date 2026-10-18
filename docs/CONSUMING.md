@@ -113,8 +113,8 @@ component is wired and a disabled one leaves nothing behind. There is no
 | `db_storage_size` | `20Gi` | The instance claim, requested from `tenant-local` and counted by the namespace's storage quota. |
 | `db_backup_bucket` | none, required | The bucket holding the WAL archive and base backups. Bucket names are global, so prefix it with the cluster: `<cluster>-cnpg-<slug>`. |
 | `db_backup_endpoint` | none, required | The bucket's S3 endpoint, `https://` with no path. |
-| `db_backup_item` | `CNPG Backup` | The 1Password item (`"<slug>: <item>"`) with `access-key-id` and `secret-access-key`. |
-| `db_roles_item` | `Database` | The 1Password item (`"<slug>: <item>"`) with `migrate-password`, `app-password` and `ro-password`. |
+| `db_backup_item` | `CNPG Backup` | The 1Password item (`"<slug>: <item>"`) with `access-key-id` and `secret-access-key`; no double quote, backslash, control character or edge space. |
+| `db_roles_item` | `Database` | The 1Password item (`"<slug>: <item>"`) with `migrate-password`, `app-password` and `ro-password`; the same title rules. |
 | `db_apiserver_cidrs` | none, required | The API server node `/32`s the instance pods may reach on 6443; each entry a real IPv4 address and `/32`. |
 | `db_dump_timezone` | `Etc/UTC` | The time zone of the 02:45 dump schedule. |
 | `db_runbook_url` | none, required | The `runbook_url` on the `DatabaseAbsent` alert: the cluster repo's CloudNativePG runbook, not the app runbook `runbook_url` names. |

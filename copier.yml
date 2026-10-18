@@ -649,6 +649,11 @@ db_backup_item:
     1Password item title, rendered as "<slug>: <item>", whose access-key-id and
     secret-access-key fields hold the bucket-scoped key.
   default: CNPG Backup
+  validator: >-
+    {% if not (db_backup_item | regex_search('^[^"\\\\\\x00-\\x1f\\x7f\\s]([^"\\\\\\x00-\\x1f\\x7f]*[^"\\\\\\x00-\\x1f\\x7f\\s])?$')) %}
+    db_backup_item must be a 1Password item title with no double quote, backslash,
+    control character or leading or trailing space
+    {% endif %}
 
 db_roles_item:
   type: str
@@ -657,6 +662,11 @@ db_roles_item:
     1Password item title, rendered as "<slug>: <item>", whose migrate-password,
     app-password and ro-password fields hold the three role passwords.
   default: Database
+  validator: >-
+    {% if not (db_roles_item | regex_search('^[^"\\\\\\x00-\\x1f\\x7f\\s]([^"\\\\\\x00-\\x1f\\x7f]*[^"\\\\\\x00-\\x1f\\x7f\\s])?$')) %}
+    db_roles_item must be a 1Password item title with no double quote, backslash,
+    control character or leading or trailing space
+    {% endif %}
 
 db_apiserver_cidrs:
   type: str

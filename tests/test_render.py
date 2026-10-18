@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
 
+import jinja2
 import pytest
 import yaml
 from conftest import require_tool
@@ -3201,6 +3202,35 @@ def test_the_role_secrets_read_the_answered_item(repo):
     item = f"{repo.answers['app_slug']}: {repo.answers['db_roles_item']}"
     for doc in docs:
         assert {ref["remoteRef"]["key"] for ref in doc["spec"]["data"]} == {item}
+
+
+# The template directory that renders kubernetes/db, found by its rendered name
+# so the test does not repeat the conditional-path expression.
+DB_TEMPLATE_DIR = next(
+    path for path in (REPO_ROOT / "template" / "kubernetes").iterdir()
+    if path.is_dir() and path.name.endswith("db{% endif %}")
+)
+
+
+@pytest.mark.parametrize(
+    "manifest,answer",
+    [("externalsecret-roles.yaml", "db_roles_item"), ("externalsecret-backups.yaml", "db_backup_item")],
+)
+def test_an_item_title_with_a_quote_still_renders_valid_yaml(answers, manifest, answer):
+    """The validator refuses a quote in an item title; the manifest stays valid
+    YAML without it, so a title that slips past still names the right item."""
+    title = 'Database "Production" \\ \'eu\''
+    env = jinja2.Environment(  # noqa: S701 - rendering our own template, not HTML
+        keep_trailing_newline=True, undefined=jinja2.StrictUndefined
+    )
+    source = (DB_TEMPLATE_DIR / f"{manifest}.jinja").read_text()
+    text = env.from_string(source).render(**{**answers, answer: title})
+    keys = {
+        ref["remoteRef"]["key"]
+        for doc in yaml.safe_load_all(text)
+        for ref in doc["spec"]["data"]
+    }
+    assert keys == {f"{answers['app_slug']}: {title}"}
 
 
 def test_the_dump_is_a_db_component_selected_by_its_instance(repo):
