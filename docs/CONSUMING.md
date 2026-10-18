@@ -169,6 +169,7 @@ before the first reconcile succeeds.
 - **cert-manager controller metrics**, scraped by that Prometheus. The rendered
   repo declares no certificate alert of its own, because the platform already
   alerts cluster-wide on expiry and on a Certificate that never goes Ready.
+  Without those metrics a Certificate that stops renewing is invisible.
 - **For `database: postgres`** (the `kubernetes/db` tree):
   - the CloudNativePG operator and Barman Cloud plugin, with the
     `postgresql.cnpg.io` and `barmancloud.cnpg.io` CRDs, which
@@ -181,7 +182,6 @@ before the first reconcile succeeds.
     `app.kubernetes.io/name: cloudnative-pg`, which the instance ingress policy
     admits on port 8000;
   - a `tenant-local` StorageClass for the instance claim.
-  Without those metrics a Certificate that stops renewing is invisible.
 - **A resource-metrics API** (metrics-server) when `enable_hpa` or `enable_vpa`
   is on, plus the VPA recommender and admission controller for `enable_vpa`.
   Without them the VPA recommends nothing and the HPA never leaves
