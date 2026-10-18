@@ -283,7 +283,8 @@ kustomization-check:
 {%- if database == 'postgres' and secrets_backend == 'onepassword' %}
 
 # kubernetes/db is reconciled by its own tenant Kustomization, so the flux-lint
-# include above never builds it; these gates hold its structure and safeguards.
+# include above never builds it; these gates hold its structure and safeguards,
+# and `task flux-lint` schema-checks it locally.
 db-manifest-check:
   extends: .manifest-gate
   script:
