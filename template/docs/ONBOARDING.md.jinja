@@ -547,6 +547,17 @@ and backup schedule.
 {% if database == 'postgres' and secrets_backend == 'onepassword' -%}
 ### O6b — Database prerequisites
 
+Enabling `database: postgres` requires the app to serve `/readyz`, returning
+200 only when its connection to `{{ app_slug }}-db-rw` succeeds: the handler
+connects with the mounted `{{ app_slug }}-db-app` credentials
+(`/var/run/secrets/db`) and `sslrootcert=/var/run/secrets/db-ca/ca.crt`, and
+answers 503 when that fails.
+{%- if enable_image_build %} The placeholder image (the `Dockerfile`'s
+`python -m http.server` serving `/app`) does NOT serve `/readyz`, so the pod
+stays NotReady until your app replaces it. That is intended: a Ready pod with no
+database would be worse.
+{%- endif %}
+
 The database component needs, before the wiring merges:
 
 - The cluster's CloudNativePG operator and Barman Cloud plugin, and

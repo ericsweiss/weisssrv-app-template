@@ -79,6 +79,21 @@ flipped.
    their side.
 3. **Ship.** `task lint`, then branch → {{ change_request }}. Flux deploys on
    merge.
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+
+## Database
+
+Enabling `database: postgres` requires the app to serve `/readyz`, returning
+200 only when its connection to `{{ app_slug }}-db-rw` succeeds: the handler
+connects with the mounted `{{ app_slug }}-db-app` credentials
+(`/var/run/secrets/db`) and `sslrootcert=/var/run/secrets/db-ca/ca.crt`.
+{%- if enable_image_build %} The placeholder image (the `Dockerfile`'s
+`python -m http.server` serving `/app`) does NOT serve `/readyz`, so the pod
+stays NotReady until your app replaces it. That is intended: a Ready pod with no
+database would be worse.
+{%- endif %} The operator-side prerequisites are
+[`docs/ONBOARDING.md`](docs/ONBOARDING.md) step O6b.
+{%- endif %}
 
 ## Local development
 
