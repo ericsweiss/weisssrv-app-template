@@ -3381,9 +3381,31 @@ def _db_pods(slug: str) -> dict[str, dict]:
 
 
 # The vendored check-scrape-wiring.py does not credit a podSelector carrying
-# matchExpressions, so the scrape allow keeps matchLabels only until the gate
-# models them upstream; it opens only app_port, and only to the observability namespace.
+# matchExpressions, so the scrape allow keeps matchLabels only and selects the db pods
+# too; it opens app_port to observability, so copier rejects 5432, 8000 and 9187 there.
 SCRAPE_GATE_SELECTOR_EXEMPT = {"allow-scrape-from-observability"}
+
+
+def test_the_scrape_allow_opens_no_database_port(repo):
+    """The scrape allow selects the db pods too, so its port, app_port, must
+    not be one the db pods listen on; db-allow-ingress names those ports."""
+    _skip_without_db(repo.answers)
+    db_docs = yaml.safe_load_all((repo.path / DB / "networkpolicy.yaml").read_text())
+    db_ingress = next(d for d in db_docs if d and d["metadata"]["name"] == "db-allow-ingress")
+    db_ports = {p["port"] for rule in db_ingress["spec"]["ingress"] for p in rule["ports"]}
+    assert db_ports == {5432, 8000, 9187}, f"the db pods' ports changed: {sorted(db_ports)}"
+    scrape_ports = set()
+    for path in _manifests(repo.path, "networkpolicy*"):
+        for policy in yaml.safe_load_all(path.read_text()):
+            if (policy or {}).get("metadata", {}).get("name") in SCRAPE_GATE_SELECTOR_EXEMPT:
+                scrape_ports |= {
+                    p["port"] for rule in policy["spec"]["ingress"] for p in rule["ports"]
+                }
+    app_port = int(repo.answers["app_port"])
+    assert app_port not in db_ports, f"the fixture answers app_port {app_port}, a db port"
+    expected = {app_port} if repo.answers["enable_servicemonitor"] else set()
+    assert scrape_ports == expected, scrape_ports
+    assert not scrape_ports & db_ports, f"the scrape allow opens db port(s) {scrape_ports & db_ports}"
 
 
 def test_no_app_policy_selects_the_database_pods(repo):
