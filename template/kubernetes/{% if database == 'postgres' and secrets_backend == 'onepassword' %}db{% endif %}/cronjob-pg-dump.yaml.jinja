@@ -55,7 +55,7 @@ spec:
                   export PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD
                   for i in $(seq 1 30); do
                     if pg_isready -q; then break; fi
-                    if [ "$i" = 30 ]; then echo "postgres unreachable after 150s" >&2; exit 1; fi
+                    if [ "$i" = 30 ]; then echo "postgres not ready after 150s; libpq reports:" >&2; psql -X -c 'select 1' >/dev/null || true; exit 1; fi
                     sleep 5
                   done
                   rm -f /backups/{{ app_slug }}-*.sql.gz.tmp
