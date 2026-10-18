@@ -1616,8 +1616,22 @@ def _resolved(ci: dict, name: str, seen: tuple[str, ...] = ()) -> dict:
         assert target in ci, f"{name} extends {target}, which the pipeline does not define"
         assert target.startswith("."), f"{name} extends {target}, which is not a hidden job"
         assert target not in seen, f"extends cycle at {target}"
-        body = {**_resolved(ci, target, (*seen, name)), **body}
+        parent = _resolved(ci, target, (*seen, name))
+        # GitLab merges hashes across `extends:`, so a job's own `variables:`
+        # adds to its template's rather than replacing them.
+        variables = {**(parent.get("variables") or {}), **(body.get("variables") or {})}
+        body = {**parent, **body}
+        if variables:
+            body["variables"] = variables
     return body
+
+
+def _job_shell(ci: dict, name: str) -> str:
+    """One job's `script:` as a shell program, its resolved `variables:` exported
+    first, the way the runner sets them."""
+    variables = _resolved(ci, name).get("variables") or {}
+    exports = [f"export {key}={shlex.quote(str(value))}" for key, value in variables.items()]
+    return "set -e\n" + "\n".join([*exports, *_resolved(ci, name)["script"]])
 
 
 def _pipeline_jobs(ci: dict) -> list[str]:
@@ -1814,8 +1828,19 @@ def test_the_tenant_gitleaks_config_extends_the_default_rules(repo):
 _TOOLCHAIN_HINT = "Install it in the test job the way validate-rendered-app does."
 
 
-def _run(repo_path: Path, *command: str) -> subprocess.CompletedProcess:
-    return subprocess.run(command, cwd=repo_path, capture_output=True, text=True)
+def _run(repo_path: Path, *command: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(command, cwd=repo_path, capture_output=True, text=True, env=env)
+
+
+def _offline_kubeconform(bindir: Path) -> dict[str, str]:
+    """An env whose kubeconform prints a clean summary, so a job script that runs
+    flux-lint.sh over the real `kustomize build` needs no schema download."""
+    bindir.mkdir(parents=True)
+    (bindir / "kubeconform").write_text(f"#!/bin/sh\nprintf '%s\\n' '{CLEAN_SUMMARY}'\n")
+    (bindir / "kubeconform").chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = f"{bindir}{os.pathsep}{env['PATH']}"
+    return env
 
 
 def test_generated_repo_passes_yamllint(repo):
@@ -2684,7 +2709,7 @@ def _gate_scripts(repo: Repo, task: str, job: str) -> list[str]:
     if repo.answers["ci_shape"] == "gitlab_selfhosted":
         ci = render_app.load_ci(repo.path / ".gitlab-ci.yml")
         assert job in ci, f"the GitLab pipeline runs no {task} gate"
-        scripts.append("set -e\n" + "\n".join(_resolved(ci, job)["script"]))
+        scripts.append(_job_shell(ci, job))
     return scripts
 
 
@@ -3522,12 +3547,13 @@ def test_the_database_gates_run_green_and_reject_a_dropped_safeguard_or_class(re
         ("class", lambda work: _mutate_cluster(work, _drop_storage_class), None),
         ("patch", _patch_out_prune_annotation, "safeguard"),
     )
+    env = _offline_kubeconform(tmp_path / "offline" / "bin")
     for label, mutate, header in mutations:
         for work, script in _gate_runs(repo, tmp_path, f"db-{label}", "database", "db-manifest-check"):
-            result = _run(work, "sh", "-c", script)
+            result = _run(work, "sh", "-c", script, env=env)
             assert result.returncode == 0, result.stdout + result.stderr
             mutate(work)
-            result = _run(work, "sh", "-c", script)
+            result = _run(work, "sh", "-c", script, env=env)
             assert result.returncode != 0, f"the {label} mutation passed the gate"
             if header:
                 assert header in result.stderr, result.stdout + result.stderr
@@ -3548,6 +3574,38 @@ def test_validate_render_runs_the_database_gates_over_the_built_tree(repo, tmp_p
     runner = validate_render.Runner(work)
     validate_render._validate_db(runner, work, "unused", repo.answers["k8s_version"])
     assert "cnpg clusters" in runner.failures, runner.failures
+
+
+def test_the_gitlab_db_job_validates_the_db_tree_with_kubeconform(repo, tmp_path):
+    """The flux-lint include builds kubernetes/flux only, so db-manifest-check
+    is the pipeline's one schema check of kubernetes/db, on the Taskfile's pins."""
+    _skip_without_db(repo.answers)
+    if repo.answers["ci_shape"] != "gitlab_selfhosted":
+        pytest.skip("no GitLab pipeline rendered")
+    ci = render_app.load_ci(repo.path / ".gitlab-ci.yml")
+    body = _resolved(ci, "db-manifest-check")
+    script = [" ".join(str(line).split()) for line in body["script"]]
+    lint = [
+        index for index, line in enumerate(script)
+        if line.startswith("bash scripts/flux-lint.sh --mode simple")
+        and "--kustomize-path kubernetes/db" in line
+    ]
+    assert lint, f"db-manifest-check runs no kubeconform over kubernetes/db: {script}"
+    gates = [index for index, line in enumerate(script) if line.startswith("python3 ")]
+    assert lint[0] < min(gates), "kubeconform must run before the python gates"
+    fetch = [line for line in body["before_script"] if "scripts/ci-fetch-tools.py" in line]
+    assert fetch and {"kustomize", "kubeconform"} <= set(fetch[0].split()), body["before_script"]
+    taskvars = yaml.safe_load((repo.path / "Taskfile.yml").read_text())["vars"]
+    for key in ("ALLOWED_SKIPS", "K8S_VERSION", "CRD_CATALOG_REF"):
+        assert str(body["variables"][key]) == str(taskvars[key]), key
+    env = _stubbed_path(tmp_path / "db-invalid" / "bin", "kind: Service\n", INVALID_SUMMARY,
+                        kubeconform_rc=1)
+    result = subprocess.run(
+        ["sh", "-c", _job_shell(ci, "db-manifest-check")],
+        cwd=repo.path, capture_output=True, text=True, env=env,
+    )
+    assert result.returncode != 0, "db-manifest-check passed an invalid kubernetes/db resource"
+    assert "Invalid: 1" in result.stdout + result.stderr
 
 
 def test_the_pdb_leaves_the_database_pods_out(repo):
@@ -3599,11 +3657,12 @@ def test_the_lint_tasks_run_their_database_arm(repo, tmp_path):
     assert (
         "python3 scripts/check-kustomization.py kubernetes/db" in tasks["kustomization"]["cmds"]
     )
+    env = _offline_kubeconform(tmp_path / "offline" / "bin")
     for work, script in _gate_runs(repo, tmp_path, "db-unlisted", "kustomization", "db-manifest-check"):
         (work / DB / "configmap.yaml").write_text(
             "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: unlisted\n"
         )
-        result = _run(work, "sh", "-c", script)
+        result = _run(work, "sh", "-c", script, env=env)
         assert result.returncode != 0, "an unlisted kubernetes/db manifest passed the gate"
         assert "not listed" in result.stdout + result.stderr
 

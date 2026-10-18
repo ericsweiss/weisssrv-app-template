@@ -45,7 +45,7 @@ including the deploy-notes prompt about new secrets and cluster-side wiring.
 | Egress fence (`check-netpol-except-parity.py`) | `netpol-check`, plus `task netpol` locally | `ci.yml`'s `manifest-gates` job, plus `task netpol` locally | `task netpol` |
 | Scrape wiring (`check-scrape-wiring.py`) | `scrape-wiring-check`, plus `task scrape-wiring` locally | `ci.yml`'s `manifest-gates` job — `--namespace-from-tree`, not `--namespace`, so a monitor scoped with `matchNames` reds it — plus `task scrape-wiring` locally | `task scrape-wiring` |
 | `kustomization.yaml` resource list | `kustomization-check`, plus `task kustomization` locally | `ci.yml`'s `manifest-gates` job, plus `task kustomization` locally | `task kustomization` |
-| Database tree (`kubernetes/db`, `database: postgres`) | `db-manifest-check` (kustomization list, egress fence, and CNPG safeguards and storage class over the `kustomize build` output) but no kubeconform; run `task database` and `task flux-lint` locally | nothing in CI; run `task database` and `task flux-lint` locally, and the pre-commit `database` hook | `task database` and `task flux-lint`, and the pre-commit `database` hook |
+| Database tree (`kubernetes/db`, `database: postgres`) | `db-manifest-check`: `scripts/flux-lint.sh` (build + kubeconform on the Taskfile's pins), then the kustomization list, the egress fence, and the CNPG safeguards and storage class over the `kustomize build` output; plus `task database` and `task flux-lint` locally | no CI job: the pre-commit `database` hook is the only automatic runner, and it runs no kubeconform; run `task database` and `task flux-lint` locally | the pre-commit `database` hook (no kubeconform), plus `task database` and `task flux-lint` |
 | Image build | `build-image` on a privileged runner | `build-image.yml` to GHCR, push-only | `task build` locally |
 | Release | `semantic-release` (library template) | `release.yml` (vendored) | by hand |
 | AI review | `pr-agent-review`, created only when both keys are set | n/a | n/a |
@@ -57,7 +57,8 @@ vendored `ci.yml` reads repository variable `ALLOWED_SKIPS`. The generated
 and `tests/validate_render.py` fails on any skip, so a green `task lint` is
 still the strictest of the three. `task flux-lint` resolves CR schemas from the
 catalog commit `Taskfile.yml` pins, and the GitLab shape passes that same commit
-to the include's `crd_catalog_ref`, so both read one schema set.
+to the include's `crd_catalog_ref` and to `db-manifest-check`, so all three read
+one schema set.
 
 The empty-build guard, the skipped-schema guard and the integer check on the
 skip budget exist twice: in the library's `flux-lint` simple arm, and in the

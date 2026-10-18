@@ -21,7 +21,7 @@ vars:
   # The datreeio CRD-catalog revision kubeconform reads CR schemas from.
   # Pinned to a sha: a catalog rewrite must not change what this gate accepts.
 {%- if ci_shape == 'gitlab_selfhosted' %}
-  # .gitlab-ci.yml's flux-lint include passes the same commit; bump both.
+  # Every .gitlab-ci.yml kubeconform job passes the same commit; bump them all.
 {%- endif %}
   CRD_CATALOG_REF: "ad3b08c5045129d7bb1eeffd8e61719b2c8dd1e2"
   # Resources kubeconform may validate against no schema. Raise it for a CR

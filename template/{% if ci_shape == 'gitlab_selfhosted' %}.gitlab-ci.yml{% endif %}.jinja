@@ -204,6 +204,7 @@ include:
       changes:
         - "kubernetes/**/*"
         - "scripts/check-*.py"
+        - "scripts/flux-lint.sh"
         - ".gitlab-ci.yml"
     - if: '$CI_COMMIT_BRANCH == "main"'
 
@@ -283,16 +284,25 @@ kustomization-check:
 {%- if database == 'postgres' and secrets_backend == 'onepassword' %}
 
 # kubernetes/db is reconciled by its own tenant Kustomization, so the flux-lint
-# include above never builds it; these gates hold its structure and, over the
-# `kustomize build` output Flux applies, its safeguards.
+# include above never builds it; this job schema-checks it, then holds its
+# structure and, over the `kustomize build` output Flux applies, its safeguards.
 db-manifest-check:
   extends: .manifest-gate
+  variables:
+    # Taskfile.yml's pins, so this job and `task flux-lint` validate the same.
+    K8S_VERSION: "{{ k8s_version }}"
+    CRD_CATALOG_REF: "ad3b08c5045129d7bb1eeffd8e61719b2c8dd1e2"
+    ALLOWED_SKIPS: "0"
   before_script:
     - pip install --user --quiet --no-cache-dir "pyyaml==$PYYAML_VERSION"
     # Non-root and sha256-verified, into $CI_PROJECT_DIR/.bin.
-    - python3 scripts/ci-fetch-tools.py kustomize
+    - python3 scripts/ci-fetch-tools.py kustomize kubeconform
     - export PATH="$CI_PROJECT_DIR/.bin:$PATH"
   script:
+    - >-
+      bash scripts/flux-lint.sh --mode simple --kustomize-path kubernetes/db
+      --allowed-skips "$ALLOWED_SKIPS" --k8s-version "$K8S_VERSION"
+      --crd-catalog-ref "$CRD_CATALOG_REF"
     - python3 scripts/check-kustomization.py kubernetes/db
     - python3 scripts/check-netpol-except-parity.py kubernetes/db
     - built=$(kustomize build kubernetes/db)
