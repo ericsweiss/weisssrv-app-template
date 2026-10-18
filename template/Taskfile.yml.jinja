@@ -54,6 +54,9 @@ tasks:
       - task: netpol
       - task: scrape-wiring
       - task: kustomization
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+      - task: database
+{%- endif %}
 {%- if ci_shape == 'gitlab_selfhosted' %}
       - task: lib-pins
       - task: ci-job-names
@@ -85,6 +88,14 @@ tasks:
         --allowed-skips {% raw %}"{{.ALLOWED_SKIPS}}"{% endraw %}
         --k8s-version {% raw %}"{{.K8S_VERSION}}"{% endraw %}
         --crd-catalog-ref {% raw %}"{{.CRD_CATALOG_REF}}"{% endraw %}
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+      - >-
+        bash scripts/flux-lint.sh --mode simple
+        --kustomize-path kubernetes/db
+        --allowed-skips {% raw %}"{{.ALLOWED_SKIPS}}"{% endraw %}
+        --k8s-version {% raw %}"{{.K8S_VERSION}}"{% endraw %}
+        --crd-catalog-ref {% raw %}"{{.CRD_CATALOG_REF}}"{% endraw %}
+{%- endif %}
 
   python-lint:
     desc: Lint the helper scripts in scripts/ with ruff, using ./ruff.toml.
@@ -127,6 +138,9 @@ tasks:
       - *needs_pyyaml
     cmds:
       - python3 scripts/check-netpol-except-parity.py kubernetes/flux
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+      - python3 scripts/check-netpol-except-parity.py kubernetes/db
+{%- endif %}
 
   scrape-wiring:
     desc: "The scrape allow admits observability on the monitor's port (needs pyyaml)."
@@ -146,6 +160,19 @@ tasks:
       - *needs_pyyaml
     cmds:
       - python3 scripts/check-kustomization.py kubernetes/flux
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+      - python3 scripts/check-kustomization.py kubernetes/db
+{%- endif %}
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+
+  database:
+    desc: "The CNPG Cluster keeps its backup, drain and prune safeguards and a pinned storage class (needs pyyaml)."
+    preconditions:
+      - *needs_pyyaml
+    cmds:
+      - cat kubernetes/db/*.yaml | python3 scripts/check-cnpg-clusters.py
+      - cat kubernetes/db/*.yaml | python3 scripts/check-pvc-storageclass.py
+{%- endif %}
 {%- if ci_shape == 'gitlab_selfhosted' %}
 
   lib-pins:

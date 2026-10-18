@@ -2463,7 +2463,9 @@ def _flux_lint_script(repo: Repo, **overrides: str) -> str:
     one var's value references another's. `overrides` stands in for a tenant's edit."""
     taskfile = yaml.safe_load((repo.path / "Taskfile.yml").read_text())
     taskfile["vars"].update(overrides)
-    script = "\n".join(taskfile["tasks"]["flux-lint"]["cmds"])
+    # `set -e`: go-task stops at the first failing cmd, and an unset errexit would
+    # report only the last cmd's status once a render ships more than one.
+    script = "set -e\n" + "\n".join(taskfile["tasks"]["flux-lint"]["cmds"])
     for _ in range(10):
         before = script
         for name, value in taskfile["vars"].items():
@@ -2640,11 +2642,13 @@ def _gate_scripts(repo: Repo, task: str, job: str) -> list[str]:
     assert {"task": task} in taskfile["tasks"]["lint"]["cmds"], (
         f"the {task} task exists but `task lint` does not run it"
     )
-    scripts = ["\n".join(taskfile["tasks"][task]["cmds"])]
+    # `set -e`: go-task and a GitLab job both stop at the first failing line, so
+    # the database render's second cmd cannot mask the first one's failure here.
+    scripts = ["set -e\n" + "\n".join(taskfile["tasks"][task]["cmds"])]
     if repo.answers["ci_shape"] == "gitlab_selfhosted":
         ci = render_app.load_ci(repo.path / ".gitlab-ci.yml")
         assert job in ci, f"the GitLab pipeline runs no {task} gate"
-        scripts.append("\n".join(_resolved(ci, job)["script"]))
+        scripts.append("set -e\n" + "\n".join(_resolved(ci, job)["script"]))
     return scripts
 
 
@@ -3328,3 +3332,38 @@ def test_the_dump_runs_the_server_image(repo):
     cronjob = yaml.safe_load((repo.path / DB / "cronjob-pg-dump.yaml").read_text())
     containers = cronjob["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"]
     assert [c["image"] for c in containers] == [cluster["spec"]["imageName"]]
+
+
+def test_the_app_mounts_its_database_secret_as_files(repo):
+    deployment = yaml.safe_load((repo.path / FLUX / "deployment.yaml").read_text())
+    pod = deployment["spec"]["template"]["spec"]
+    secrets = {v["secret"]["secretName"] for v in pod["volumes"] if "secret" in v}
+    expected = {f"{repo.answers['app_slug']}-db-app", f"{repo.answers['app_slug']}-db-ca"}
+    probe = pod["containers"][0]["readinessProbe"]["httpGet"]["path"]
+    if _wants_db(repo.answers):
+        assert expected <= secrets
+        assert probe == "/readyz"
+        assert pod["containers"][0]["livenessProbe"]["httpGet"]["path"] == "/"
+    else:
+        assert not expected & secrets
+        assert probe == "/"
+
+
+def test_the_database_gates_ship_with_the_database(repo):
+    for gate in ("check-cnpg-clusters.py", "check-pvc-storageclass.py"):
+        assert (repo.path / "scripts" / gate).is_file() is _wants_db(repo.answers)
+
+
+def test_the_database_gates_run_green_and_reject_an_unpinned_class(repo, tmp_path):
+    """Both shipped forms (the `database` task, the db-manifest-check job) pass the
+    render and red once the Cluster's storage class is dropped."""
+    _skip_without_db(repo.answers)
+    for work, script in _gate_runs(repo, tmp_path, "db", "database", "db-manifest-check"):
+        result = _run(work, "sh", "-c", script)
+        assert result.returncode == 0, result.stdout + result.stderr
+        cluster_path = work / DB / "cluster.yaml"
+        cluster = yaml.safe_load(cluster_path.read_text())
+        del cluster["spec"]["storage"]["storageClass"]
+        cluster_path.write_text(yaml.safe_dump(cluster))
+        result = _run(work, "sh", "-c", script)
+        assert result.returncode != 0, "a Cluster with no storage class passed the gate"

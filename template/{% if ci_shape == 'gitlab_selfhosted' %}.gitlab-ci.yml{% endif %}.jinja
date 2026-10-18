@@ -280,3 +280,15 @@ kustomization-check:
   extends: .manifest-gate
   script:
     - python3 scripts/check-kustomization.py kubernetes/flux
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+
+# kubernetes/db is reconciled by its own tenant Kustomization, so the flux-lint
+# include above never builds it; these gates hold its structure and safeguards.
+db-manifest-check:
+  extends: .manifest-gate
+  script:
+    - python3 scripts/check-kustomization.py kubernetes/db
+    - python3 scripts/check-netpol-except-parity.py kubernetes/db
+    - cat kubernetes/db/*.yaml | python3 scripts/check-cnpg-clusters.py
+    - cat kubernetes/db/*.yaml | python3 scripts/check-pvc-storageclass.py
+{%- endif %}

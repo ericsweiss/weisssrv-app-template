@@ -90,10 +90,19 @@ spec:
                 - ALL
           # Adjust to your app's health endpoints. The liveness grace on a slow
           # boot is ~55s; anything slower needs a startupProbe.
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+          readinessProbe:
+            httpGet:
+              # Ready only when the database answers and the schema is current;
+              # liveness stays on / so a database outage never restart-loops the pod.
+              path: /readyz
+              port: http
+{%- else %}
           readinessProbe:
             httpGet:
               path: /
               port: http
+{%- endif %}
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
@@ -121,7 +130,29 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+            # The runtime role's connection Secret and the server CA as files
+            # (weisssrv-lib's DATABASE-CONTRACT.md); no subPath, so a rotated
+            # password lands in place.
+            - name: db
+              mountPath: /var/run/secrets/db
+              readOnly: true
+            - name: db-ca
+              mountPath: /var/run/secrets/db-ca
+              readOnly: true
+{%- endif %}
       volumes:
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+        - name: db
+          secret:
+            secretName: {{ app_slug }}-db-app
+        - name: db-ca
+          secret:
+            secretName: {{ app_slug }}-db-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+{%- endif %}
         - name: tmp
           emptyDir:
             # Node ephemeral storage. Raise the container's ephemeral-storage
