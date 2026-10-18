@@ -3398,19 +3398,32 @@ def test_the_database_gates_ship_with_the_database(repo):
         assert (repo.path / "scripts" / gate).is_file() is _wants_db(repo.answers)
 
 
-def test_the_database_gates_run_green_and_reject_an_unpinned_class(repo, tmp_path):
+def _drop_prune_annotation(cluster: dict) -> None:
+    del cluster["metadata"]["annotations"]["kustomize.toolkit.fluxcd.io/prune"]
+
+
+def _drop_storage_class(cluster: dict) -> None:
+    del cluster["spec"]["storage"]["storageClass"]
+
+
+def test_the_database_gates_run_green_and_reject_a_dropped_safeguard_or_class(repo, tmp_path):
     """Both shipped forms (the `database` task, the db-manifest-check job) pass the
-    render and red once the Cluster's storage class is dropped."""
+    render, and each gate line in them is proven able to fail: check-cnpg-clusters
+    on a dropped prune annotation, check-pvc-storageclass on a dropped class."""
     _skip_without_db(repo.answers)
-    for work, script in _gate_runs(repo, tmp_path, "db", "database", "db-manifest-check"):
-        result = _run(work, "sh", "-c", script)
-        assert result.returncode == 0, result.stdout + result.stderr
-        cluster_path = work / DB / "cluster.yaml"
-        cluster = yaml.safe_load(cluster_path.read_text())
-        del cluster["spec"]["storage"]["storageClass"]
-        cluster_path.write_text(yaml.safe_dump(cluster))
-        result = _run(work, "sh", "-c", script)
-        assert result.returncode != 0, "a Cluster with no storage class passed the gate"
+    for mutate, header in ((_drop_prune_annotation, "safeguard"), (_drop_storage_class, None)):
+        name = f"db-{mutate.__name__}"
+        for work, script in _gate_runs(repo, tmp_path, name, "database", "db-manifest-check"):
+            result = _run(work, "sh", "-c", script)
+            assert result.returncode == 0, result.stdout + result.stderr
+            cluster_path = work / DB / "cluster.yaml"
+            cluster = yaml.safe_load(cluster_path.read_text())
+            mutate(cluster)
+            cluster_path.write_text(yaml.safe_dump(cluster))
+            result = _run(work, "sh", "-c", script)
+            assert result.returncode != 0, f"{mutate.__name__} passed the gate"
+            if header:
+                assert header in result.stderr, result.stdout + result.stderr
 
 
 def test_the_pdb_leaves_the_database_pods_out(repo):
@@ -3426,6 +3439,26 @@ def test_the_pdb_leaves_the_database_pods_out(repo):
     assert _selects(selector, {"app.kubernetes.io/name": slug}), "the PDB lost the app pods"
     for pod, labels in _db_pods(slug).items():
         assert not _selects(selector, labels), f"the PDB counts the database {pod} pod"
+
+
+def test_the_lint_tasks_run_their_database_arm(repo, tmp_path):
+    """Under `set -e` every red above comes from the kubernetes/flux cmd, so the
+    kubernetes/db cmds need their own assertion and a red of their own."""
+    _skip_without_db(repo.answers)
+    tasks = yaml.safe_load((repo.path / "Taskfile.yml").read_text())["tasks"]
+    flux_lint = [" ".join(cmd.split()) for cmd in tasks["flux-lint"]["cmds"]]
+    assert any("--kustomize-path kubernetes/db" in cmd for cmd in flux_lint), flux_lint
+    assert "python3 scripts/check-netpol-except-parity.py kubernetes/db" in tasks["netpol"]["cmds"]
+    assert (
+        "python3 scripts/check-kustomization.py kubernetes/db" in tasks["kustomization"]["cmds"]
+    )
+    for work, script in _gate_runs(repo, tmp_path, "db-unlisted", "kustomization", "db-manifest-check"):
+        (work / DB / "configmap.yaml").write_text(
+            "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: unlisted\n"
+        )
+        result = _run(work, "sh", "-c", script)
+        assert result.returncode != 0, "an unlisted kubernetes/db manifest passed the gate"
+        assert "not listed" in result.stdout + result.stderr
 
 
 def test_generated_db_manifests_build(repo):
