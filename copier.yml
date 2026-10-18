@@ -638,8 +638,9 @@ db_backup_endpoint:
   help: The bucket's S3 endpoint URL, scheme included and no path.
   placeholder: https://s3.us-west-004.backblazeb2.com
   validator: >-
-    {% if not (db_backup_endpoint | regex_search('^https://[A-Za-z0-9.-]+(:[0-9]+)?$')) %}
-    db_backup_endpoint must be an https:// URL with no path
+    {% if not (db_backup_endpoint | regex_search('^https://[A-Za-z0-9.-]+(:443)?$')) %}
+    db_backup_endpoint must be an https:// URL on port 443 with no path, since
+    db-allow-egress opens only 443 to the backup store
     {% endif %}
 
 db_backup_item:

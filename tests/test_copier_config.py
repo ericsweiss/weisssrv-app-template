@@ -503,6 +503,9 @@ VALIDATOR_CASES = [
     ("db_storage_size", "20G", "a decimal G size is not the Gi quantity the storage quota counts", {}),
     ("db_backup_endpoint", "https://s3.us-west-004.backblazeb2.com", None, {}),
     ("db_backup_endpoint", "s3.us-west-004.backblazeb2.com", "no scheme, so Barman reads a bucket path", {}),
+    ("db_backup_endpoint", "https://s3.us-west-004.backblazeb2.com:443", None, {}),
+    ("db_backup_endpoint", "https://store.example:9000", "db-allow-egress opens only port 443", {}),
+    ("db_backup_endpoint", "https://store.example/bucket", "a path is not part of an S3 endpoint", {}),
     ("db_apiserver_cidrs", "10.0.10.222/32,10.0.10.223/32", None, {}),
     ("db_apiserver_cidrs", "10.0.10.222", "a bare address is not a CIDR the ipBlock accepts", {}),
     (
