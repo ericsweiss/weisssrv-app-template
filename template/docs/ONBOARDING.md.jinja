@@ -430,6 +430,9 @@ spec:
   # it at your own stage; docs/ARCHITECTURE.md, Platform contract.
   dependsOn:
     - name: infrastructure-configs
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+    - name: {{ app_slug }}-db
+{%- endif %}
   serviceAccountName: {{ app_slug }}-flux
   sourceRef:
     kind: GitRepository
@@ -438,6 +441,37 @@ spec:
   prune: true
   targetNamespace: {{ app_namespace }}
   wait: true
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+---
+# The database tree reconciles first and on its own, so the cluster, its
+# Secrets and its backups exist before any workload starts.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: {{ app_slug }}-db
+  namespace: flux-system
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 10m
+  dependsOn:
+    - name: infrastructure-configs
+  serviceAccountName: {{ app_slug }}-flux
+  sourceRef:
+    kind: GitRepository
+    name: {{ app_slug }}
+  path: ./kubernetes/db
+  prune: true
+  targetNamespace: {{ app_namespace }}
+  wait: true
+  # A cluster-template tenant-wiring gate requires this source. Nothing
+  # under kubernetes/db spells a variable, so it substitutes nothing.
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-config
+        optional: false
+{%- endif %}
 ```
 
 No `postBuild` block: nothing under `kubernetes/flux/` spells `${var}`, so this
@@ -489,6 +523,38 @@ This app is stateless as generated. A volume provisioned here sits outside
 every backup set until the operator adds it, and the operator owns its snapshot
 and backup schedule.
 
+{% if database == 'postgres' and secrets_backend == 'onepassword' -%}
+### O6b — Database prerequisites
+
+The database component needs, before the wiring merges:
+
+- The cluster's CloudNativePG operator and Barman Cloud plugin, and
+  `tenant-crd-editor` granting the `postgresql.cnpg.io` and
+  `barmancloud.cnpg.io` kinds (weisssrv-cluster-template `postgres_operator`).
+- The cluster's `tenant-local` StorageClass (weisssrv-cluster-template
+  `tenant_storage`), which provisions the volume for
+  `{{ app_slug }}-db-1` when the cluster first starts, and a ResourceQuota in
+  the wiring file that allows at least {{ db_storage_size }} on
+  `tenant-local.storageclass.storage.k8s.io/requests.storage`.
+- An NFS PersistentVolume `{{ app_slug }}-pg-dump` pre-bound to
+  `{{ app_namespace }}/{{ app_slug }}-pg-dump`, on a landing zone the off-site
+  backup walks, exported with `all_squash` to uid 1000 and gid 2000.
+- The bucket `{{ db_backup_bucket }}` at `{{ db_backup_endpoint }}` with a key
+  scoped to it alone, and lifecycle rules that keep deleted versions at least
+  30 days, in 1Password item `"{{ app_slug }}: {{ db_backup_item }}"` (fields
+  `access-key-id`, `secret-access-key`).
+- 1Password item `"{{ app_slug }}: {{ db_roles_item }}"` with fields
+  `migrate-password`, `app-password` and `ro-password`, each generated, never
+  typed.
+- The cluster's CloudNativePG alert rules, and a restore drill (PITR into a
+  scratch namespace) before the database holds data that matters.
+
+The application reads its connection from files under `/var/run/secrets/db`
+(host, port, dbname, user, password, sslmode, uri) with the CA at
+`/var/run/secrets/db-ca/ca.crt`, and serves `/readyz` as described in
+`kubernetes/flux/deployment.yaml`.
+
+{% endif -%}
 ### O7 — Reachability probe (recommended for user-facing routes)
 
 This repo's `PrometheusRule` covers replica availability only. The platform

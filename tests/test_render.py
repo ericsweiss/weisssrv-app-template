@@ -1192,15 +1192,23 @@ def test_wiring_store_scopes_itself_to_the_tenant(repo):
 def test_the_wiring_kustomization_points_at_this_repo(repo):
     """The wiring Kustomization is the whole link between cluster and repo, and
     kubeconform validates its schema, not its path or target namespace."""
-    docs = [d for d in _onboarding_wiring(repo.path) if d.get("kind") == "Kustomization"]
-    assert len(docs) == 1, "the wiring file must carry exactly one Kustomization"
-    spec, slug = docs[0]["spec"], repo.answers["app_slug"]
-    assert spec["path"].removeprefix("./") == FLUX, spec["path"]
-    assert (repo.path / FLUX / "kustomization.yaml").is_file()
-    assert spec["targetNamespace"] == repo.answers["app_namespace"]
-    assert spec["sourceRef"]["name"] == slug
-    assert spec["serviceAccountName"] == f"{slug}-flux"
-    assert spec["prune"] is True
+    slug = repo.answers["app_slug"]
+    docs = {
+        d["metadata"]["name"]: d["spec"]
+        for d in _onboarding_wiring(repo.path)
+        if d.get("kind") == "Kustomization"
+    }
+    # The database component adds its own Kustomization (kubernetes/db).
+    trees = {slug: FLUX, **({f"{slug}-db": DB} if _wants_db(repo.answers) else {})}
+    assert set(docs) == set(trees), f"wiring Kustomizations: {sorted(docs)}"
+    for name, tree in trees.items():
+        spec = docs[name]
+        assert spec["path"].removeprefix("./") == tree, spec["path"]
+        assert (repo.path / tree / "kustomization.yaml").is_file()
+        assert spec["targetNamespace"] == repo.answers["app_namespace"]
+        assert spec["sourceRef"]["name"] == slug
+        assert spec["serviceAccountName"] == f"{slug}-flux"
+        assert spec["prune"] is True
 
 
 def test_gitlab_wiring_store_names_the_answered_instance(rendered_b, answers_b):
@@ -2926,9 +2934,13 @@ def test_the_platform_contract_names_what_the_manifests_bind_to(repo):
     expected |= metrics
     # The wiring block's dependsOn names a platform stage. A cluster without
     # that name leaves the tenant Kustomization retrying with nothing applied.
-    for document in _onboarding_wiring(repo.path):
+    wiring = _onboarding_wiring(repo.path)
+    # A dependency on a Kustomization defined here (the database) is not one.
+    own = {d["metadata"]["name"] for d in wiring if d.get("kind") == "Kustomization"}
+    for document in wiring:
         for dependency in (document.get("spec") or {}).get("dependsOn") or []:
-            expected.add(dependency["name"])
+            if dependency["name"] not in own:
+                expected.add(dependency["name"])
     # A policy peer ANDs its namespace and pod labels, so both values are a
     # prerequisite: the DNS peer names kube-system AND k8s-app: kube-dns, and a
     # cluster labelling CoreDNS otherwise loses name resolution silently.
@@ -3123,3 +3135,10 @@ def test_the_dump_is_a_db_component_selected_by_its_instance(repo):
     assert policies["backup-allow-egress"]["spec"]["podSelector"] == {
         "matchLabels": {"app.kubernetes.io/instance": f"{slug}-pg-dump"}
     }
+
+
+def test_the_onboarding_wiring_reconciles_the_database_first(repo):
+    text = (repo.path / "docs" / "ONBOARDING.md").read_text()
+    assert ("path: ./kubernetes/db" in text) is _wants_db(repo.answers)
+    assert (f"    - name: {repo.answers['app_slug']}-db\n" in text) is _wants_db(repo.answers)
+    assert ("### O6b" in text) is _wants_db(repo.answers)
