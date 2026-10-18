@@ -10,10 +10,14 @@ spec:
     - name: {{ app_slug }}.db
       rules:
         - alert: DatabaseAbsent
-          expr: absent(cnpg_collector_up{namespace="{{ app_namespace }}", pod="{{ app_slug }}-db-1"})
+          expr: absent(cnpg_collector_up{namespace="{{ app_namespace }}", pod=~"{{ app_slug }}-db-[0-9]+"})
           for: 15m
           labels:
             severity: critical
           annotations:
-            runbook_url: '{{ runbook_url }}'
+            runbook_url: '{{ db_runbook_url }}'
             summary: '{{ app_slug }} database metrics have been absent for 15 minutes'
+            description: >-
+              No instance of {{ app_slug }}-db has had its exporter scraped for 15m:
+              the database is down, its pod is unschedulable, or the PodMonitor
+              or the scrape policy is broken.

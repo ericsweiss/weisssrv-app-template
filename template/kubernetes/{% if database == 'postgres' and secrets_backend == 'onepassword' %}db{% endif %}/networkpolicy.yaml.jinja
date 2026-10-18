@@ -1,6 +1,7 @@
 ---
-# Fail-closed baseline for every pod in the namespace; the allows below open
-# what the database and its dump need.
+# Fail-closed baseline. Duplicates kubernetes/flux default-deny on purpose, so
+# the namespace stays fail-closed while this tree reconciles first; the allows
+# below open what the database and its dump need.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

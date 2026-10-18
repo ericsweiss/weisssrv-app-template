@@ -1209,6 +1209,13 @@ def test_the_wiring_kustomization_points_at_this_repo(repo):
         assert spec["sourceRef"]["name"] == slug
         assert spec["serviceAccountName"] == f"{slug}-flux"
         assert spec["prune"] is True
+        # The cluster-template tenant-wiring gate requires cluster-config as a
+        # substitute source on every tenant Kustomization.
+        assert spec["postBuild"]["substituteFrom"] == [
+            {"kind": "ConfigMap", "name": "cluster-config", "optional": False}
+        ], f"{name} carries no cluster-config substitute source"
+    onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text()
+    assert "No `postBuild` block" not in onboarding, "the prose contradicts the wiring"
 
 
 def test_gitlab_wiring_store_names_the_answered_instance(rendered_b, answers_b):
@@ -2954,8 +2961,46 @@ def test_the_platform_contract_names_what_the_manifests_bind_to(repo):
                         peers |= set((peer.get(key) or {}).get("matchLabels", {}).values())
     assert peers, "the policies name no label-selected peer"
     expected |= peers
+    if _wants_db(repo.answers):
+        # The db tree's cross-namespace peers (the CNPG operator, the scraper)
+        # and the platform objects its manifests and alert depend on. A peer
+        # with no namespaceSelector is this namespace's own pod, not a prerequisite.
+        db_peers = set()
+        for path in sorted((repo.path / DB).glob("networkpolicy*.yaml")):
+            for policy in yaml.safe_load_all(path.read_text()):
+                spec = (policy or {}).get("spec") or {}
+                for rule in (spec.get("ingress") or []) + (spec.get("egress") or []):
+                    for peer in (rule.get("from") or []) + (rule.get("to") or []):
+                        if "namespaceSelector" not in peer:
+                            continue
+                        for key in ("namespaceSelector", "podSelector"):
+                            db_peers |= set((peer.get(key) or {}).get("matchLabels", {}).values())
+        assert {"cnpg-system", "cloudnative-pg"} <= db_peers, sorted(db_peers)
+        expected |= db_peers | DB_PLATFORM_CONTRACT
     missing = sorted(name for name in expected if name not in architecture)
     assert not missing, f"the Platform contract does not name {missing}"
+
+
+# What the database component needs from the cluster beyond its policy peers:
+# the CRD groups and kinds it applies, the class its claim names, and the
+# Prometheus input without which the PodMonitor is never selected.
+DB_PLATFORM_CONTRACT = {
+    "postgresql.cnpg.io",
+    "barmancloud.cnpg.io",
+    "PodMonitor",
+    "tenant-local",
+    "podMonitorSelectorNilUsesHelmValues: false",
+}
+
+
+def test_the_consuming_contract_names_the_database_prerequisites():
+    """docs/CONSUMING.md § What your cluster must provide is read before the
+    database answer is given, so it names the same prerequisites."""
+    consuming = (REPO_ROOT / "docs" / "CONSUMING.md").read_text(encoding="utf-8")
+    section = consuming.split("## What your cluster must provide")[1].split("\n## ")[0]
+    expected = DB_PLATFORM_CONTRACT | {"cnpg-system", "app.kubernetes.io/name: cloudnative-pg"}
+    missing = sorted(name for name in expected if name not in section)
+    assert not missing, f"CONSUMING.md's cluster contract does not name {missing}"
 
 
 def _alert_metrics(root: Path) -> set[str]:
@@ -3142,3 +3187,143 @@ def test_the_onboarding_wiring_reconciles_the_database_first(repo):
     assert ("path: ./kubernetes/db" in text) is _wants_db(repo.answers)
     assert (f"    - name: {repo.answers['app_slug']}-db\n" in text) is _wants_db(repo.answers)
     assert ("### O6b" in text) is _wants_db(repo.answers)
+
+
+def test_the_docs_call_the_app_stateless_only_without_a_database(repo):
+    """A tenant told the app is stateless skips the backup and restore duties
+    the database component brings."""
+    for doc in ("ONBOARDING.md", "ARCHITECTURE.md"):
+        text = (repo.path / "docs" / doc).read_text()
+        assert ("stateless" in text) is not _wants_db(repo.answers), doc
+        if _wants_db(repo.answers):
+            assert "kubernetes/db" in text and "O6b" in text, doc
+    architecture = (REPO_ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    storage = architecture.split("**It does not ship storage**")[1].split("\n- ")[0]
+    assert "database: postgres" in storage, "the template map still calls every render stateless"
+
+
+def _rule(root: Path, path: str, alert: str) -> dict:
+    rules = yaml.safe_load((root / path).read_text())
+    found = [r for g in rules["spec"]["groups"] for r in g["rules"] if r.get("alert") == alert]
+    assert len(found) == 1, f"{alert} in {path}: {found}"
+    return found[0]
+
+
+def test_database_absent_follows_any_instance_serial(repo):
+    """CNPG re-creates a lost instance under the next serial (<slug>-db-2), so a
+    pinned pod name pages for ever on a healthy database."""
+    _skip_without_db(repo.answers)
+    slug, namespace = repo.answers["app_slug"], repo.answers["app_namespace"]
+    rule = _rule(repo.path, f"{DB}/prometheusrule.yaml", "DatabaseAbsent")
+    assert rule["expr"] == (
+        f'absent(cnpg_collector_up{{namespace="{namespace}", pod=~"{slug}-db-[0-9]+"}})'
+    )
+    assert "15m" in rule["annotations"]["description"]
+    assert rule["annotations"]["runbook_url"] == repo.answers["db_runbook_url"]
+
+
+def test_the_role_uri_encodes_a_space_as_percent_20(repo):
+    """urlquery is query escaping: a space becomes '+', which libpq reads in
+    URI userinfo as a literal plus."""
+    _skip_without_db(repo.answers)
+    docs = list(yaml.safe_load_all((repo.path / DB / "externalsecret-roles.yaml").read_text()))
+    for doc in docs:
+        uri = doc["spec"]["target"]["template"]["data"]["uri"]
+        assert '{{ .password | urlquery | replace "+" "%20" }}' in uri, uri
+    onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text()
+    assert "without spaces" in onboarding
+
+
+def _selects(selector: dict, labels: dict) -> bool:
+    """Whether a LabelSelector matches a pod carrying `labels`."""
+    if any(labels.get(k) != v for k, v in (selector.get("matchLabels") or {}).items()):
+        return False
+    for expression in selector.get("matchExpressions") or []:
+        key, operator, values = expression["key"], expression["operator"], expression.get("values")
+        present = key in labels
+        if operator == "In" and not (present and labels[key] in values):
+            return False
+        if operator == "NotIn" and present and labels[key] in values:
+            return False
+        if operator == "Exists" and not present:
+            return False
+        if operator == "DoesNotExist" and present:
+            return False
+    return True
+
+
+# The vendored check-scrape-wiring.py does not credit a podSelector carrying
+# matchExpressions, so the scrape allow keeps matchLabels only until the gate
+# models them upstream; it opens only app_port, and only to the observability namespace.
+SCRAPE_GATE_SELECTOR_EXEMPT = {"allow-scrape-from-observability"}
+
+
+def test_no_app_policy_selects_the_database_pods(repo):
+    """The instance and dump pods carry the app's name label; an app allow that
+    selects them gives the credential-holding dump public egress and opens the
+    instances to Traefik and the scraper."""
+    _skip_without_db(repo.answers)
+    slug = repo.answers["app_slug"]
+    db_pods = {
+        "dump": {
+            "app.kubernetes.io/name": slug,
+            "app.kubernetes.io/component": "db",
+            "app.kubernetes.io/instance": f"{slug}-pg-dump",
+        },
+        "instance": {
+            "app.kubernetes.io/name": slug,
+            "app.kubernetes.io/component": "db",
+            "cnpg.io/cluster": f"{slug}-db",
+        },
+    }
+    app_pod = {"app.kubernetes.io/name": slug}
+    allows = []
+    for path in _manifests(repo.path, "networkpolicy*"):
+        for policy in yaml.safe_load_all(path.read_text()):
+            spec = (policy or {}).get("spec") or {}
+            name = (policy or {}).get("metadata", {}).get("name")
+            if name in SCRAPE_GATE_SELECTOR_EXEMPT:
+                continue
+            if spec.get("ingress") or spec.get("egress"):
+                allows.append((name, spec["podSelector"]))
+    assert allows, "kubernetes/flux carries no allow policy"
+    for name, selector in allows:
+        assert _selects(selector, app_pod), f"{name} no longer selects the app's pods"
+        for pod, labels in db_pods.items():
+            assert not _selects(selector, labels), f"{name} selects the database {pod} pod"
+
+
+def test_the_wiring_quota_counts_the_database_claim(repo):
+    """tenant-local does not enforce a claim's size, so the quota is the cap."""
+    quotas = [d for d in _onboarding_wiring(repo.path) if d.get("kind") == "ResourceQuota"]
+    assert len(quotas) == 1
+    hard = quotas[0]["spec"]["hard"]
+    storage_key = "tenant-local.storageclass.storage.k8s.io/requests.storage"
+    if _wants_db(repo.answers):
+        size = int(repo.answers["db_storage_size"].removesuffix("Gi"))
+        assert hard["persistentvolumeclaims"] == "4"
+        assert hard[storage_key] == f"{size * 2}Gi"
+    else:
+        assert "persistentvolumeclaims" not in hard and storage_key not in hard
+
+
+def test_o6b_registers_the_dump_with_the_backup_freshness_check(repo):
+    """A dump nobody watches stops silently; the cluster's freshness alert only
+    knows the apps it is told about."""
+    _skip_without_db(repo.answers)
+    slug = repo.answers["app_slug"]
+    onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text()
+    o6b = onboarding.split("### O6b")[1].split("\n### ")[0]
+    assert "nas_storage_backup_artifact_apps" in o6b
+    assert f'{{name: {slug}, pattern: "{slug}-*.sql.gz"}}' in o6b
+    assert f'absent(backup_artifact_last_mtime_seconds{{app="{slug}"}})' in o6b
+    assert "check-backup-artifact-apps" in o6b
+
+
+def test_the_dump_runs_the_server_image(repo):
+    """pg_dump must never be older than the server it dumps."""
+    _skip_without_db(repo.answers)
+    cluster = yaml.safe_load((repo.path / DB / "cluster.yaml").read_text())
+    cronjob = yaml.safe_load((repo.path / DB / "cronjob-pg-dump.yaml").read_text())
+    containers = cronjob["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"]
+    assert [c["image"] for c in containers] == [cluster["spec"]["imageName"]]
