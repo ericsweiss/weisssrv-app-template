@@ -153,6 +153,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: {{ app_slug }}
+    # The database and dump pods share the name label; their own policies open theirs.
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values: [db]
   policyTypes:
     - Egress
   egress:

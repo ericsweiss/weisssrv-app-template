@@ -3376,6 +3376,19 @@ def test_no_app_policy_selects_the_database_pods(repo):
             assert not _selects(selector, labels), f"{name} selects the database {pod} pod"
 
 
+def test_app_db_egress_does_not_select_the_database_pods(repo):
+    """The instance and dump pods carry the app's name label, so a name-only
+    selector hands them the app's egress to Postgres as well."""
+    _skip_without_db(repo.answers)
+    slug = repo.answers["app_slug"]
+    docs = yaml.safe_load_all((repo.path / DB / "networkpolicy.yaml").read_text())
+    policy = next(d for d in docs if d and d["metadata"]["name"] == "app-allow-egress-db")
+    selector = policy["spec"]["podSelector"]
+    assert _selects(selector, {"app.kubernetes.io/name": slug}), "no longer selects the app's pods"
+    for pod, labels in _db_pods(slug).items():
+        assert not _selects(selector, labels), f"app-allow-egress-db selects the database {pod} pod"
+
+
 def test_architecture_names_what_selects_the_database_pods(repo):
     """The database paragraph names each app policy that excludes the db pods,
     and the scrape allow that still selects them while the gate is exempt."""
