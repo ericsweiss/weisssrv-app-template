@@ -204,7 +204,9 @@ include:
       changes:
         - "kubernetes/**/*"
         - "scripts/check-*.py"
+        - "scripts/ci-fetch-tools.py"
         - "scripts/flux-lint.sh"
+        - "scripts/gate_common.py"
         - ".gitlab-ci.yml"
     - if: '$CI_COMMIT_BRANCH == "main"'
 
