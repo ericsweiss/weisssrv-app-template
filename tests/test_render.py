@@ -3344,6 +3344,25 @@ def test_no_app_policy_selects_the_database_pods(repo):
             assert not _selects(selector, labels), f"{name} selects the database {pod} pod"
 
 
+def test_architecture_names_what_selects_the_database_pods(repo):
+    """The database paragraph names each app policy that excludes the db pods,
+    and the scrape allow that still selects them while the gate is exempt."""
+    _skip_without_db(repo.answers)
+    architecture = (repo.path / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    paragraph = architecture.split("The instance and dump pods carry")[1].split("\n\n")[0]
+    assert "The app's NetworkPolicies" not in paragraph, "overclaims every app policy"
+    wide = [line for line in paragraph.splitlines() if len(line) > 80]
+    assert not wide, f"db paragraph renders past 80 columns: {wide}"
+    for path in _manifests(repo.path, "networkpolicy*"):
+        for policy in yaml.safe_load_all(path.read_text()):
+            spec = (policy or {}).get("spec") or {}
+            if spec.get("ingress") or spec.get("egress"):
+                name = policy["metadata"]["name"]
+                assert f"`{name}`" in paragraph, f"{name} is unnamed in the db paragraph"
+    scrape_named = "`allow-scrape-from-observability`" in paragraph
+    assert scrape_named is bool(repo.answers["enable_servicemonitor"])
+
+
 def test_the_wiring_quota_counts_the_database_claim(repo):
     """tenant-local does not enforce a claim's size, so the quota is the cap."""
     quotas = [d for d in _onboarding_wiring(repo.path) if d.get("kind") == "ResourceQuota"]
