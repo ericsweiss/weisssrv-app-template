@@ -522,7 +522,7 @@ provisions on its own.
 
 ### O6 — Persistent storage (only if the tenant needs a volume)
 
-This template ships no PVC by design. Supply the StorageClass the cluster
+This template ships no PVC for the app by design{% if database == 'postgres' and secrets_backend == 'onepassword' %} (the database tree under `kubernetes/db` brings its own claims, covered in O6b){% endif %}. Supply the StorageClass the cluster
 offers, or provision the volume and a matching PV yourself, and hand the tenant
 the PVC name. The tenant then adds the volume and its mount to
 `deployment.yaml`{% if enable_vpa %} and sets `vpa.yaml` `updateMode: "Off"`{% endif %}.
