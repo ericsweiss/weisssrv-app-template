@@ -283,13 +283,19 @@ kustomization-check:
 {%- if database == 'postgres' and secrets_backend == 'onepassword' %}
 
 # kubernetes/db is reconciled by its own tenant Kustomization, so the flux-lint
-# include above never builds it; these gates hold its structure and safeguards,
-# and `task flux-lint` schema-checks it locally.
+# include above never builds it; these gates hold its structure and, over the
+# `kustomize build` output Flux applies, its safeguards.
 db-manifest-check:
   extends: .manifest-gate
+  before_script:
+    - pip install --user --quiet --no-cache-dir "pyyaml==$PYYAML_VERSION"
+    # Non-root and sha256-verified, into $CI_PROJECT_DIR/.bin.
+    - python3 scripts/ci-fetch-tools.py kustomize
+    - export PATH="$CI_PROJECT_DIR/.bin:$PATH"
   script:
     - python3 scripts/check-kustomization.py kubernetes/db
     - python3 scripts/check-netpol-except-parity.py kubernetes/db
-    - cat kubernetes/db/*.yaml | python3 scripts/check-cnpg-clusters.py
-    - cat kubernetes/db/*.yaml | python3 scripts/check-pvc-storageclass.py
+    - built=$(kustomize build kubernetes/db)
+    - printf '%s\n' "$built" | python3 scripts/check-cnpg-clusters.py
+    - printf '%s\n' "$built" | python3 scripts/check-pvc-storageclass.py
 {%- endif %}

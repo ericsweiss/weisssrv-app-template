@@ -135,21 +135,19 @@ def _catalog(root: Path) -> str:
 
 def _validate_db(runner: Runner, root: Path, catalog: str, k8s_version) -> None:
     """kubernetes/db is reconciled by its own Kustomization, so the flux build
-    never reaches it: build it, validate it and run the database gates over it."""
+    never reaches it: build it, then validate the built output and run the
+    safeguard gates over it, so a patch that strips a safeguard is seen."""
     built = runner.gate("kustomize build db", "kustomize", "build", "kubernetes/db")
     if "kustomize build db" not in runner.failures:
         _kubeconform(runner, "kubeconform db", "kubeconform db skips", catalog, k8s_version, built)
+        runner.gate("cnpg clusters", sys.executable, "scripts/check-cnpg-clusters.py", stdin=built)
+        runner.gate(
+            "pvc storageclass", sys.executable, "scripts/check-pvc-storageclass.py", stdin=built
+        )
     runner.gate(
         "netpol except db", sys.executable, "scripts/check-netpol-except-parity.py", "kubernetes/db"
     )
     runner.gate("kustomization db", sys.executable, "scripts/check-kustomization.py", "kubernetes/db")
-    manifests = "".join(
-        path.read_text(encoding="utf-8") for path in sorted((root / "kubernetes/db").glob("*.yaml"))
-    )
-    runner.gate("cnpg clusters", sys.executable, "scripts/check-cnpg-clusters.py", stdin=manifests)
-    runner.gate(
-        "pvc storageclass", sys.executable, "scripts/check-pvc-storageclass.py", stdin=manifests
-    )
 
 
 def validate(root: Path, answers: dict) -> list[str]:

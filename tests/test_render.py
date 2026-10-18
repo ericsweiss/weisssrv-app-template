@@ -2402,11 +2402,13 @@ def test_every_local_gate_has_a_pre_commit_hook(repo, hook_id):
 
 
 def _hook_paths(hook: dict) -> list[str]:
-    """The repo paths a hook's entry names, read through an `sh -c` wrapper."""
+    """The repo paths a hook's entry names, read through an `sh -c` wrapper and
+    with a closing `$(...)` parenthesis stripped."""
     tokens = shlex.split(hook["entry"])
     if tokens[:2] == ["sh", "-c"]:
         tokens = shlex.split(tokens[2])
-    return [token for token in tokens if token.startswith(("scripts/", "kubernetes/"))]
+    paths = [token.rstrip(")") for token in tokens]
+    return [token for token in paths if token.startswith(("scripts/", "kubernetes/"))]
 
 
 def _hook_targets(repo: Repo, token: str) -> list[Path]:
@@ -3468,24 +3470,62 @@ def _drop_storage_class(cluster: dict) -> None:
     del cluster["spec"]["storage"]["storageClass"]
 
 
+def _patch_out_prune_annotation(work: Path) -> None:
+    """Strip the prune guard with a Kustomize patch and leave cluster.yaml whole:
+    only a gate reading the built output sees what Flux applies."""
+    path = work / DB / "kustomization.yaml"
+    document = yaml.safe_load(path.read_text())
+    remove = [{"op": "remove", "path": "/metadata/annotations/kustomize.toolkit.fluxcd.io~1prune"}]
+    document.setdefault("patches", []).append(
+        {"target": {"kind": "Cluster"}, "patch": yaml.safe_dump(remove)}
+    )
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+
+
+def _mutate_cluster(work: Path, mutate) -> None:
+    cluster_path = work / DB / "cluster.yaml"
+    cluster = yaml.safe_load(cluster_path.read_text())
+    mutate(cluster)
+    cluster_path.write_text(yaml.safe_dump(cluster))
+
+
 def test_the_database_gates_run_green_and_reject_a_dropped_safeguard_or_class(repo, tmp_path):
     """Both shipped forms (the `database` task, the db-manifest-check job) pass the
-    render, and each gate line in them is proven able to fail: check-cnpg-clusters
-    on a dropped prune annotation, check-pvc-storageclass on a dropped class."""
+    render; check-cnpg-clusters fails on a prune annotation dropped in the source
+    or by a patch, check-pvc-storageclass on a dropped class."""
     _skip_without_db(repo.answers)
-    for mutate, header in ((_drop_prune_annotation, "safeguard"), (_drop_storage_class, None)):
-        name = f"db-{mutate.__name__}"
-        for work, script in _gate_runs(repo, tmp_path, name, "database", "db-manifest-check"):
+    require_tool("kustomize", "database gates", _TOOLCHAIN_HINT, ci_optional=True)
+    mutations = (
+        ("prune", lambda work: _mutate_cluster(work, _drop_prune_annotation), "safeguard"),
+        ("class", lambda work: _mutate_cluster(work, _drop_storage_class), None),
+        ("patch", _patch_out_prune_annotation, "safeguard"),
+    )
+    for label, mutate, header in mutations:
+        for work, script in _gate_runs(repo, tmp_path, f"db-{label}", "database", "db-manifest-check"):
             result = _run(work, "sh", "-c", script)
             assert result.returncode == 0, result.stdout + result.stderr
-            cluster_path = work / DB / "cluster.yaml"
-            cluster = yaml.safe_load(cluster_path.read_text())
-            mutate(cluster)
-            cluster_path.write_text(yaml.safe_dump(cluster))
+            mutate(work)
             result = _run(work, "sh", "-c", script)
-            assert result.returncode != 0, f"{mutate.__name__} passed the gate"
+            assert result.returncode != 0, f"the {label} mutation passed the gate"
             if header:
                 assert header in result.stderr, result.stdout + result.stderr
+
+
+def test_validate_render_runs_the_database_gates_over_the_built_tree(repo, tmp_path, monkeypatch):
+    """A patch in kubernetes/db/kustomization.yaml changes what Flux applies and
+    leaves every source file intact, so the gates must read `kustomize build`."""
+    _skip_without_db(repo.answers)
+    require_tool("kustomize", "validate_render database gates", _TOOLCHAIN_HINT, ci_optional=True)
+    monkeypatch.setattr(validate_render, "_kubeconform", lambda *args, **kwargs: None)
+    work = tmp_path / "validate-db"
+    shutil.copytree(repo.path, work)
+    runner = validate_render.Runner(work)
+    validate_render._validate_db(runner, work, "unused", repo.answers["k8s_version"])
+    assert runner.failures == []
+    _patch_out_prune_annotation(work)
+    runner = validate_render.Runner(work)
+    validate_render._validate_db(runner, work, "unused", repo.answers["k8s_version"])
+    assert "cnpg clusters" in runner.failures, runner.failures
 
 
 def test_the_pdb_leaves_the_database_pods_out(repo):
@@ -3516,12 +3556,14 @@ def test_the_database_gates_have_a_pre_commit_hook(repo, tmp_path):
     command = shlex.split(hooks["database"]["entry"])
     result = _run(work, *command)
     assert result.returncode == 0, result.stdout + result.stderr
-    cluster_path = work / DB / "cluster.yaml"
-    cluster = yaml.safe_load(cluster_path.read_text())
-    _drop_prune_annotation(cluster)
-    cluster_path.write_text(yaml.safe_dump(cluster))
+    _mutate_cluster(work, _drop_prune_annotation)
     result = _run(work, *command)
     assert result.returncode != 0, "the database hook passed a Cluster with no prune guard"
+    shutil.copy(repo.path / DB / "cluster.yaml", work / DB / "cluster.yaml")
+    assert _run(work, *command).returncode == 0, "restoring cluster.yaml left the hook red"
+    _patch_out_prune_annotation(work)
+    result = _run(work, *command)
+    assert result.returncode != 0, "the database hook passed a patch stripping the prune guard"
 
 
 def test_the_lint_tasks_run_their_database_arm(repo, tmp_path):

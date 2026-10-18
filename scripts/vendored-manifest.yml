@@ -45,6 +45,9 @@ vendored:
     consumer: "template/scripts/{% if database == 'postgres' and secrets_backend == 'onepassword' %}check-cnpg-clusters.py{% endif %}"
   - lib: scripts/check-pvc-storageclass.py
     consumer: "template/scripts/{% if database == 'postgres' and secrets_backend == 'onepassword' %}check-pvc-storageclass.py{% endif %}"
+  # db-manifest-check fetches kustomize with it, on a runner image that has none.
+  - lib: scripts/ci-fetch-tools.py
+    consumer: "template/scripts/{% if database == 'postgres' and secrets_backend == 'onepassword' and ci_shape == 'gitlab_selfhosted' %}ci-fetch-tools.py{% endif %}"
   - lib: scripts/check-ci-include-job-names.py
     consumer: "template/scripts/{% if ci_shape == 'gitlab_selfhosted' %}check-ci-include-job-names.py{% endif %}"
   - lib: scripts/check-lib-pins.py

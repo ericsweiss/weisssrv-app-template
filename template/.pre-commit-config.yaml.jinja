@@ -64,9 +64,11 @@ repos:
       - id: database
         name: database tree
         # The hook venv's python leads PATH, so the bare `python` calls get PyYAML.
+        # The safeguard gates read `kustomize build`, so they see a stripping patch.
         entry: >-
-          sh -c 'cat kubernetes/db/*.yaml | python scripts/check-cnpg-clusters.py
-          && cat kubernetes/db/*.yaml | python scripts/check-pvc-storageclass.py
+          sh -c 'built=$(kustomize build kubernetes/db)
+          && printf "%s\n" "$built" | python scripts/check-cnpg-clusters.py
+          && printf "%s\n" "$built" | python scripts/check-pvc-storageclass.py
           && python scripts/check-kustomization.py kubernetes/db
           && python scripts/check-netpol-except-parity.py kubernetes/db'
         language: python

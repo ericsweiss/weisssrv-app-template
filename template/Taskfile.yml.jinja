@@ -166,12 +166,19 @@ tasks:
 {%- if database == 'postgres' and secrets_backend == 'onepassword' %}
 
   database:
-    desc: "The CNPG Cluster keeps its backup, drain and prune safeguards and a pinned storage class (needs pyyaml)."
+    desc: "The built CNPG Cluster keeps its backup, drain and prune safeguards and a pinned storage class (needs pyyaml + kustomize)."
+    # The gates read `kustomize build`, what Flux applies: a patch in
+    # kustomization.yaml can strip a safeguard every source file still carries.
     preconditions:
       - *needs_pyyaml
+      - sh: command -v kustomize
+        msg: "kustomize is not on PATH"
     cmds:
-      - cat kubernetes/db/*.yaml | python3 scripts/check-cnpg-clusters.py
-      - cat kubernetes/db/*.yaml | python3 scripts/check-pvc-storageclass.py
+      - |
+        set -e
+        built=$(kustomize build kubernetes/db)
+        printf '%s\n' "$built" | python3 scripts/check-cnpg-clusters.py
+        printf '%s\n' "$built" | python3 scripts/check-pvc-storageclass.py
 {%- endif %}
 {%- if ci_shape == 'gitlab_selfhosted' %}
 
