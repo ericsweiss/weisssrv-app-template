@@ -3181,6 +3181,15 @@ def test_the_database_cluster_keeps_its_safeguards(repo):
     assert spec["plugins"][0]["parameters"]["barmanObjectName"] == f"{repo.answers['app_slug']}-backups"
 
 
+@pytest.mark.parametrize("name", ["cluster.yaml", "objectstore.yaml", "pvc-pg-dump.yaml"])
+def test_the_database_stateful_objects_are_never_pruned(repo, name):
+    """Removing the manifest or the db Kustomization must not delete the Cluster,
+    the WAL archive, or the claim fronting the retained dumps."""
+    _skip_without_db(repo.answers)
+    doc = yaml.safe_load((repo.path / DB / name).read_text())
+    assert doc["metadata"].get("annotations", {}).get("kustomize.toolkit.fluxcd.io/prune") == "disabled"
+
+
 def test_the_database_tree_lists_every_file(repo):
     _skip_without_db(repo.answers)
     listed = set(yaml.safe_load((repo.path / DB / "kustomization.yaml").read_text())["resources"])
