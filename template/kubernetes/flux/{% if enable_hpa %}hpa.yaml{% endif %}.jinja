@@ -15,6 +15,10 @@ spec:
     name: {{ app_slug }}
   minReplicas: 2
   maxReplicas: 5
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+  # The Deployment's name selector also matches the database and dump pods, so
+  # their CPU is averaged in here and a busy database can scale the app up.
+{%- endif %}
   metrics:
     - type: Resource
       resource:

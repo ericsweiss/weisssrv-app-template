@@ -96,6 +96,18 @@ persistent volume.
 supplies the StorageClass or a pre-provisioned PV, and you add the PVC, the
 volume and its mount. A volume added this way is outside every backup set until
 the operator adds it, and its backup schedule is theirs. See ONBOARDING step O6.
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+
+The instance and dump pods carry the app's `app.kubernetes.io/name` label
+beside `app.kubernetes.io/component: db`. The app's NetworkPolicies{% if replica_count > 1 or enable_hpa %} and
+PodDisruptionBudget{% endif %} exclude them by that component label, and the Service sends
+traffic only to a pod with a port named `http`.
+{%- if enable_hpa %} The HPA reads the Deployment's
+selector, which is immutable and matches them too, so it averages their CPU
+with the app's: a busy database or the nightly dump can scale the app up.
+Narrowing that selector means recreating the Deployment.
+{%- endif %}
+{%- endif %}
 
 The `/tmp` `emptyDir` is capped at 64Mi under a 512Mi container
 `ephemeral-storage` limit. An app that uses `/tmp` for real work raises the

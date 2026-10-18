@@ -3257,6 +3257,22 @@ def _selects(selector: dict, labels: dict) -> bool:
     return True
 
 
+def _db_pods(slug: str) -> dict[str, dict]:
+    """The labels the dump and instance pods carry, the app's name label among them."""
+    return {
+        "dump": {
+            "app.kubernetes.io/name": slug,
+            "app.kubernetes.io/component": "db",
+            "app.kubernetes.io/instance": f"{slug}-pg-dump",
+        },
+        "instance": {
+            "app.kubernetes.io/name": slug,
+            "app.kubernetes.io/component": "db",
+            "cnpg.io/cluster": f"{slug}-db",
+        },
+    }
+
+
 # The vendored check-scrape-wiring.py does not credit a podSelector carrying
 # matchExpressions, so the scrape allow keeps matchLabels only until the gate
 # models them upstream; it opens only app_port, and only to the observability namespace.
@@ -3269,18 +3285,7 @@ def test_no_app_policy_selects_the_database_pods(repo):
     instances to Traefik and the scraper."""
     _skip_without_db(repo.answers)
     slug = repo.answers["app_slug"]
-    db_pods = {
-        "dump": {
-            "app.kubernetes.io/name": slug,
-            "app.kubernetes.io/component": "db",
-            "app.kubernetes.io/instance": f"{slug}-pg-dump",
-        },
-        "instance": {
-            "app.kubernetes.io/name": slug,
-            "app.kubernetes.io/component": "db",
-            "cnpg.io/cluster": f"{slug}-db",
-        },
-    }
+    db_pods = _db_pods(slug)
     app_pod = {"app.kubernetes.io/name": slug}
     allows = []
     for path in _manifests(repo.path, "networkpolicy*"):
@@ -3378,3 +3383,18 @@ def test_the_database_gates_run_green_and_reject_an_unpinned_class(repo, tmp_pat
         cluster_path.write_text(yaml.safe_dump(cluster))
         result = _run(work, "sh", "-c", script)
         assert result.returncode != 0, "a Cluster with no storage class passed the gate"
+
+
+def test_the_pdb_leaves_the_database_pods_out(repo):
+    """An integer minAvailable counts every pod the selector matches: a database
+    pod in it lets a drain evict every app replica, and blocks the instance's
+    own eviction while the app is unready."""
+    _skip_without_db(repo.answers)
+    pdbs = _manifests(repo.path, "pdb")
+    if not pdbs:
+        pytest.skip("no PodDisruptionBudget rendered")
+    slug = repo.answers["app_slug"]
+    selector = yaml.safe_load(pdbs[0].read_text())["spec"]["selector"]
+    assert _selects(selector, {"app.kubernetes.io/name": slug}), "the PDB lost the app pods"
+    for pod, labels in _db_pods(slug).items():
+        assert not _selects(selector, labels), f"the PDB counts the database {pod} pod"
