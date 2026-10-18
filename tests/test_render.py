@@ -3576,6 +3576,59 @@ def test_validate_render_runs_the_database_gates_over_the_built_tree(repo, tmp_p
     assert "cnpg clusters" in runner.failures, runner.failures
 
 
+PRUNE = "kustomize.toolkit.fluxcd.io/prune"
+
+
+def _static_claims_flux_may_prune(tree: Path) -> list[str]:
+    """Claims in `kustomize build kubernetes/db` bound to a named volume and
+    missing the prune guard: pruning one releases its volume for good."""
+    result = _run(tree, "kustomize", "build", DB)
+    assert result.returncode == 0, result.stderr
+    return [
+        doc["metadata"]["name"]
+        for doc in yaml.safe_load_all(result.stdout)
+        if doc and doc.get("kind") == "PersistentVolumeClaim"
+        and doc.get("spec", {}).get("volumeName")
+        and (doc["metadata"].get("annotations") or {}).get(PRUNE) != "disabled"
+    ]
+
+
+def test_every_statically_bound_claim_is_never_pruned_in_the_built_tree(repo, tmp_path):
+    """Checked on the build output, so a kustomize patch cannot strip the guard
+    unseen. The vendored check-pvc-storageclass gate subsumes this once
+    weisssrv-lib ships the same check."""
+    _skip_without_db(repo.answers)
+    require_tool("kustomize", "database built-tree checks", _TOOLCHAIN_HINT, ci_optional=True)
+    assert _static_claims_flux_may_prune(repo.path) == []
+    work = tmp_path / "prune-pvc"
+    shutil.copytree(repo.path, work)
+    path = work / DB / "kustomization.yaml"
+    document = yaml.safe_load(path.read_text())
+    remove = [{"op": "remove", "path": "/metadata/annotations/kustomize.toolkit.fluxcd.io~1prune"}]
+    document.setdefault("patches", []).append(
+        {"target": {"kind": "PersistentVolumeClaim"}, "patch": yaml.safe_dump(remove)}
+    )
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+    assert _static_claims_flux_may_prune(work) == [f"{repo.answers['app_slug']}-pg-dump"]
+
+
+@pytest.mark.parametrize("keyword", ["true", "null", "off"])
+def test_a_yaml_keyword_db_name_still_renders_a_string(answers, keyword):
+    """The validator refuses a YAML keyword as db_name; the manifests still carry
+    a string without it, so initdb and the role Secrets name the database."""
+    env = jinja2.Environment(  # noqa: S701 - rendering our own template, not HTML
+        keep_trailing_newline=True, undefined=jinja2.StrictUndefined
+    )
+    values = {**answers, "db_name": keyword}
+    cluster = yaml.safe_load(
+        env.from_string((DB_TEMPLATE_DIR / "cluster.yaml.jinja").read_text()).render(**values)
+    )
+    assert cluster["spec"]["bootstrap"]["initdb"]["database"] == keyword
+    roles = (DB_TEMPLATE_DIR / "externalsecret-roles.yaml.jinja").read_text()
+    for doc in yaml.safe_load_all(env.from_string(roles).render(**values)):
+        assert doc["spec"]["target"]["template"]["data"]["dbname"] == keyword
+
+
 def test_the_gitlab_db_job_validates_the_db_tree_with_kubeconform(repo, tmp_path):
     """The flux-lint include builds kubernetes/flux only, so db-manifest-check
     is the pipeline's one schema check of kubernetes/db, on the Taskfile's pins."""
