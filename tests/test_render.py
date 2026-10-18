@@ -261,6 +261,21 @@ def rendered_unlike_full(tmp_path_factory) -> Path:
     )
 
 
+# The contrast fixture with the database on: the only render in which
+# kubernetes/db and every database arm come from answers unlike fixture A's.
+UNLIKE_DB_OVERRIDES = {"secrets_backend": "onepassword", "database": "postgres"}
+
+
+@pytest.fixture(scope="session")
+def rendered_unlike_db(tmp_path_factory) -> Path:
+    return render_app.render(
+        tmp_path_factory.mktemp("render-unlike-db"),
+        answers=render_app.ANSWERS_B,
+        dest_name="render-unlike-db",
+        data=UNLIKE_DB_OVERRIDES,
+    )
+
+
 # The vault the alt-vault render answers. It must differ from both fixtures'
 # answers, or the assertion would pass on a hardcoded string.
 ALT_VAULT = "Tidewrack"
@@ -348,6 +363,7 @@ RENDERS = {
             "replica_count": 3,
         },
     ),
+    "unlike-db": ("rendered_unlike_db", "answers_b", UNLIKE_DB_OVERRIDES),
 }
 
 
@@ -482,6 +498,10 @@ CROSS_RENDER_EXEMPT = {
         "shape is the targeted gate, and docs/CI-SHAPES.md records the limitation"
     ),
     "secret_item": "'App Secrets' is ordinary prose in the docs the render ships",
+    "db_roles_item": (
+        "'Database' is ordinary prose, the O6b heading among it — "
+        "test_the_role_secrets_read_the_answered_item is the targeted gate"
+    ),
     "forge": (
         "'gitlab' is also fixture B's secrets_backend answer and the forge's "
         "ordinary name in prose — test_ci_shape_keeps_exactly_its_own_files and "
@@ -3160,6 +3180,14 @@ def test_the_role_secrets_follow_the_library_contract(repo):
     for doc in docs:
         assert set(doc["spec"]["target"]["template"]["data"]) == keys
         assert "{{ .password }}" in doc["spec"]["target"]["template"]["data"]["password"]
+
+
+def test_the_role_secrets_read_the_answered_item(repo):
+    _skip_without_db(repo.answers)
+    docs = list(yaml.safe_load_all((repo.path / DB / "externalsecret-roles.yaml").read_text()))
+    item = f"{repo.answers['app_slug']}: {repo.answers['db_roles_item']}"
+    for doc in docs:
+        assert {ref["remoteRef"]["key"] for ref in doc["spec"]["data"]} == {item}
 
 
 def test_the_dump_is_a_db_component_selected_by_its_instance(repo):

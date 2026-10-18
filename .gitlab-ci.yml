@@ -247,6 +247,11 @@ validate-rendered-app:
       --data enable_hpa=true --data enable_vpa=true
       --data enable_registry_pull_secret=true --data enable_image_build=true
       --data enable_sso=true --data replica_count=3
+    # The contrast fixture with the database on: kubernetes/db and every
+    # database arm rendered from answers unlike the reference cluster's.
+    - >-
+      python3 tests/validate_render.py --answers tests/answers-unlike.yml
+      --data secrets_backend=onepassword --data database=postgres
     # The contrast fixture on the GitLab shape: its pipeline, rendered from
     # answers unlike the reference cluster's.
     - >-

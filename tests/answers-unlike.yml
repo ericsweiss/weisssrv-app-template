@@ -52,8 +52,8 @@ enable_hpa: false
 enable_vpa: false
 enable_registry_pull_secret: false
 enable_sso: false
-# Never asked (the GitLab backend is selected), answered unlike fixture A so the
-# leak scan can tell the two apart.
+# Not asked under the GitLab backend; the unlike-db render turns the database on
+# and asks the db_* answers below, unlike fixture A's so the leak scan can tell.
 database: none
 db_name: tide_store
 db_role_prefix: tide
