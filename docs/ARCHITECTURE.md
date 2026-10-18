@@ -186,9 +186,11 @@ detail. The generated `docs/ARCHITECTURE.md` says so where the tenant reads it.
 
 - **It does not deploy.** Flux does, from the generated repo, after the operator
   adds the wiring file the generated `docs/ONBOARDING.md` spells out.
-- **It does not ship storage.** The generated app is stateless. Adding a volume
-  is an operator step and storage-class-agnostic; ONBOARDING step O6 works the
-  reference cluster's zvol flow as the example.
+- **It does not ship storage**, except the optional database component
+  (`database: postgres`), whose storage and backups ONBOARDING O6b describes.
+  Otherwise the generated app is stateless. Adding a volume is an operator step
+  and storage-class-agnostic; ONBOARDING step O6 works the reference cluster's
+  zvol flow as the example.
 - **It does not create the cluster.** That is
   [`weisssrv-cluster-template`](https://git.ericsweiss.com/eric/weisssrv-cluster-template),
   which this template's cluster-identity answers are designed to match.

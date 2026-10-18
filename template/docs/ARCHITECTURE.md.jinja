@@ -83,9 +83,16 @@ flowchart LR
 
 ## Storage & scheduling
 
+{% if not (database == 'postgres' and secrets_backend == 'onepassword') -%}
 The app is **stateless** as generated, and soft-avoids the storage node
 (`{{ node_label_domain }}/nas`). This template ships no PVC and names no
-StorageClass. Persistent data is an operator-assisted step: the operator
+StorageClass.
+{%- else -%}
+The app's state lives in the CloudNativePG cluster under `kubernetes/db`; see
+ONBOARDING step O6b for its backups and restore drill. The app itself
+soft-avoids the storage node (`{{ node_label_domain }}/nas`) and mounts no
+volume.
+{%- endif %} Persistent data is an operator-assisted step: the operator
 supplies the StorageClass or a pre-provisioned PV, and you add the PVC, the
 volume and its mount. A volume added this way is outside every backup set until
 the operator adds it, and its backup schedule is theirs. See ONBOARDING step O6.
@@ -352,13 +359,29 @@ The rendered manifests bind to objects the cluster must already provide:
   another name for the stage that applies the platform CRDs. The wiring file's
   `dependsOn` names it, and a name the cluster does not have leaves this repo's
   `Kustomization` retrying forever with nothing applied.
-- Nothing here spells `${var}`: the wiring in ONBOARDING step O3 carries no
-  `postBuild`. If the operator adds `postBuild.substituteFrom` so this repo can
-  read the cluster's own domains and VIPs, kustomize-controller usually runs
-  with `StrictPostBuildSubstitutions` on, and then an undefined `${var}`
-  anywhere under `kubernetes/flux/` fails the whole tenant reconcile. A literal
-  dollar-brace in a container arg, a config blob or dashboard JSON must be
-  written `$${var}`.
+- A `cluster-config` ConfigMap in `flux-system`, which every Kustomization in
+  the ONBOARDING step O3 wiring names under `postBuild.substituteFrom`. Nothing
+  here spells `${var}`, so it substitutes nothing today, but kustomize-controller
+  usually runs with `StrictPostBuildSubstitutions` on, and then an undefined
+  `${var}` anywhere under the applied path fails the whole tenant reconcile. A
+  literal dollar-brace in a container arg, a config blob or dashboard JSON must
+  be written `$${var}`.
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+- For the database under `kubernetes/db`:
+  - The CloudNativePG operator and its Barman Cloud plugin, with the
+    `postgresql.cnpg.io` (Cluster, ScheduledBackup) and `barmancloud.cnpg.io`
+    (ObjectStore) CRDs, and `tenant-crd-editor` granting both groups.
+  - The `monitoring.coreos.com` `PodMonitor` CRD, and a Prometheus with
+    `podMonitorSelectorNilUsesHelmValues: false`. Left true, the PodMonitor is
+    never selected, `cnpg_collector_up` is never scraped, and `DatabaseAbsent`
+    pages for ever on a healthy database. `db-allow-ingress` admits the
+    `observability` namespace to the exporter on 9187.
+  - The operator in namespace `cnpg-system`, its pods labelled
+    `app.kubernetes.io/name: cloudnative-pg`: `db-allow-ingress` admits that
+    peer to the instance status port 8000, and a different label leaves the
+    operator unable to manage the instance.
+  - A `tenant-local` StorageClass, which the instance claim names.
+{%- endif %}
 
 ## What the operator owns vs. what you own
 
