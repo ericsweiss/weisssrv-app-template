@@ -67,5 +67,5 @@ db_dump_timezone: Europe/Lisbon
 db_runbook_url: https://forge.brinemoor.test/seaworks/tidepool/-/blob/main/DATABASE.md
 
 # Never asked (the library is only included by the GitLab shape).
-lib_ref: v0.21.1
+lib_ref: v0.22.0
 lib_project: eric/weisssrv-lib
