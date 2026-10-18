@@ -485,6 +485,16 @@ VALIDATOR_CASES = [
         "a single quote closes the quoted YAML scalar it renders into on every alert",
         {},
     ),
+    ("db_name", "nai", None, {}),
+    ("db_name", "not-an-insider", "a hyphen is not legal in an unquoted identifier", {}),
+    ("db_role_prefix", "nai", None, {}),
+    ("db_role_prefix", "Nai", "roles are created lowercase and the uri names them unquoted", {}),
+    ("db_storage_size", "20Gi", None, {}),
+    ("db_storage_size", "20G", "a decimal G size is not the Gi quantity the storage quota counts", {}),
+    ("db_backup_endpoint", "https://s3.us-west-004.backblazeb2.com", None, {}),
+    ("db_backup_endpoint", "s3.us-west-004.backblazeb2.com", "no scheme, so Barman reads a bucket path", {}),
+    ("db_apiserver_cidrs", "10.0.10.222/32,10.0.10.223/32", None, {}),
+    ("db_apiserver_cidrs", "10.0.10.222", "a bare address is not a CIDR the ipBlock accepts", {}),
 ]
 
 

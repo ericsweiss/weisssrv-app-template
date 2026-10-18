@@ -1,0 +1,18 @@
+---
+# Binds the NFS landing-zone volume the operator pre-creates.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ app_slug }}-pg-dump
+  labels:
+    app.kubernetes.io/name: {{ app_slug }}
+    app.kubernetes.io/component: db
+    app.kubernetes.io/instance: {{ app_slug }}-pg-dump
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ""
+  volumeName: {{ app_slug }}-pg-dump
+  resources:
+    requests:
+      storage: 5Gi

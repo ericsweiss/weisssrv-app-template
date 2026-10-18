@@ -3055,3 +3055,71 @@ def test_the_vpa_cap_matches_the_container_limit(repo):
         "vpa.yaml must keep controlledValues: RequestsOnly, or the VPA moves the "
         "deployment.yaml limits.memory its maxAllowed is pinned to"
     )
+
+
+DB = "kubernetes/db"
+
+
+def _wants_db(answers: dict) -> bool:
+    return answers.get("database") == "postgres" and answers.get("secrets_backend") == "onepassword"
+
+
+def _skip_without_db(answers: dict) -> None:
+    if not _wants_db(answers):
+        pytest.skip("database component not rendered")
+
+
+def test_the_database_component_renders_only_when_asked(repo):
+    assert (repo.path / DB).is_dir() is _wants_db(repo.answers)
+
+
+def test_the_database_cluster_keeps_its_safeguards(repo):
+    _skip_without_db(repo.answers)
+    cluster = yaml.safe_load((repo.path / DB / "cluster.yaml").read_text())
+    spec = cluster["spec"]
+    assert spec["instances"] == 1
+    assert spec["enablePDB"] is False
+    assert cluster["metadata"]["annotations"]["kustomize.toolkit.fluxcd.io/prune"] == "disabled"
+    assert spec["storage"] == {"storageClass": "tenant-local", "size": repo.answers["db_storage_size"]}
+    assert spec["plugins"][0]["parameters"]["barmanObjectName"] == f"{repo.answers['app_slug']}-backups"
+
+
+def test_the_database_tree_lists_every_file(repo):
+    _skip_without_db(repo.answers)
+    listed = set(yaml.safe_load((repo.path / DB / "kustomization.yaml").read_text())["resources"])
+    on_disk = {p.name for p in (repo.path / DB).glob("*.yaml")} - {"kustomization.yaml"}
+    assert listed == on_disk
+
+
+def test_the_role_secrets_follow_the_library_contract(repo):
+    _skip_without_db(repo.answers)
+    docs = list(yaml.safe_load_all((repo.path / DB / "externalsecret-roles.yaml").read_text()))
+    keys = {"username", "user", "password", "host", "port", "dbname", "sslmode", "uri"}
+    assert len(docs) == 3
+    for doc in docs:
+        assert set(doc["spec"]["target"]["template"]["data"]) == keys
+        assert "{{ .password }}" in doc["spec"]["target"]["template"]["data"]["password"]
+
+
+def test_the_dump_is_a_db_component_selected_by_its_instance(repo):
+    """The dump carries component db (the spec's component set) and its own
+    instance label, which its egress policy selects so the instance pods stay out."""
+    _skip_without_db(repo.answers)
+    slug = repo.answers["app_slug"]
+    expected = {
+        "app.kubernetes.io/name": slug,
+        "app.kubernetes.io/component": "db",
+        "app.kubernetes.io/instance": f"{slug}-pg-dump",
+    }
+    cronjob = yaml.safe_load((repo.path / DB / "cronjob-pg-dump.yaml").read_text())
+    pvc = yaml.safe_load((repo.path / DB / "pvc-pg-dump.yaml").read_text())
+    assert cronjob["metadata"]["labels"] == expected
+    assert cronjob["spec"]["jobTemplate"]["spec"]["template"]["metadata"]["labels"] == expected
+    assert pvc["metadata"]["labels"] == expected
+    policies = {
+        doc["metadata"]["name"]: doc
+        for doc in yaml.safe_load_all((repo.path / DB / "networkpolicy.yaml").read_text())
+    }
+    assert policies["backup-allow-egress"]["spec"]["podSelector"] == {
+        "matchLabels": {"app.kubernetes.io/instance": f"{slug}-pg-dump"}
+    }

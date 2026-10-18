@@ -52,6 +52,18 @@ enable_hpa: false
 enable_vpa: false
 enable_registry_pull_secret: false
 enable_sso: false
+# Never asked (the GitLab backend is selected), answered unlike fixture A so the
+# leak scan can tell the two apart.
+database: none
+db_name: tide_store
+db_role_prefix: tide
+db_storage_size: 7Gi
+db_backup_bucket: tidepool-archive
+db_backup_endpoint: https://objects.brinemoor.test
+db_backup_item: Archive Key
+db_roles_item: Role Passwords
+db_apiserver_cidrs: 192.0.2.10/32
+db_dump_timezone: Europe/Lisbon
 
 # Never asked (the library is only included by the GitLab shape).
 lib_ref: v0.21.1

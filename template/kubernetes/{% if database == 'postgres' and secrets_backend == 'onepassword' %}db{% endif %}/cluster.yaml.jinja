@@ -1,0 +1,74 @@
+---
+# One instance, no PDB (an unsatisfiable PDB blocks node drains), recovery by
+# WAL archiving and point-in-time restore. Never pruned: deleting this object
+# deletes its claim.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ app_slug }}-db
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie
+  enablePDB: false
+  primaryUpdateStrategy: unsupervised
+  inheritedMetadata:
+    labels:
+      app.kubernetes.io/name: {{ app_slug }}
+      app.kubernetes.io/component: db
+  postgresql:
+    parameters:
+      max_connections: "100"
+      shared_buffers: 128MB
+  bootstrap:
+    initdb:
+      database: {{ db_name }}
+      owner: {{ db_role_prefix }}_migrate
+      secret:
+        name: {{ app_slug }}-db-migrate
+      # The login roles start NOLOGIN so default privileges can name them;
+      # spec.managed.roles then grants LOGIN and sets their passwords.
+      postInitApplicationSQL:
+        - CREATE ROLE {{ db_role_prefix }}_app NOLOGIN
+        - CREATE ROLE {{ db_role_prefix }}_ro NOLOGIN
+        - GRANT USAGE ON SCHEMA public TO {{ db_role_prefix }}_app, {{ db_role_prefix }}_ro
+        - ALTER DEFAULT PRIVILEGES FOR ROLE {{ db_role_prefix }}_migrate IN SCHEMA public GRANT SELECT ON TABLES TO {{ db_role_prefix }}_ro
+        - ALTER DEFAULT PRIVILEGES FOR ROLE {{ db_role_prefix }}_migrate IN SCHEMA public GRANT SELECT ON SEQUENCES TO {{ db_role_prefix }}_ro
+        - ALTER DEFAULT PRIVILEGES FOR ROLE {{ db_role_prefix }}_migrate IN SCHEMA public GRANT SELECT, INSERT ON TABLES TO {{ db_role_prefix }}_app
+        - ALTER DEFAULT PRIVILEGES FOR ROLE {{ db_role_prefix }}_migrate IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO {{ db_role_prefix }}_app
+  managed:
+    roles:
+      - name: {{ db_role_prefix }}_app
+        ensure: present
+        login: true
+        connectionLimit: 40
+        passwordSecret:
+          name: {{ app_slug }}-db-app
+      - name: {{ db_role_prefix }}_ro
+        ensure: present
+        login: true
+        connectionLimit: 10
+        passwordSecret:
+          name: {{ app_slug }}-db-ro
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ app_slug }}-backups
+  # A directory on the cluster's tenant-local StorageClass (weisssrv-cluster-template
+  # tenant_storage). The class cannot grow a volume, so size it for growth.
+  storage:
+    storageClass: tenant-local
+    size: {{ db_storage_size }}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+  affinity:
+    tolerations:
+      - key: {{ node_label_domain }}/nas
+        operator: Exists
+        effect: PreferNoSchedule

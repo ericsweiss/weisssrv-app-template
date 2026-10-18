@@ -1,0 +1,119 @@
+---
+# Nightly logical dump to the operator's NAS landing zone, the second copy
+# beside the base backups in the bucket.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ app_slug }}-pg-dump
+  labels:
+    app.kubernetes.io/name: {{ app_slug }}
+    app.kubernetes.io/component: db
+    app.kubernetes.io/instance: {{ app_slug }}-pg-dump
+spec:
+  schedule: "45 2 * * *"
+  timeZone: {{ db_dump_timezone }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 43200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: {{ app_slug }}
+            app.kubernetes.io/component: db
+            app.kubernetes.io/instance: {{ app_slug }}-pg-dump
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          # 1000:2000 matches a landing-zone export's all_squash ids.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 2000
+            fsGroup: 2000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: pg-dump
+              image: ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie
+              imagePullPolicy: IfNotPresent
+              # bash for pipefail: a failed pg_dump must not gzip to exit 0.
+              command: ["/bin/bash", "-ec"]
+              args:
+                - |
+                  set -o pipefail
+                  PGHOST="$(cat /etc/db-ro/host)"
+                  PGPORT="$(cat /etc/db-ro/port)"
+                  PGDATABASE="$(cat /etc/db-ro/dbname)"
+                  PGUSER="$(cat /etc/db-ro/username)"
+                  PGPASSWORD="$(cat /etc/db-ro/password)"
+                  export PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD
+                  for i in $(seq 1 30); do
+                    if pg_isready -q; then break; fi
+                    if [ "$i" = 30 ]; then echo "postgres unreachable after 150s" >&2; exit 1; fi
+                    sleep 5
+                  done
+                  rm -f /backups/{{ app_slug }}-*.sql.gz.tmp
+                  ts="$(date +%Y%m%d-%H%M%S)"
+                  out="/backups/{{ app_slug }}-$ts.sql.gz"
+                  echo "pg_dump $PGDATABASE -> $out"
+                  pg_dump --clean --if-exists | gzip -c > "$out.tmp"
+                  mv "$out.tmp" "$out"
+                  ls -1t /backups/{{ app_slug }}-*.sql.gz 2>/dev/null \
+                    | tail -n +$((RETENTION + 1)) \
+                    | while IFS= read -r f; do rm -f "$f"; done
+                  echo "done; kept:"; ls -1t /backups/{{ app_slug }}-*.sql.gz
+              env:
+                - name: PGSSLMODE
+                  value: verify-full
+                - name: PGSSLROOTCERT
+                  value: /etc/db-ca/ca.crt
+                - name: RETENTION
+                  value: "14"
+                - name: HOME
+                  value: /tmp
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                  ephemeral-storage: 64Mi
+                limits:
+                  memory: 256Mi
+                  ephemeral-storage: 128Mi
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+                - name: tmp
+                  mountPath: /tmp
+                - name: db-ro
+                  mountPath: /etc/db-ro
+                  readOnly: true
+                - name: db-ca
+                  mountPath: /etc/db-ca
+                  readOnly: true
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ app_slug }}-pg-dump
+            - name: tmp
+              emptyDir:
+                sizeLimit: 64Mi
+            - name: db-ro
+              secret:
+                secretName: {{ app_slug }}-db-ro
+            - name: db-ca
+              secret:
+                secretName: {{ app_slug }}-db-ca
+                items:
+                  - key: ca.crt
+                    path: ca.crt

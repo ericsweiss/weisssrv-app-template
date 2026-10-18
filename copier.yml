@@ -569,6 +569,107 @@ enable_sso:
     creates a second proxy provider for it.
   default: false
 
+database:
+  type: str
+  when: "{{ secrets_backend == 'onepassword' }}"
+  help: >-
+    A CloudNativePG PostgreSQL cluster in kubernetes/db, reconciled by its own
+    tenant Kustomization: one instance, WAL archiving and nightly base backups
+    to an S3-compatible bucket, three login roles delivered as file-mounted
+    Secrets, and a nightly pg_dump. Needs the cluster's CloudNativePG module
+    and its tenant-local StorageClass (docs/ONBOARDING.md, O6b).
+  default: none
+  choices:
+    No database: none
+    PostgreSQL on CloudNativePG: postgres
+
+db_name:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: The database name.
+  default: "{{ app_slug | replace('-', '_') }}"
+  validator: >-
+    {% if not (db_name | regex_search('^[a-z_][a-z0-9_]{0,62}$')) %}
+    db_name must be a lowercase PostgreSQL identifier: a letter or underscore,
+    then letters, digits or underscores, at most 63 characters
+    {% endif %}
+
+db_role_prefix:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: Prefix of the login roles <prefix>_migrate, <prefix>_app and <prefix>_ro.
+  default: "{{ db_name }}"
+  validator: >-
+    {% if not (db_role_prefix | regex_search('^[a-z_][a-z0-9_]{0,50}$')) %}
+    db_role_prefix must be a lowercase PostgreSQL identifier of at most 51
+    characters, so the role names stay within 63
+    {% endif %}
+
+db_storage_size:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: >-
+    The instance claim's size, requested from the cluster's tenant-local
+    StorageClass. The provisioner does not enforce it; the namespace's
+    ResourceQuota counts it, and the class cannot grow it later.
+  default: 20Gi
+  validator: >-
+    {% if not (db_storage_size | regex_search('^[1-9][0-9]*Gi$')) %}
+    db_storage_size must be a whole number of Gi, for example 20Gi
+    {% endif %}
+
+db_backup_bucket:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: The S3 bucket dedicated to this app's WAL archive and base backups.
+  default: "{{ app_slug }}-cnpg"
+
+db_backup_endpoint:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: The bucket's S3 endpoint URL, scheme included and no path.
+  placeholder: https://s3.us-west-004.backblazeb2.com
+  validator: >-
+    {% if not (db_backup_endpoint | regex_search('^https://[A-Za-z0-9.-]+(:[0-9]+)?$')) %}
+    db_backup_endpoint must be an https:// URL with no path
+    {% endif %}
+
+db_backup_item:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: >-
+    1Password item title, rendered as "<slug>: <item>", whose access-key-id and
+    secret-access-key fields hold the bucket-scoped key.
+  default: CNPG Backup
+
+db_roles_item:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: >-
+    1Password item title, rendered as "<slug>: <item>", whose migrate-password,
+    app-password and ro-password fields hold the three role passwords.
+  default: Database
+
+db_apiserver_cidrs:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: >-
+    Comma-separated /32s of the cluster's API server nodes. The instance manager
+    talks to the API, and kube-proxy rewrites the Service address before policy
+    applies, so the egress rule must name the node addresses.
+  default: ""
+  validator: >-
+    {% if not (db_apiserver_cidrs | regex_search('^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}(,([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2})*$')) %}
+    db_apiserver_cidrs must be a comma-separated list of IPv4 CIDRs, for
+    example 10.0.10.222/32,10.0.10.223/32
+    {% endif %}
+
+db_dump_timezone:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: The IANA time zone the nightly pg_dump schedule (02:45) runs in.
+  default: Etc/UTC
+
 # --------------------------------------------------------------------------
 # Library pin
 # --------------------------------------------------------------------------

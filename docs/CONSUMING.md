@@ -103,6 +103,21 @@ component is wired and a disabled one leaves nothing behind. There is no
 | `enable_registry_pull_secret` | `{{ enable_image_build and secrets_backend != 'none' }}` | The `dockerconfigjson` ExternalSecret **and** the pod's `imagePullSecrets:` entry. Defaulted on for the combination that needs it — both forges publish privately by default (a GitLab project registry; a GHCR package, whose visibility does not follow the source repo's), so a repo that builds its own image cannot be pulled without it. No `ci_shape` term: the rendered chain is forge-neutral — the ExternalSecret keys on `registry_host`/`registry_pull_host` and reads a username+token pair, which is what `docker login ghcr.io` takes. The backend term is not redundant with the `when:`: a skipped question's default is still evaluated, and `registry_pull_host`'s `when:` reads it with no backend guard, so without it a `secrets_backend: none` repo that builds its own image is asked for a pull host nothing renders. |
 | `enable_sso` | `false` | The Authentik forward-auth middleware on the public route. The middleware alone authenticates nothing — the operator's provider/application/outpost objects are what enforce it. The internal hostname stays LAN/tailnet-filtered rather than authenticated. |
 
+### Database (1Password backend only)
+
+| Answer | Default | What it drives |
+|---|---|---|
+| `database` | `none` | `postgres` renders `kubernetes/db/`: a one-instance CloudNativePG `Cluster`, its object store and nightly base backup, three role Secrets, network policies, a PodMonitor, a nightly `pg_dump` and an absence alert, plus the Deployment's file mounts and `/readyz` probe. Needs the cluster's CloudNativePG module and its `tenant-local` StorageClass (ONBOARDING O6b). |
+| `db_name` | the slug with `-` as `_` | The database name. |
+| `db_role_prefix` | `db_name` | The roles `<prefix>_migrate`, `<prefix>_app` and `<prefix>_ro`. |
+| `db_storage_size` | `20Gi` | The instance claim, requested from `tenant-local` and counted by the namespace's storage quota. |
+| `db_backup_bucket` | `<slug>-cnpg` | The bucket holding the WAL archive and base backups. |
+| `db_backup_endpoint` | none, required | The bucket's S3 endpoint, `https://` with no path. |
+| `db_backup_item` | `CNPG Backup` | The 1Password item (`"<slug>: <item>"`) with `access-key-id` and `secret-access-key`. |
+| `db_roles_item` | `Database` | The 1Password item (`"<slug>: <item>"`) with `migrate-password`, `app-password` and `ro-password`. |
+| `db_apiserver_cidrs` | none | The API server node `/32`s the instance pods may reach on 6443. |
+| `db_dump_timezone` | `Etc/UTC` | The time zone of the 02:45 dump schedule. |
+
 ### Library pin (GitLab shape only)
 
 | Answer | Default | What it drives |
