@@ -3342,6 +3342,17 @@ def test_the_app_mounts_its_database_secret_as_files(repo):
     probe = pod["containers"][0]["readinessProbe"]["httpGet"]["path"]
     if _wants_db(repo.answers):
         assert expected <= secrets
+        slug = repo.answers["app_slug"]
+        by_name = {v["name"]: v for v in pod["volumes"]}
+        assert by_name["db"]["secret"] == {"secretName": f"{slug}-db-app"}
+        assert by_name["db-ca"]["secret"]["items"] == [{"key": "ca.crt", "path": "ca.crt"}]
+        assert {s for s in secrets if s.startswith(f"{slug}-db-")} == expected
+        mounts = pod["containers"][0]["volumeMounts"]
+        assert not any("subPath" in m for m in mounts)
+        assert {m["name"]: m["mountPath"] for m in mounts if m["name"].startswith("db")} == {
+            "db": "/var/run/secrets/db",
+            "db-ca": "/var/run/secrets/db-ca",
+        }
         assert probe == "/readyz"
         assert pod["containers"][0]["livenessProbe"]["httpGet"]["path"] == "/"
     else:
