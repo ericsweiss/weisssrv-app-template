@@ -708,7 +708,9 @@ db_apiserver_cidrs:
 db_dump_timezone:
   type: str
   when: "{{ database == 'postgres' }}"
-  help: The IANA time zone the nightly pg_dump schedule (02:45) runs in.
+  help: >-
+    The IANA time zone the nightly pg_dump schedule (02:45) runs in. Checked
+    here for shape only; the render gate checks the zone exists.
   default: Etc/UTC
   validator: >-
     {% if not (db_dump_timezone | regex_search('^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$')) %}

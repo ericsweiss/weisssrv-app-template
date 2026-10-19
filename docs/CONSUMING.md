@@ -116,7 +116,7 @@ component is wired and a disabled one leaves nothing behind. There is no
 | `db_backup_item` | `CNPG Backup` | The 1Password item (`"<slug>: <item>"`) with `access-key-id` and `secret-access-key`; no double quote, backslash, control character or edge space. |
 | `db_roles_item` | `Database` | The 1Password item (`"<slug>: <item>"`) with `migrate-password`, `app-password` and `ro-password`; the same title rules. |
 | `db_apiserver_cidrs` | none, required | The API server node `/32`s the instance pods may reach on 6443; each entry a real IPv4 address and `/32`. |
-| `db_dump_timezone` | `Etc/UTC` | The time zone of the 02:45 dump schedule. |
+| `db_dump_timezone` | `Etc/UTC` | The time zone of the 02:45 dump schedule. The answer is checked for shape only; the render gate (`tests/validate_render.py`) checks the zone exists in the IANA database. |
 | `db_runbook_url` | none, required | The `runbook_url` on the `DatabaseAbsent` alert: the cluster repo's CloudNativePG runbook, not the app runbook `runbook_url` names. |
 
 ### Library pin (GitLab shape only)

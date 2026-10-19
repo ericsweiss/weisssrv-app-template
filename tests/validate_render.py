@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zoneinfo
 from pathlib import Path
 
 import yaml
@@ -133,6 +134,36 @@ def _catalog(root: Path) -> str:
     return CATALOG_TEMPLATE.format(ref=ref)
 
 
+DUMP_CRONJOB = "kubernetes/db/cronjob-pg-dump.yaml"
+
+
+def _dump_timezone_problem(root: Path) -> str | None:
+    """-> why the dump CronJob's spec.timeZone would be refused, or None.
+
+    copier can check the zone's shape only; the IANA database comes from the
+    system tzdata or the `tzdata` wheel, and its absence is a failure, not a skip.
+    """
+    path = root / DUMP_CRONJOB
+    if not path.is_file():
+        return f"{DUMP_CRONJOB} is missing from the database tree"
+    zone = ((yaml.safe_load(path.read_text()) or {}).get("spec") or {}).get("timeZone")
+    known = zoneinfo.available_timezones()
+    if not known:
+        return "no IANA time zone database: install the system tzdata or the tzdata wheel"
+    if zone not in known:
+        return f"timeZone {zone!r} is not an IANA zone, so the CronJob is refused at admission"
+    return None
+
+
+def _check_dump_timezone(runner: Runner, root: Path) -> None:
+    problem = _dump_timezone_problem(root)
+    label = "dump timezone"
+    print(f"  {label:<{LABEL_WIDTH}} {'ok' if problem is None else 'FAILED'}")
+    if problem is not None:
+        print(f"    {problem}")
+        runner.failures.append(label)
+
+
 def _validate_db(runner: Runner, root: Path, catalog: str, k8s_version) -> None:
     """kubernetes/db is reconciled by its own Kustomization, so the flux build
     never reaches it: build it, then validate the built output and run the
@@ -148,6 +179,7 @@ def _validate_db(runner: Runner, root: Path, catalog: str, k8s_version) -> None:
         "netpol except db", sys.executable, "scripts/check-netpol-except-parity.py", "kubernetes/db"
     )
     runner.gate("kustomization db", sys.executable, "scripts/check-kustomization.py", "kubernetes/db")
+    _check_dump_timezone(runner, root)
 
 
 def validate(root: Path, answers: dict) -> list[str]:

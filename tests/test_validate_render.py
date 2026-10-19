@@ -417,6 +417,53 @@ def test_the_catalog_url_embeds_the_pinned_ref(tmp_path) -> None:
     assert "abc123" in validate_render._catalog(tmp_path)
 
 
+def _dump_cronjob(root: Path, zone: str) -> None:
+    db = root / "kubernetes" / "db"
+    db.mkdir(parents=True, exist_ok=True)
+    (db / "cronjob-pg-dump.yaml").write_text(
+        f"---\napiVersion: batch/v1\nkind: CronJob\nspec:\n  timeZone: {zone}\n"
+    )
+
+
+def test_a_typo_time_zone_fails_the_dump_gate(tmp_path, capsys) -> None:
+    """The copier validator checks shape only, and Kubernetes refuses an unknown
+    zone at admission, which stalls the db Kustomization."""
+    _dump_cronjob(tmp_path, "America/Los_Angelos")
+    runner = validate_render.Runner(tmp_path)
+    validate_render._check_dump_timezone(runner, tmp_path)
+    assert runner.failures == ["dump timezone"]
+    assert "America/Los_Angelos" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "answers", ["answers-weisssrv-shaped.yml", "answers-unlike.yml"]
+)
+def test_the_fixture_time_zones_pass_the_dump_gate(tmp_path, answers) -> None:
+    fixture = yaml.safe_load((Path(__file__).parent / answers).read_text())
+    _dump_cronjob(tmp_path, fixture["db_dump_timezone"])
+    runner = validate_render.Runner(tmp_path)
+    validate_render._check_dump_timezone(runner, tmp_path)
+    assert runner.failures == []
+
+
+def test_a_missing_tz_database_fails_rather_than_skips(tmp_path, capsys, monkeypatch) -> None:
+    """With no system tzdata and no tzdata wheel every zone is unknown: that is
+    a broken test environment, never a pass."""
+    _dump_cronjob(tmp_path, "Etc/UTC")
+    monkeypatch.setattr(validate_render.zoneinfo, "available_timezones", set)
+    runner = validate_render.Runner(tmp_path)
+    validate_render._check_dump_timezone(runner, tmp_path)
+    assert runner.failures == ["dump timezone"]
+    assert "tzdata" in capsys.readouterr().out
+
+
+def test_a_db_tree_without_the_dump_cronjob_fails_the_dump_gate(tmp_path) -> None:
+    (tmp_path / "kubernetes" / "db").mkdir(parents=True)
+    runner = validate_render.Runner(tmp_path)
+    validate_render._check_dump_timezone(runner, tmp_path)
+    assert runner.failures == ["dump timezone"]
+
+
 def test_onboarding_wiring_is_empty_without_a_fence(tmp_path) -> None:
     assert validate_render._onboarding_wiring(tmp_path) == ""
     docs = tmp_path / "docs"
@@ -553,8 +600,9 @@ def test_validate_builds_and_gates_the_database_tree(tmp_path, monkeypatch) -> N
     monkeypatch.setattr(validate_render, "_onboarding_wiring", lambda root: "---\n")
     (tmp_path / "kubernetes" / "db").mkdir(parents=True)
     (tmp_path / "kubernetes" / "db" / "cluster.yaml").write_text("---\n")
+    _dump_cronjob(tmp_path, "Mars/Olympus_Mons")
     answers = {"k8s_version": "1.36.0", "lib_project": "x/y", "app_namespace": "ns"}
-    validate_render.validate(tmp_path, answers)
+    assert validate_render.validate(tmp_path, answers) == ["dump timezone"]
     assert {
         "kustomize build db",
         "kubeconform db",
