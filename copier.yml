@@ -602,6 +602,10 @@ db_name:
     {% elif db_name | lower in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null'] %}
     db_name must not be a YAML boolean or null keyword: it would render as a
     non-string value in the database manifests
+    {% elif db_name in ['postgres', 'template0', 'template1'] %}
+    db_name must not be a PostgreSQL built-in database (postgres, template0,
+    template1): CNPG cannot create it as the application database, so the
+    cluster's bootstrap never completes
     {% endif %}
 
 db_role_prefix:
@@ -645,12 +649,20 @@ db_backup_bucket:
 db_backup_endpoint:
   type: str
   when: "{{ database == 'postgres' }}"
-  help: The bucket's S3 endpoint URL, scheme included and no path.
+  help: >-
+    The bucket's S3 endpoint URL, scheme included and no path. A public object
+    store endpoint only (the database egress policy excludes private and
+    cluster addresses).
   placeholder: https://s3.us-west-004.backblazeb2.com
   validator: >-
     {% if not (db_backup_endpoint | regex_search('^https://[A-Za-z0-9.-]+(:443)?$')) %}
     db_backup_endpoint must be an https:// URL on port 443 with no path, since
     db-allow-egress opens only 443 to the backup store
+    {% elif db_backup_endpoint | lower | regex_search('^https://([0-9]+\\.){3}[0-9]+\\.?(:443)?$')
+       or db_backup_endpoint | lower | regex_search('(\\.svc|\\.local|\\.internal|(//|\\.)localhost)\\.?(:443)?$') %}
+    db_backup_endpoint must be a public object store endpoint only (the database
+    egress policy excludes private and cluster addresses): no IP literal and no
+    .svc, .svc.cluster.local, .local, .internal or localhost host
     {% endif %}
 
 db_backup_item:
