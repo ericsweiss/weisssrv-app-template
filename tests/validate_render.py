@@ -134,29 +134,30 @@ def _catalog(root: Path) -> str:
     return CATALOG_TEMPLATE.format(ref=ref)
 
 
-DUMP_CRONJOB = "kubernetes/db/cronjob-pg-dump.yaml"
+def _dump_timezone_problem(built: str) -> str | None:
+    """-> why a CronJob's spec.timeZone in the db build would be refused, or None.
 
-
-def _dump_timezone_problem(root: Path) -> str | None:
-    """-> why the dump CronJob's spec.timeZone would be refused, or None.
-
-    copier can check the zone's shape only; the IANA database comes from the
-    system tzdata or the `tzdata` wheel, and its absence is a failure, not a skip.
+    Reads `kustomize build kubernetes/db`, so a patch cannot replace the zone
+    unseen. copier checks the zone's shape only; the IANA database comes from
+    the system tzdata or the `tzdata` wheel, and its absence fails, never skips.
     """
-    path = root / DUMP_CRONJOB
-    if not path.is_file():
-        return f"{DUMP_CRONJOB} is missing from the database tree"
-    zone = ((yaml.safe_load(path.read_text()) or {}).get("spec") or {}).get("timeZone")
+    cronjobs = [
+        d for d in yaml.safe_load_all(built) if isinstance(d, dict) and d.get("kind") == "CronJob"
+    ]
+    if not cronjobs:
+        return "the kubernetes/db build carries no dump CronJob"
     known = zoneinfo.available_timezones()
     if not known:
         return "no IANA time zone database: install the system tzdata or the tzdata wheel"
-    if zone not in known:
-        return f"timeZone {zone!r} is not an IANA zone, so the CronJob is refused at admission"
+    for cronjob in cronjobs:
+        zone = (cronjob.get("spec") or {}).get("timeZone")
+        if zone not in known:
+            return f"timeZone {zone!r} is not an IANA zone, so the CronJob is refused at admission"
     return None
 
 
-def _check_dump_timezone(runner: Runner, root: Path) -> None:
-    problem = _dump_timezone_problem(root)
+def _check_dump_timezone(runner: Runner, built: str) -> None:
+    problem = _dump_timezone_problem(built)
     label = "dump timezone"
     print(f"  {label:<{LABEL_WIDTH}} {'ok' if problem is None else 'FAILED'}")
     if problem is not None:
@@ -175,11 +176,11 @@ def _validate_db(runner: Runner, root: Path, catalog: str, k8s_version) -> None:
         runner.gate(
             "pvc storageclass", sys.executable, "scripts/check-pvc-storageclass.py", stdin=built
         )
+        _check_dump_timezone(runner, built)
     runner.gate(
         "netpol except db", sys.executable, "scripts/check-netpol-except-parity.py", "kubernetes/db"
     )
     runner.gate("kustomization db", sys.executable, "scripts/check-kustomization.py", "kubernetes/db")
-    _check_dump_timezone(runner, root)
 
 
 def validate(root: Path, answers: dict) -> list[str]:

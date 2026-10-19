@@ -107,10 +107,11 @@ runs — yamllint, `kustomize build`, kubeconform, a second kubeconform pass ove
 egress-fence, scrape-wiring and kustomization gates, the library-pin gate and,
 with `--lib-path`, the vendored-copy gate — against a render. A render carrying
 `kubernetes/db` also gets that tree built, schema-checked and run through the
-egress-fence, kustomization, CNPG-safeguard and storage-class gates, and its
-dump CronJob's `timeZone` checked against the IANA database (the system tzdata
-or the `tzdata` wheel; with neither, the gate fails rather than skips). That is the only way to learn that a repo this template produces would
-fail its own gates.
+egress-fence, kustomization, CNPG-safeguard and storage-class gates, and the
+dump CronJob's `timeZone` in that built output checked against the IANA
+database (the system tzdata or the `tzdata` wheel; with neither, the gate fails
+rather than skips). That is the only way to learn that a repo this template
+produces would fail its own gates.
 
 ```
 python3 tests/validate_render.py                               # fixture A

@@ -3603,6 +3603,26 @@ def test_validate_render_runs_the_database_gates_over_the_built_tree(repo, tmp_p
     assert "cnpg clusters" in runner.failures, runner.failures
 
 
+def test_validate_render_reads_the_dump_time_zone_from_the_build(repo, tmp_path, monkeypatch):
+    """A patch can replace the dump CronJob's zone and leave the source file
+    valid, so the timezone gate must read `kustomize build`."""
+    _skip_without_db(repo.answers)
+    require_tool("kustomize", "validate_render dump timezone", _TOOLCHAIN_HINT, ci_optional=True)
+    monkeypatch.setattr(validate_render, "_kubeconform", lambda *args, **kwargs: None)
+    work = tmp_path / "validate-db-tz"
+    shutil.copytree(repo.path, work)
+    path = work / DB / "kustomization.yaml"
+    document = yaml.safe_load(path.read_text())
+    replace = [{"op": "replace", "path": "/spec/timeZone", "value": "America/Los_Angelos"}]
+    document.setdefault("patches", []).append(
+        {"target": {"kind": "CronJob"}, "patch": yaml.safe_dump(replace)}
+    )
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+    runner = validate_render.Runner(work)
+    validate_render._validate_db(runner, work, "unused", repo.answers["k8s_version"])
+    assert runner.failures == ["dump timezone"], runner.failures
+
+
 PRUNE = "kustomize.toolkit.fluxcd.io/prune"
 
 
