@@ -135,12 +135,10 @@ def _catalog(root: Path) -> str:
 
 
 def _dump_timezone_problem(built: str) -> str | None:
-    """-> why a CronJob's spec.timeZone in the db build would be refused, or None.
+    """-> why a CronJob zone in `kustomize build kubernetes/db` would be refused.
 
-    Reads `kustomize build kubernetes/db`, so a patch cannot replace the zone
-    unseen. copier checks the zone's shape only; the IANA database comes from
-    the system tzdata or the `tzdata` wheel, and its absence fails, never skips.
-    """
+    The IANA database is the system tzdata or the `tzdata` wheel; with neither
+    the gate fails, never skips. None when every zone is known."""
     cronjobs = [
         d for d in yaml.safe_load_all(built) if isinstance(d, dict) and d.get("kind") == "CronJob"
     ]
