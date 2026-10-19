@@ -1235,6 +1235,11 @@ def test_the_wiring_kustomization_points_at_this_repo(repo):
         assert spec["postBuild"]["substituteFrom"] == [
             {"kind": "ConfigMap", "name": "cluster-config", "optional": False}
         ], f"{name} carries no cluster-config substitute source"
+        # Deleting the db wiring must orphan the whole tree: the default policy
+        # prunes the unguarded half and leaves the prune-guarded Cluster running
+        # with no NetworkPolicies, role Secrets, backups or monitoring.
+        wanted = "Orphan" if tree == DB else None
+        assert spec.get("deletionPolicy") == wanted, f"{name} deletionPolicy"
     onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text()
     assert "No `postBuild` block" not in onboarding, "the prose contradicts the wiring"
 

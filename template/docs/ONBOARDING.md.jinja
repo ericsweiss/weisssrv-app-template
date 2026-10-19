@@ -475,6 +475,9 @@ spec:
     name: {{ app_slug }}
   path: ./kubernetes/db
   prune: true
+  # Deleting this wiring must never half-dismantle a database: Orphan keeps
+  # every object, so removal is the deliberate teardown, not a side effect.
+  deletionPolicy: Orphan
   targetNamespace: {{ app_namespace }}
   wait: true
   # A cluster-template tenant-wiring gate requires this source. Nothing
