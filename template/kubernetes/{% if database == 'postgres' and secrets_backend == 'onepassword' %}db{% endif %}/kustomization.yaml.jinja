@@ -1,0 +1,16 @@
+---
+# The database tree, reconciled by its own tenant Kustomization
+# ({{ app_slug }}-db, docs/ONBOARDING.md O3) ahead of kubernetes/flux.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - networkpolicy.yaml
+  - externalsecret-roles.yaml
+  - externalsecret-backups.yaml
+  - objectstore.yaml
+  - cluster.yaml
+  - scheduledbackup.yaml
+  - podmonitor.yaml
+  - pvc-pg-dump.yaml
+  - cronjob-pg-dump.yaml
+  - prometheusrule.yaml

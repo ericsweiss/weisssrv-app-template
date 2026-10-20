@@ -52,7 +52,20 @@ enable_hpa: false
 enable_vpa: false
 enable_registry_pull_secret: false
 enable_sso: false
+# Not asked under the GitLab backend; the unlike-db render turns the database on
+# and asks the db_* answers below, unlike fixture A's so the leak scan can tell.
+database: none
+db_name: tide_store
+db_role_prefix: tide
+db_storage_size: 7Gi
+db_backup_bucket: tidepool-archive
+db_backup_endpoint: https://objects.brinemoor.test
+db_backup_item: Archive Key
+db_roles_item: Role Passwords
+db_apiserver_cidrs: 192.0.2.10/32
+db_dump_timezone: Europe/Lisbon
+db_runbook_url: https://forge.brinemoor.test/seaworks/tidepool/-/blob/main/DATABASE.md
 
 # Never asked (the library is only included by the GitLab shape).
-lib_ref: v0.21.1
+lib_ref: v0.22.1
 lib_project: eric/weisssrv-lib

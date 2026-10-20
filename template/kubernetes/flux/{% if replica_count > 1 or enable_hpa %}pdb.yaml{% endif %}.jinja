@@ -13,3 +13,11 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ app_slug }}
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+    # The database and dump pods share the name label; counted here, they would
+    # stand in for app replicas and block the instance's own drain.
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values: [db]
+{%- endif %}

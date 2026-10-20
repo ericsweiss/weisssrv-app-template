@@ -1,0 +1,21 @@
+---
+# Binds the NFS landing-zone volume the operator pre-creates. Never pruned: a
+# pruned claim leaves the retained dump volume Released and unbound.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ app_slug }}-pg-dump
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+  labels:
+    app.kubernetes.io/name: {{ app_slug }}
+    app.kubernetes.io/component: db
+    app.kubernetes.io/instance: {{ app_slug }}-pg-dump
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ""
+  volumeName: {{ app_slug }}-pg-dump
+  resources:
+    requests:
+      storage: 5Gi

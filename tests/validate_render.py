@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zoneinfo
 from pathlib import Path
 
 import yaml
@@ -133,6 +134,53 @@ def _catalog(root: Path) -> str:
     return CATALOG_TEMPLATE.format(ref=ref)
 
 
+def _dump_timezone_problem(built: str) -> str | None:
+    """-> why a CronJob zone in `kustomize build kubernetes/db` would be refused.
+
+    The IANA database is the system tzdata or the `tzdata` wheel; with neither
+    the gate fails, never skips. None when every zone is known."""
+    cronjobs = [
+        d for d in yaml.safe_load_all(built) if isinstance(d, dict) and d.get("kind") == "CronJob"
+    ]
+    if not cronjobs:
+        return "the kubernetes/db build carries no dump CronJob"
+    known = zoneinfo.available_timezones()
+    if not known:
+        return "no IANA time zone database: install the system tzdata or the tzdata wheel"
+    for cronjob in cronjobs:
+        zone = (cronjob.get("spec") or {}).get("timeZone")
+        if zone not in known:
+            return f"timeZone {zone!r} is not an IANA zone, so the CronJob is refused at admission"
+    return None
+
+
+def _check_dump_timezone(runner: Runner, built: str) -> None:
+    problem = _dump_timezone_problem(built)
+    label = "dump timezone"
+    print(f"  {label:<{LABEL_WIDTH}} {'ok' if problem is None else 'FAILED'}")
+    if problem is not None:
+        print(f"    {problem}")
+        runner.failures.append(label)
+
+
+def _validate_db(runner: Runner, root: Path, catalog: str, k8s_version) -> None:
+    """kubernetes/db is reconciled by its own Kustomization, so the flux build
+    never reaches it: build it, then validate the built output and run the
+    safeguard gates over it, so a patch that strips a safeguard is seen."""
+    built = runner.gate("kustomize build db", "kustomize", "build", "kubernetes/db")
+    if "kustomize build db" not in runner.failures:
+        _kubeconform(runner, "kubeconform db", "kubeconform db skips", catalog, k8s_version, built)
+        runner.gate("cnpg clusters", sys.executable, "scripts/check-cnpg-clusters.py", stdin=built)
+        runner.gate(
+            "pvc storageclass", sys.executable, "scripts/check-pvc-storageclass.py", stdin=built
+        )
+        _check_dump_timezone(runner, built)
+    runner.gate(
+        "netpol except db", sys.executable, "scripts/check-netpol-except-parity.py", "kubernetes/db"
+    )
+    runner.gate("kustomization db", sys.executable, "scripts/check-kustomization.py", "kubernetes/db")
+
+
 def validate(root: Path, answers: dict) -> list[str]:
     _make_git_tree(root)
     catalog = _catalog(root)
@@ -178,6 +226,9 @@ def validate(root: Path, answers: dict) -> list[str]:
     runner.gate(
         "kustomization", sys.executable, "scripts/check-kustomization.py", "kubernetes/flux"
     )
+
+    if (root / "kubernetes/db").is_dir():
+        _validate_db(runner, root, catalog, answers["k8s_version"])
 
     if (root / ".gitlab-ci.yml").is_file():
         runner.gate(

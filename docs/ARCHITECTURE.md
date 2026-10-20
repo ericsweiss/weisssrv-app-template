@@ -105,9 +105,13 @@ anywhere. `tests/validate_render.py` runs what a generated repo's own pipeline
 runs — yamllint, `kustomize build`, kubeconform, a second kubeconform pass over
 `docs/ONBOARDING.md`'s wiring block, ruff, the doc-link checker, the
 egress-fence, scrape-wiring and kustomization gates, the library-pin gate and,
-with `--lib-path`, the vendored-copy gate — against a
-render. That is the only way to learn that a repo this template produces would
-fail its own gates.
+with `--lib-path`, the vendored-copy gate — against a render. A render carrying
+`kubernetes/db` also gets that tree built, schema-checked and run through the
+egress-fence, kustomization, CNPG-safeguard and storage-class gates, and the
+dump CronJob's `timeZone` in that built output checked against the IANA
+database (the system tzdata or the `tzdata` wheel; with neither, the gate fails
+rather than skips). That is the only way to learn that a repo this template
+produces would fail its own gates.
 
 ```
 python3 tests/validate_render.py                               # fixture A
@@ -186,9 +190,11 @@ detail. The generated `docs/ARCHITECTURE.md` says so where the tenant reads it.
 
 - **It does not deploy.** Flux does, from the generated repo, after the operator
   adds the wiring file the generated `docs/ONBOARDING.md` spells out.
-- **It does not ship storage.** The generated app is stateless. Adding a volume
-  is an operator step and storage-class-agnostic; ONBOARDING step O6 works the
-  reference cluster's zvol flow as the example.
+- **It does not ship storage**, except the optional database component
+  (`database: postgres`), whose storage and backups ONBOARDING O6b describes.
+  Otherwise the generated app is stateless. Adding a volume is an operator step
+  and storage-class-agnostic; ONBOARDING step O6 works the reference cluster's
+  zvol flow as the example.
 - **It does not create the cluster.** That is
   [`weisssrv-cluster-template`](https://git.ericsweiss.com/eric/weisssrv-cluster-template),
   which this template's cluster-identity answers are designed to match.

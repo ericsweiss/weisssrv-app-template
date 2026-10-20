@@ -569,6 +569,174 @@ enable_sso:
     creates a second proxy provider for it.
   default: false
 
+database:
+  type: str
+  when: "{{ secrets_backend == 'onepassword' }}"
+  help: >-
+    A CloudNativePG PostgreSQL cluster in kubernetes/db, reconciled by its own
+    tenant Kustomization: one instance, WAL archiving and nightly base backups
+    to an S3-compatible bucket, three login roles delivered as file-mounted
+    Secrets, and a nightly pg_dump. Needs the cluster's CloudNativePG module
+    and its tenant-local StorageClass (docs/ONBOARDING.md, O6b).
+  default: none
+  choices:
+    No database: none
+    PostgreSQL on CloudNativePG: postgres
+  validator: >-
+    {% if database == 'postgres' and app_port | int in [5432, 8000, 9187] %}
+    app_port {{ app_port }} is a port the database pods listen on (5432 PostgreSQL,
+    8000 the CloudNativePG instance manager, 9187 its metrics), and the app's
+    scrape NetworkPolicy also selects those pods, so it would open that port to
+    the observability namespace. Choose another app_port.
+    {% endif %}
+
+db_name:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: The database name.
+  default: "{{ app_slug | replace('-', '_') }}"
+  validator: >-
+    {% if not (db_name | regex_search('^[a-z_][a-z0-9_]{0,62}$')) %}
+    db_name must be a lowercase PostgreSQL identifier: a letter or underscore,
+    then letters, digits or underscores, at most 63 characters
+    {% elif db_name | lower in ['y', 'yes', 'n', 'no', 'true', 'false', 'on', 'off', 'null'] %}
+    db_name must not be a YAML boolean or null keyword: it would render as a
+    non-string value in the database manifests
+    {% elif db_name in ['postgres', 'template0', 'template1'] %}
+    db_name must not be a PostgreSQL built-in database (postgres, template0,
+    template1): CNPG cannot create it as the application database, so the
+    cluster's bootstrap never completes
+    {% endif %}
+
+db_role_prefix:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: Prefix of the login roles <prefix>_migrate, <prefix>_app and <prefix>_ro.
+  default: "{{ db_name }}"
+  validator: >-
+    {% if not (db_role_prefix | regex_search('^[a-z_][a-z0-9_]{0,50}$')) %}
+    db_role_prefix must be a lowercase PostgreSQL identifier of at most 51
+    characters, so the role names stay within 63
+    {% elif db_role_prefix | regex_search('^pg_') %}
+    db_role_prefix must not start with pg_: PostgreSQL reserves role names with
+    that prefix, so the generated roles could never be created
+    {% endif %}
+
+db_storage_size:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: >-
+    The instance claim's size, requested from the cluster's tenant-local
+    StorageClass. The provisioner does not enforce it; the namespace's
+    ResourceQuota counts it, and the class cannot grow it later.
+  default: 20Gi
+  validator: >-
+    {% if not (db_storage_size | regex_search('^[1-9][0-9]*Gi$')) %}
+    db_storage_size must be a whole number of Gi, for example 20Gi
+    {% endif %}
+
+db_backup_bucket:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: >-
+    The S3 bucket dedicated to this app's WAL archive and base backups. Bucket
+    names are global on B2 and S3, so prefix it with the cluster's name, as the
+    operator creates it: <cluster>-cnpg-<slug>.
+  placeholder: "<cluster>-cnpg-{{ app_slug }}"
+  validator: >-
+    {% if not (db_backup_bucket | regex_search('^[a-z0-9][a-z0-9-]{4,61}[a-z0-9]$')) %}
+    db_backup_bucket must be an S3 bucket name: 6 to 63 lowercase letters,
+    digits or hyphens, starting and ending with a letter or digit
+    {% endif %}
+
+db_backup_endpoint:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: >-
+    The bucket's S3 endpoint URL, scheme included and no path. A public object
+    store endpoint only (the database egress policy excludes private and
+    cluster addresses).
+  placeholder: https://s3.us-west-004.backblazeb2.com
+  validator: >-
+    {% if not (db_backup_endpoint | regex_search('^https://[A-Za-z0-9.-]+(:443)?$')) %}
+    db_backup_endpoint must be an https:// URL on port 443 with no path, since
+    db-allow-egress opens only 443 to the backup store
+    {% elif db_backup_endpoint | lower | regex_search('^https://([0-9]+\\.){3}[0-9]+\\.?(:443)?$')
+       or db_backup_endpoint | lower | regex_search('(\\.svc|\\.local|\\.internal|(//|\\.)localhost)\\.?(:443)?$') %}
+    db_backup_endpoint must be a public object store endpoint only (the database
+    egress policy excludes private and cluster addresses): no IP literal and no
+    .svc, .svc.cluster.local, .local, .internal or localhost host
+    {% endif %}
+
+db_backup_item:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: >-
+    1Password item title, rendered as "<slug>: <item>", whose access-key-id and
+    secret-access-key fields hold the bucket-scoped key.
+  default: CNPG Backup
+  validator: >-
+    {% if not (db_backup_item | regex_search('^[^"\\\\\\x00-\\x1f\\x7f\\s]([^"\\\\\\x00-\\x1f\\x7f]*[^"\\\\\\x00-\\x1f\\x7f\\s])?$')) %}
+    db_backup_item must be a 1Password item title with no double quote, backslash,
+    control character or leading or trailing space
+    {% endif %}
+
+db_roles_item:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: >-
+    1Password item title, rendered as "<slug>: <item>", whose migrate-password,
+    app-password and ro-password fields hold the three role passwords.
+  default: Database
+  validator: >-
+    {% if not (db_roles_item | regex_search('^[^"\\\\\\x00-\\x1f\\x7f\\s]([^"\\\\\\x00-\\x1f\\x7f]*[^"\\\\\\x00-\\x1f\\x7f\\s])?$')) %}
+    db_roles_item must be a 1Password item title with no double quote, backslash,
+    control character or leading or trailing space
+    {% endif %}
+
+db_apiserver_cidrs:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: >-
+    Comma-separated /32s of the cluster's API server nodes. The instance manager
+    talks to the API, and kube-proxy rewrites the Service address before policy
+    applies, so the egress rule must name the node addresses.
+  placeholder: 10.0.10.222/32,10.0.10.223/32
+  validator: >-
+    {% if not (db_apiserver_cidrs | regex_search('^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/32(,((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/32)*$')) %}
+    db_apiserver_cidrs must be a comma-separated list of IPv4 /32s, one per
+    API server node, for example 10.0.10.222/32,10.0.10.223/32
+    {% endif %}
+
+db_dump_timezone:
+  type: str
+  when: "{{ database == 'postgres' }}"
+  help: >-
+    The IANA time zone the nightly pg_dump schedule (02:45) runs in. Checked
+    here for shape only; the render gate checks the zone exists.
+  default: Etc/UTC
+  validator: >-
+    {% if not (db_dump_timezone | regex_search('^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$')) %}
+    db_dump_timezone must be an IANA time zone name, for example Etc/UTC or
+    America/Los_Angeles
+    {% endif %}
+
+db_runbook_url:
+  type: str
+  when: "{{ database == 'postgres' and secrets_backend == 'onepassword' }}"
+  help: >-
+    URL the DatabaseAbsent alert carries as `runbook_url`: the cluster
+    repository's CloudNativePG runbook, not the generic app page runbook_url
+    names. No default, for the same reason runbook_url has none.
+  placeholder: "https://git.example.com/homelab/cluster/-/blob/main/docs/postgres.md#postgres-down"
+  validator: >-
+    {% if not (db_runbook_url | regex_search('^https?://[^\\s]+$')) %}
+    db_runbook_url must be an http(s) URL.
+    {% elif "'" in db_runbook_url %}
+    db_runbook_url must not contain a single quote: it renders inside the
+    single-quoted YAML scalar `runbook_url: '<url>'` on DatabaseAbsent.
+    {% endif %}
+
 # --------------------------------------------------------------------------
 # Library pin
 # --------------------------------------------------------------------------
@@ -581,7 +749,7 @@ lib_ref:
     it reads. Use a RELEASE TAG (vX.Y.Z): the library's include contract is
     explicit that a branch is never a valid pin, and a branch deleted after
     merge takes every include with it.
-  default: "v0.21.1"
+  default: "v0.22.1"
   validator: >-
     {% if not (lib_ref | regex_search('^v\\d+\\.\\d+\\.\\d+$')) %}
     lib_ref must be a release TAG of the form vX.Y.Z (e.g. v1.2.3). The

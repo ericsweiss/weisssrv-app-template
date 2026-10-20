@@ -103,11 +103,27 @@ component is wired and a disabled one leaves nothing behind. There is no
 | `enable_registry_pull_secret` | `{{ enable_image_build and secrets_backend != 'none' }}` | The `dockerconfigjson` ExternalSecret **and** the pod's `imagePullSecrets:` entry. Defaulted on for the combination that needs it — both forges publish privately by default (a GitLab project registry; a GHCR package, whose visibility does not follow the source repo's), so a repo that builds its own image cannot be pulled without it. No `ci_shape` term: the rendered chain is forge-neutral — the ExternalSecret keys on `registry_host`/`registry_pull_host` and reads a username+token pair, which is what `docker login ghcr.io` takes. The backend term is not redundant with the `when:`: a skipped question's default is still evaluated, and `registry_pull_host`'s `when:` reads it with no backend guard, so without it a `secrets_backend: none` repo that builds its own image is asked for a pull host nothing renders. |
 | `enable_sso` | `false` | The Authentik forward-auth middleware on the public route. The middleware alone authenticates nothing — the operator's provider/application/outpost objects are what enforce it. The internal hostname stays LAN/tailnet-filtered rather than authenticated. |
 
+### Database (1Password backend only)
+
+| Answer | Default | What it drives |
+|---|---|---|
+| `database` | `none` | `postgres` renders `kubernetes/db/`: a one-instance CloudNativePG `Cluster`, its object store and nightly base backup, three role Secrets, network policies, a PodMonitor, a nightly `pg_dump` and an absence alert, plus the Deployment's file mounts and `/readyz` probe. Needs the cluster's CloudNativePG module and its `tenant-local` StorageClass (ONBOARDING O6b). With `postgres`, `app_port` must not be 5432, 8000 or 9187: the app's scrape NetworkPolicy also selects the database pods, so it would open that database port to the observability namespace. |
+| `db_name` | the slug with `-` as `_` | The database name: a lowercase identifier, not a YAML keyword such as `true` or `null`, and not a PostgreSQL built-in (`postgres`, `template0`, `template1`), which CNPG cannot create as the application database. |
+| `db_role_prefix` | `db_name` | The roles `<prefix>_migrate`, `<prefix>_app` and `<prefix>_ro`. |
+| `db_storage_size` | `20Gi` | The instance claim, requested from `tenant-local` and counted by the namespace's storage quota. |
+| `db_backup_bucket` | none, required | The bucket holding the WAL archive and base backups. Bucket names are global, so prefix it with the cluster: `<cluster>-cnpg-<slug>`. |
+| `db_backup_endpoint` | none, required | The bucket's S3 endpoint, `https://` with no path. A public object store endpoint only (the database egress policy excludes private and cluster addresses): an IP literal or a `.svc`, `.svc.cluster.local`, `.local`, `.internal` or `localhost` host is refused. |
+| `db_backup_item` | `CNPG Backup` | The 1Password item (`"<slug>: <item>"`) with `access-key-id` and `secret-access-key`; no double quote, backslash, control character or edge space. |
+| `db_roles_item` | `Database` | The 1Password item (`"<slug>: <item>"`) with `migrate-password`, `app-password` and `ro-password`; the same title rules. |
+| `db_apiserver_cidrs` | none, required | The API server node `/32`s the instance pods may reach on 6443; each entry a real IPv4 address and `/32`. |
+| `db_dump_timezone` | `Etc/UTC` | The time zone of the 02:45 dump schedule. The answer is checked for shape only; the render gate (`tests/validate_render.py`) checks the zone exists in the IANA database. |
+| `db_runbook_url` | none, required | The `runbook_url` on the `DatabaseAbsent` alert: the cluster repo's CloudNativePG runbook, not the app runbook `runbook_url` names. |
+
 ### Library pin (GitLab shape only)
 
 | Answer | Default | What it drives |
 |---|---|---|
-| `lib_ref` | `v0.21.1` | The tag the generated pipeline declares in its `spec:` header and every `include:` reads. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
+| `lib_ref` | `v0.22.1` | The tag the generated pipeline declares in its `spec:` header and every `include:` reads. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
 | `lib_project` | `eric/weisssrv-lib` | The library's project path. `include: project:` resolves instance-locally, so the library must live on the same GitLab as the repo. |
 
 ---
@@ -154,6 +170,18 @@ before the first reconcile succeeds.
   repo declares no certificate alert of its own, because the platform already
   alerts cluster-wide on expiry and on a Certificate that never goes Ready.
   Without those metrics a Certificate that stops renewing is invisible.
+- **For `database: postgres`** (the `kubernetes/db` tree):
+  - the CloudNativePG operator and Barman Cloud plugin, with the
+    `postgresql.cnpg.io` and `barmancloud.cnpg.io` CRDs, which
+    `tenant-crd-editor` must also grant;
+  - the `monitoring.coreos.com` `PodMonitor` CRD, and Prometheus with
+    `podMonitorSelectorNilUsesHelmValues: false`. Left true, the PodMonitor is
+    never discovered, `cnpg_collector_up` is never scraped, and
+    `DatabaseAbsent` pages for ever on a healthy database;
+  - the operator in namespace `cnpg-system`, its pods labelled
+    `app.kubernetes.io/name: cloudnative-pg`, which the instance ingress policy
+    admits on port 8000;
+  - a `tenant-local` StorageClass for the instance claim.
 - **A resource-metrics API** (metrics-server) when `enable_hpa` or `enable_vpa`
   is on, plus the VPA recommender and admission controller for `enable_vpa`.
   Without them the VPA recommends nothing and the HPA never leaves

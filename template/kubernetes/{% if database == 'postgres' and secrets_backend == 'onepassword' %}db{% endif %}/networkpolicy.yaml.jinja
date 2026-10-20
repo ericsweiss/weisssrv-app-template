@@ -1,0 +1,170 @@
+---
+# Fail-closed baseline. Duplicates kubernetes/flux default-deny on purpose, so
+# the namespace stays fail-closed while this tree reconciles first; the allows
+# below open what the database and its dump need.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-default-deny
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# Instance pods: Postgres from this app's pods, the status port from the CNPG
+# operator, metrics from the observability scraper.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-allow-ingress
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ app_slug }}-db
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ app_slug }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudnative-pg
+      ports:
+        - protocol: TCP
+          port: 8000
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - protocol: TCP
+          port: 9187
+
+---
+# Instance and initdb pods: DNS, the API server node addresses (the Service
+# address is rewritten before policy applies), and public 443 for the bucket.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-allow-egress
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ app_slug }}-db
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+{%- for cidr in db_apiserver_cidrs.split(',') %}
+        - ipBlock:
+            cidr: {{ cidr.strip() }}
+{%- endfor %}
+      ports:
+        - protocol: TCP
+          port: 6443
+    - to:
+        # The RFC-reserved and private IPv4 space, kept whole.
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 0.0.0.0/8
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+              - 192.0.0.0/24
+              - 192.0.2.0/24
+              - 198.51.100.0/24
+              - 203.0.113.0/24
+              - 198.18.0.0/15
+              - 224.0.0.0/4
+              - 240.0.0.0/4
+      ports:
+        - protocol: TCP
+          port: 443
+
+---
+# The nightly dump: DNS and Postgres only. Selected by its instance label, as
+# its component is db like the instance pods'.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backup-allow-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ app_slug }}-pg-dump
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ app_slug }}-db
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+# The application's own pods reach Postgres; kubernetes/flux carries the rest
+# of their egress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-allow-egress-db
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ app_slug }}
+    # The database and dump pods share the name label; their own policies open theirs.
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values: [db]
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ app_slug }}-db
+      ports:
+        - protocol: TCP
+          port: 5432

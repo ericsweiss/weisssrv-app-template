@@ -284,6 +284,12 @@ spec:
     requests.cpu: "5"
     requests.memory: 4Gi
     limits.memory: 12Gi
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+    # tenant-local does not enforce sizes on its shared volume, so the quota
+    # caps what this namespace may request: the instance claim plus headroom.
+    persistentvolumeclaims: "4"
+    tenant-local.storageclass.storage.k8s.io/requests.storage: {{ (db_storage_size | replace('Gi', '') | int) * 2 }}Gi
+{%- endif %}
 ---
 # Defaults and per-container ceilings, so a pod with no resources block cannot
 # land unbounded inside the quota. A `max:` key with no matching `default:` key
@@ -430,6 +436,9 @@ spec:
   # it at your own stage; docs/ARCHITECTURE.md, Platform contract.
   dependsOn:
     - name: infrastructure-configs
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+    - name: {{ app_slug }}-db
+{%- endif %}
   serviceAccountName: {{ app_slug }}-flux
   sourceRef:
     kind: GitRepository
@@ -438,11 +447,53 @@ spec:
   prune: true
   targetNamespace: {{ app_namespace }}
   wait: true
+  # A cluster-template tenant-wiring gate requires this source. Nothing
+  # under kubernetes/flux spells a variable, so it substitutes nothing.
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-config
+        optional: false
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+---
+# The database tree reconciles first and on its own, so the cluster, its
+# Secrets and its backups exist before any workload starts.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: {{ app_slug }}-db
+  namespace: flux-system
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 10m
+  dependsOn:
+    - name: infrastructure-configs
+  serviceAccountName: {{ app_slug }}-flux
+  sourceRef:
+    kind: GitRepository
+    name: {{ app_slug }}
+  path: ./kubernetes/db
+  prune: true
+  # Deleting this wiring must never half-dismantle a database: Orphan keeps
+  # every object, so removal is the deliberate teardown, not a side effect.
+  deletionPolicy: Orphan
+  targetNamespace: {{ app_namespace }}
+  wait: true
+  # A cluster-template tenant-wiring gate requires this source. Nothing
+  # under kubernetes/db spells a variable, so it substitutes nothing.
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-config
+        optional: false
+{%- endif %}
 ```
 
-No `postBuild` block: nothing under `kubernetes/flux/` spells `${var}`, so this
-repo needs no substitution. Add `postBuild.substituteFrom` only alongside a
-placeholder that needs it, and write a literal dollar-brace as `$${var}`.
+Every Kustomization here carries `postBuild.substituteFrom` naming the
+cluster's `cluster-config` ConfigMap, because the cluster-template tenant-wiring
+gate requires it. Nothing substitutes unless a `${var}` placeholder appears
+under the path it applies, so write a literal dollar-brace as `$${var}`.
 kustomize-controller usually runs with strict substitution, so one unresolvable
 `${var}` fails the whole tenant reconcile. See `ARCHITECTURE.md`
 § Platform contract.
@@ -474,7 +525,7 @@ provisions on its own.
 
 ### O6 — Persistent storage (only if the tenant needs a volume)
 
-This template ships no PVC by design. Supply the StorageClass the cluster
+This template ships no PVC for the app by design{% if database == 'postgres' and secrets_backend == 'onepassword' %} (the database tree under `kubernetes/db` brings its own claims, covered in O6b){% endif %}. Supply the StorageClass the cluster
 offers, or provision the volume and a matching PV yourself, and hand the tenant
 the PVC name. The tenant then adds the volume and its mount to
 `deployment.yaml`{% if enable_vpa %} and sets `vpa.yaml` `updateMode: "Off"`{% endif %}.
@@ -485,10 +536,66 @@ host, and hand the tenant the PV/PVC plus the node-pin and NAS-toleration
 pattern. NFS-backed volumes mount by hostname there, because the wildcard
 certificate carries no IP SAN.
 
+{% if not (database == 'postgres' and secrets_backend == 'onepassword') -%}
 This app is stateless as generated. A volume provisioned here sits outside
 every backup set until the operator adds it, and the operator owns its snapshot
 and backup schedule.
+{%- else -%}
+The app's state lives in the CloudNativePG cluster under `kubernetes/db`; see
+O6b for its backups and restore drill. A volume provisioned here sits outside
+every backup set until the operator adds it, and the operator owns its snapshot
+and backup schedule.
+{%- endif %}
 
+{% if database == 'postgres' and secrets_backend == 'onepassword' -%}
+### O6b — Database prerequisites
+
+Enabling `database: postgres` requires the app to serve `/readyz`, returning
+200 only when its connection to `{{ app_slug }}-db-rw` succeeds: the handler
+connects with the mounted `{{ app_slug }}-db-app` credentials
+(`/var/run/secrets/db`) and `sslrootcert=/var/run/secrets/db-ca/ca.crt`, and
+answers 503 when that fails.
+{%- if enable_image_build %} The placeholder image (the `Dockerfile`'s
+`python -m http.server` serving `/app`) does NOT serve `/readyz`, so the pod
+stays NotReady until your app replaces it. That is intended: a Ready pod with no
+database would be worse.
+{%- endif %}
+
+The database component needs, before the wiring merges:
+
+- The cluster's CloudNativePG operator and Barman Cloud plugin, and
+  `tenant-crd-editor` granting the `postgresql.cnpg.io` and
+  `barmancloud.cnpg.io` kinds (weisssrv-cluster-template `postgres_operator`).
+- The cluster's `tenant-local` StorageClass (weisssrv-cluster-template
+  `tenant_storage`), which provisions the volume for
+  `{{ app_slug }}-db-1` when the cluster first starts. The wiring file's
+  ResourceQuota above already counts the claim.
+- An NFS PersistentVolume `{{ app_slug }}-pg-dump` pre-bound to
+  `{{ app_namespace }}/{{ app_slug }}-pg-dump`, on a landing zone the off-site
+  backup walks, exported with `all_squash` to uid 1000 and gid 2000.
+- The dump registered with the cluster's backup-artifact freshness check: the
+  entry `{name: {{ app_slug }}, pattern: "{{ app_slug }}-*.sql.gz"}` in
+  `nas_storage_backup_artifact_apps`, and the matching
+  `or absent(backup_artifact_last_mtime_seconds{app="{{ app_slug }}"})` arm on
+  `BackupArtifactStale`. The cluster's `check-backup-artifact-apps` gate
+  requires both.
+- The bucket `{{ db_backup_bucket }}` at `{{ db_backup_endpoint }}` with a key
+  scoped to it alone, and lifecycle rules that keep deleted versions at least
+  30 days, in 1Password item `"{{ app_slug }}: {{ db_backup_item }}"` (fields
+  `access-key-id`, `secret-access-key`).
+- 1Password item `"{{ app_slug }}: {{ db_roles_item }}"` with fields
+  `migrate-password`, `app-password` and `ro-password`, each generated, never
+  typed, from a letters, digits and symbols recipe without spaces (for example
+  `op item create ... 'migrate-password[password]=<generated>'`).
+- The cluster's CloudNativePG alert rules, and a restore drill (PITR into a
+  scratch namespace) before the database holds data that matters.
+
+The application reads its connection from files under `/var/run/secrets/db`
+(host, port, dbname, user, password, sslmode, uri) with the CA at
+`/var/run/secrets/db-ca/ca.crt`, and serves `/readyz` as described in
+`kubernetes/flux/deployment.yaml`.
+
+{% endif -%}
 ### O7 — Reachability probe (recommended for user-facing routes)
 
 This repo's `PrometheusRule` covers replica availability only. The platform

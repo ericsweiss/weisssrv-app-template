@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
 
+import jinja2
 import pytest
 import yaml
 from conftest import require_tool
@@ -261,6 +262,21 @@ def rendered_unlike_full(tmp_path_factory) -> Path:
     )
 
 
+# The contrast fixture with the database on: the only render in which
+# kubernetes/db and every database arm come from answers unlike fixture A's.
+UNLIKE_DB_OVERRIDES = {"secrets_backend": "onepassword", "database": "postgres"}
+
+
+@pytest.fixture(scope="session")
+def rendered_unlike_db(tmp_path_factory) -> Path:
+    return render_app.render(
+        tmp_path_factory.mktemp("render-unlike-db"),
+        answers=render_app.ANSWERS_B,
+        dest_name="render-unlike-db",
+        data=UNLIKE_DB_OVERRIDES,
+    )
+
+
 # The vault the alt-vault render answers. It must differ from both fixtures'
 # answers, or the assertion would pass on a hardcoded string.
 ALT_VAULT = "Tidewrack"
@@ -348,6 +364,7 @@ RENDERS = {
             "replica_count": 3,
         },
     ),
+    "unlike-db": ("rendered_unlike_db", "answers_b", UNLIKE_DB_OVERRIDES),
 }
 
 
@@ -482,6 +499,10 @@ CROSS_RENDER_EXEMPT = {
         "shape is the targeted gate, and docs/CI-SHAPES.md records the limitation"
     ),
     "secret_item": "'App Secrets' is ordinary prose in the docs the render ships",
+    "db_roles_item": (
+        "'Database' is ordinary prose, the O6b heading among it — "
+        "test_the_role_secrets_read_the_answered_item is the targeted gate"
+    ),
     "forge": (
         "'gitlab' is also fixture B's secrets_backend answer and the forge's "
         "ordinary name in prose — test_ci_shape_keeps_exactly_its_own_files and "
@@ -1192,15 +1213,35 @@ def test_wiring_store_scopes_itself_to_the_tenant(repo):
 def test_the_wiring_kustomization_points_at_this_repo(repo):
     """The wiring Kustomization is the whole link between cluster and repo, and
     kubeconform validates its schema, not its path or target namespace."""
-    docs = [d for d in _onboarding_wiring(repo.path) if d.get("kind") == "Kustomization"]
-    assert len(docs) == 1, "the wiring file must carry exactly one Kustomization"
-    spec, slug = docs[0]["spec"], repo.answers["app_slug"]
-    assert spec["path"].removeprefix("./") == FLUX, spec["path"]
-    assert (repo.path / FLUX / "kustomization.yaml").is_file()
-    assert spec["targetNamespace"] == repo.answers["app_namespace"]
-    assert spec["sourceRef"]["name"] == slug
-    assert spec["serviceAccountName"] == f"{slug}-flux"
-    assert spec["prune"] is True
+    slug = repo.answers["app_slug"]
+    docs = {
+        d["metadata"]["name"]: d["spec"]
+        for d in _onboarding_wiring(repo.path)
+        if d.get("kind") == "Kustomization"
+    }
+    # The database component adds its own Kustomization (kubernetes/db).
+    trees = {slug: FLUX, **({f"{slug}-db": DB} if _wants_db(repo.answers) else {})}
+    assert set(docs) == set(trees), f"wiring Kustomizations: {sorted(docs)}"
+    for name, tree in trees.items():
+        spec = docs[name]
+        assert spec["path"].removeprefix("./") == tree, spec["path"]
+        assert (repo.path / tree / "kustomization.yaml").is_file()
+        assert spec["targetNamespace"] == repo.answers["app_namespace"]
+        assert spec["sourceRef"]["name"] == slug
+        assert spec["serviceAccountName"] == f"{slug}-flux"
+        assert spec["prune"] is True
+        # The cluster-template tenant-wiring gate requires cluster-config as a
+        # substitute source on every tenant Kustomization.
+        assert spec["postBuild"]["substituteFrom"] == [
+            {"kind": "ConfigMap", "name": "cluster-config", "optional": False}
+        ], f"{name} carries no cluster-config substitute source"
+        # Deleting the db wiring must orphan the whole tree: the default policy
+        # prunes the unguarded half and leaves the prune-guarded Cluster running
+        # with no NetworkPolicies, role Secrets, backups or monitoring.
+        wanted = "Orphan" if tree == DB else None
+        assert spec.get("deletionPolicy") == wanted, f"{name} deletionPolicy"
+    onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text()
+    assert "No `postBuild` block" not in onboarding, "the prose contradicts the wiring"
 
 
 def test_gitlab_wiring_store_names_the_answered_instance(rendered_b, answers_b):
@@ -1580,8 +1621,22 @@ def _resolved(ci: dict, name: str, seen: tuple[str, ...] = ()) -> dict:
         assert target in ci, f"{name} extends {target}, which the pipeline does not define"
         assert target.startswith("."), f"{name} extends {target}, which is not a hidden job"
         assert target not in seen, f"extends cycle at {target}"
-        body = {**_resolved(ci, target, (*seen, name)), **body}
+        parent = _resolved(ci, target, (*seen, name))
+        # GitLab merges hashes across `extends:`, so a job's own `variables:`
+        # adds to its template's rather than replacing them.
+        variables = {**(parent.get("variables") or {}), **(body.get("variables") or {})}
+        body = {**parent, **body}
+        if variables:
+            body["variables"] = variables
     return body
+
+
+def _job_shell(ci: dict, name: str) -> str:
+    """One job's `script:` as a shell program, its resolved `variables:` exported
+    first, the way the runner sets them."""
+    variables = _resolved(ci, name).get("variables") or {}
+    exports = [f"export {key}={shlex.quote(str(value))}" for key, value in variables.items()]
+    return "set -e\n" + "\n".join([*exports, *_resolved(ci, name)["script"]])
 
 
 def _pipeline_jobs(ci: dict) -> list[str]:
@@ -1778,8 +1833,19 @@ def test_the_tenant_gitleaks_config_extends_the_default_rules(repo):
 _TOOLCHAIN_HINT = "Install it in the test job the way validate-rendered-app does."
 
 
-def _run(repo_path: Path, *command: str) -> subprocess.CompletedProcess:
-    return subprocess.run(command, cwd=repo_path, capture_output=True, text=True)
+def _run(repo_path: Path, *command: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(command, cwd=repo_path, capture_output=True, text=True, env=env)
+
+
+def _offline_kubeconform(bindir: Path) -> dict[str, str]:
+    """An env whose kubeconform prints a clean summary, so a job script that runs
+    flux-lint.sh over the real `kustomize build` needs no schema download."""
+    bindir.mkdir(parents=True)
+    (bindir / "kubeconform").write_text(f"#!/bin/sh\nprintf '%s\\n' '{CLEAN_SUMMARY}'\n")
+    (bindir / "kubeconform").chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = f"{bindir}{os.pathsep}{env['PATH']}"
+    return env
 
 
 def test_generated_repo_passes_yamllint(repo):
@@ -2365,6 +2431,24 @@ def test_every_local_gate_has_a_pre_commit_hook(repo, hook_id):
     )
 
 
+def _hook_paths(hook: dict) -> list[str]:
+    """The repo paths a hook's entry names, read through an `sh -c` wrapper and
+    with a closing `$(...)` parenthesis stripped."""
+    tokens = shlex.split(hook["entry"])
+    if tokens[:2] == ["sh", "-c"]:
+        tokens = shlex.split(tokens[2])
+    paths = [token.rstrip(")") for token in tokens]
+    return [token for token in paths if token.startswith(("scripts/", "kubernetes/"))]
+
+
+def _hook_targets(repo: Repo, token: str) -> list[Path]:
+    """The files or directories one entry path names, a glob expanded."""
+    if "*" in token:
+        return sorted(repo.path.glob(token))
+    target = repo.path / token
+    return [target] if target.exists() else []
+
+
 def _hook_scanned_paths(repo: Repo, hook: dict) -> list[str]:
     """The render-relative paths a hook's `files:` filter has to match for
     pre-commit to invoke it: every Markdown file for doc-links, and the trees the
@@ -2372,12 +2456,10 @@ def _hook_scanned_paths(repo: Repo, hook: dict) -> list[str]:
     if hook["id"] == "doc-links":
         return [str(path.relative_to(repo.path)) for path in sorted(repo.path.rglob("*.md"))]
     scanned: list[str] = []
-    for token in hook["entry"].split():
-        if not token.startswith(("scripts/", "kubernetes/")):
-            continue
-        target = repo.path / token
-        found = [target] if target.is_file() else sorted(target.rglob("*.yaml"))
-        scanned += [str(path.relative_to(repo.path)) for path in found]
+    for token in _hook_paths(hook):
+        for target in _hook_targets(repo, token):
+            found = [target] if target.is_file() else sorted(target.rglob("*.yaml"))
+            scanned += [str(path.relative_to(repo.path)) for path in found]
     return scanned
 
 
@@ -2386,12 +2468,11 @@ def test_every_local_hook_runs_a_path_the_render_ships(repo):
     `github` and `none` the hooks are the only automatic runner. A `files:` that
     matches none of those paths is a hook pre-commit never invokes."""
     for hook in _local_hooks(repo):
-        for token in hook["entry"].split():
-            if token.startswith(("scripts/", "kubernetes/")):
-                assert (repo.path / token).exists(), (
-                    f"pre-commit hook {hook['id']} runs {token}, which the render "
-                    "does not ship"
-                )
+        for token in _hook_paths(hook):
+            assert _hook_targets(repo, token), (
+                f"pre-commit hook {hook['id']} runs {token}, which the render "
+                "does not ship"
+            )
         if "files" not in hook:
             continue
         scanned = _hook_scanned_paths(repo, hook)
@@ -2448,7 +2529,9 @@ def _flux_lint_script(repo: Repo, **overrides: str) -> str:
     one var's value references another's. `overrides` stands in for a tenant's edit."""
     taskfile = yaml.safe_load((repo.path / "Taskfile.yml").read_text())
     taskfile["vars"].update(overrides)
-    script = "\n".join(taskfile["tasks"]["flux-lint"]["cmds"])
+    # `set -e`: go-task stops at the first failing cmd, and an unset errexit would
+    # report only the last cmd's status once a render ships more than one.
+    script = "set -e\n" + "\n".join(taskfile["tasks"]["flux-lint"]["cmds"])
     for _ in range(10):
         before = script
         for name, value in taskfile["vars"].items():
@@ -2625,11 +2708,13 @@ def _gate_scripts(repo: Repo, task: str, job: str) -> list[str]:
     assert {"task": task} in taskfile["tasks"]["lint"]["cmds"], (
         f"the {task} task exists but `task lint` does not run it"
     )
-    scripts = ["\n".join(taskfile["tasks"][task]["cmds"])]
+    # `set -e`: go-task and a GitLab job both stop at the first failing line, so
+    # the database render's second cmd cannot mask the first one's failure here.
+    scripts = ["set -e\n" + "\n".join(taskfile["tasks"][task]["cmds"])]
     if repo.answers["ci_shape"] == "gitlab_selfhosted":
         ci = render_app.load_ci(repo.path / ".gitlab-ci.yml")
         assert job in ci, f"the GitLab pipeline runs no {task} gate"
-        scripts.append("\n".join(_resolved(ci, job)["script"]))
+        scripts.append(_job_shell(ci, job))
     return scripts
 
 
@@ -2926,9 +3011,13 @@ def test_the_platform_contract_names_what_the_manifests_bind_to(repo):
     expected |= metrics
     # The wiring block's dependsOn names a platform stage. A cluster without
     # that name leaves the tenant Kustomization retrying with nothing applied.
-    for document in _onboarding_wiring(repo.path):
+    wiring = _onboarding_wiring(repo.path)
+    # A dependency on a Kustomization defined here (the database) is not one.
+    own = {d["metadata"]["name"] for d in wiring if d.get("kind") == "Kustomization"}
+    for document in wiring:
         for dependency in (document.get("spec") or {}).get("dependsOn") or []:
-            expected.add(dependency["name"])
+            if dependency["name"] not in own:
+                expected.add(dependency["name"])
     # A policy peer ANDs its namespace and pod labels, so both values are a
     # prerequisite: the DNS peer names kube-system AND k8s-app: kube-dns, and a
     # cluster labelling CoreDNS otherwise loses name resolution silently.
@@ -2942,8 +3031,46 @@ def test_the_platform_contract_names_what_the_manifests_bind_to(repo):
                         peers |= set((peer.get(key) or {}).get("matchLabels", {}).values())
     assert peers, "the policies name no label-selected peer"
     expected |= peers
+    if _wants_db(repo.answers):
+        # The db tree's cross-namespace peers (the CNPG operator, the scraper)
+        # and the platform objects its manifests and alert depend on. A peer
+        # with no namespaceSelector is this namespace's own pod, not a prerequisite.
+        db_peers = set()
+        for path in sorted((repo.path / DB).glob("networkpolicy*.yaml")):
+            for policy in yaml.safe_load_all(path.read_text()):
+                spec = (policy or {}).get("spec") or {}
+                for rule in (spec.get("ingress") or []) + (spec.get("egress") or []):
+                    for peer in (rule.get("from") or []) + (rule.get("to") or []):
+                        if "namespaceSelector" not in peer:
+                            continue
+                        for key in ("namespaceSelector", "podSelector"):
+                            db_peers |= set((peer.get(key) or {}).get("matchLabels", {}).values())
+        assert {"cnpg-system", "cloudnative-pg"} <= db_peers, sorted(db_peers)
+        expected |= db_peers | DB_PLATFORM_CONTRACT
     missing = sorted(name for name in expected if name not in architecture)
     assert not missing, f"the Platform contract does not name {missing}"
+
+
+# What the database component needs from the cluster beyond its policy peers:
+# the CRD groups and kinds it applies, the class its claim names, and the
+# Prometheus input without which the PodMonitor is never selected.
+DB_PLATFORM_CONTRACT = {
+    "postgresql.cnpg.io",
+    "barmancloud.cnpg.io",
+    "PodMonitor",
+    "tenant-local",
+    "podMonitorSelectorNilUsesHelmValues: false",
+}
+
+
+def test_the_consuming_contract_names_the_database_prerequisites():
+    """docs/CONSUMING.md § What your cluster must provide is read before the
+    database answer is given, so it names the same prerequisites."""
+    consuming = (REPO_ROOT / "docs" / "CONSUMING.md").read_text(encoding="utf-8")
+    section = consuming.split("## What your cluster must provide")[1].split("\n## ")[0]
+    expected = DB_PLATFORM_CONTRACT | {"cnpg-system", "app.kubernetes.io/name: cloudnative-pg"}
+    missing = sorted(name for name in expected if name not in section)
+    assert not missing, f"CONSUMING.md's cluster contract does not name {missing}"
 
 
 def _alert_metrics(root: Path) -> set[str]:
@@ -3055,3 +3182,601 @@ def test_the_vpa_cap_matches_the_container_limit(repo):
         "vpa.yaml must keep controlledValues: RequestsOnly, or the VPA moves the "
         "deployment.yaml limits.memory its maxAllowed is pinned to"
     )
+
+
+DB = "kubernetes/db"
+
+
+def _wants_db(answers: dict) -> bool:
+    return answers.get("database") == "postgres" and answers.get("secrets_backend") == "onepassword"
+
+
+def _skip_without_db(answers: dict) -> None:
+    if not _wants_db(answers):
+        pytest.skip("database component not rendered")
+
+
+def test_the_database_component_renders_only_when_asked(repo):
+    assert (repo.path / DB).is_dir() is _wants_db(repo.answers)
+
+
+def test_the_database_cluster_keeps_its_safeguards(repo):
+    _skip_without_db(repo.answers)
+    cluster = yaml.safe_load((repo.path / DB / "cluster.yaml").read_text())
+    spec = cluster["spec"]
+    assert spec["instances"] == 1
+    assert spec["enablePDB"] is False
+    assert cluster["metadata"]["annotations"]["kustomize.toolkit.fluxcd.io/prune"] == "disabled"
+    assert spec["storage"] == {"storageClass": "tenant-local", "size": repo.answers["db_storage_size"]}
+    assert spec["plugins"][0]["parameters"]["barmanObjectName"] == f"{repo.answers['app_slug']}-backups"
+
+
+@pytest.mark.parametrize("name", ["cluster.yaml", "objectstore.yaml", "pvc-pg-dump.yaml"])
+def test_the_database_stateful_objects_are_never_pruned(repo, name):
+    """Removing the manifest or the db Kustomization must not delete the Cluster,
+    the WAL archive, or the claim fronting the retained dumps."""
+    _skip_without_db(repo.answers)
+    doc = yaml.safe_load((repo.path / DB / name).read_text())
+    assert doc["metadata"].get("annotations", {}).get("kustomize.toolkit.fluxcd.io/prune") == "disabled"
+
+
+def test_the_database_tree_lists_every_file(repo):
+    _skip_without_db(repo.answers)
+    listed = set(yaml.safe_load((repo.path / DB / "kustomization.yaml").read_text())["resources"])
+    on_disk = {p.name for p in (repo.path / DB).glob("*.yaml")} - {"kustomization.yaml"}
+    assert listed == on_disk
+
+
+def test_the_role_secrets_follow_the_library_contract(repo):
+    _skip_without_db(repo.answers)
+    docs = list(yaml.safe_load_all((repo.path / DB / "externalsecret-roles.yaml").read_text()))
+    keys = {"username", "user", "password", "host", "port", "dbname", "sslmode", "uri"}
+    assert len(docs) == 3
+    for doc in docs:
+        assert set(doc["spec"]["target"]["template"]["data"]) == keys
+        assert "{{ .password }}" in doc["spec"]["target"]["template"]["data"]["password"]
+
+
+def test_the_role_secrets_read_the_answered_item(repo):
+    _skip_without_db(repo.answers)
+    docs = list(yaml.safe_load_all((repo.path / DB / "externalsecret-roles.yaml").read_text()))
+    item = f"{repo.answers['app_slug']}: {repo.answers['db_roles_item']}"
+    for doc in docs:
+        assert {ref["remoteRef"]["key"] for ref in doc["spec"]["data"]} == {item}
+
+
+# The template directory that renders kubernetes/db, found by its rendered name
+# so the test does not repeat the conditional-path expression.
+DB_TEMPLATE_DIR = next(
+    path for path in (REPO_ROOT / "template" / "kubernetes").iterdir()
+    if path.is_dir() and path.name.endswith("db{% endif %}")
+)
+
+
+@pytest.mark.parametrize(
+    "manifest,answer",
+    [("externalsecret-roles.yaml", "db_roles_item"), ("externalsecret-backups.yaml", "db_backup_item")],
+)
+def test_an_item_title_with_a_quote_still_renders_valid_yaml(answers, manifest, answer):
+    """The validator refuses a quote in an item title; the manifest stays valid
+    YAML without it, so a title that slips past still names the right item."""
+    title = 'Database "Production" \\ \'eu\''
+    env = jinja2.Environment(  # noqa: S701 - rendering our own template, not HTML
+        keep_trailing_newline=True, undefined=jinja2.StrictUndefined
+    )
+    source = (DB_TEMPLATE_DIR / f"{manifest}.jinja").read_text()
+    text = env.from_string(source).render(**{**answers, answer: title})
+    keys = {
+        ref["remoteRef"]["key"]
+        for doc in yaml.safe_load_all(text)
+        for ref in doc["spec"]["data"]
+    }
+    assert keys == {f"{answers['app_slug']}: {title}"}
+
+
+def test_the_dump_is_a_db_component_selected_by_its_instance(repo):
+    """The dump carries component db (the spec's component set) and its own
+    instance label, which its egress policy selects so the instance pods stay out."""
+    _skip_without_db(repo.answers)
+    slug = repo.answers["app_slug"]
+    expected = {
+        "app.kubernetes.io/name": slug,
+        "app.kubernetes.io/component": "db",
+        "app.kubernetes.io/instance": f"{slug}-pg-dump",
+    }
+    cronjob = yaml.safe_load((repo.path / DB / "cronjob-pg-dump.yaml").read_text())
+    pvc = yaml.safe_load((repo.path / DB / "pvc-pg-dump.yaml").read_text())
+    assert cronjob["metadata"]["labels"] == expected
+    assert cronjob["spec"]["jobTemplate"]["spec"]["template"]["metadata"]["labels"] == expected
+    assert pvc["metadata"]["labels"] == expected
+    policies = {
+        doc["metadata"]["name"]: doc
+        for doc in yaml.safe_load_all((repo.path / DB / "networkpolicy.yaml").read_text())
+    }
+    assert policies["backup-allow-egress"]["spec"]["podSelector"] == {
+        "matchLabels": {"app.kubernetes.io/instance": f"{slug}-pg-dump"}
+    }
+
+
+def test_the_onboarding_wiring_reconciles_the_database_first(repo):
+    text = (repo.path / "docs" / "ONBOARDING.md").read_text()
+    assert ("path: ./kubernetes/db" in text) is _wants_db(repo.answers)
+    assert (f"    - name: {repo.answers['app_slug']}-db\n" in text) is _wants_db(repo.answers)
+    assert ("### O6b" in text) is _wants_db(repo.answers)
+
+
+def test_the_docs_call_the_app_stateless_only_without_a_database(repo):
+    """A tenant told the app is stateless skips the backup and restore duties
+    the database component brings."""
+    for doc in ("ONBOARDING.md", "ARCHITECTURE.md"):
+        text = (repo.path / "docs" / doc).read_text()
+        assert ("stateless" in text) is not _wants_db(repo.answers), doc
+        if _wants_db(repo.answers):
+            assert "kubernetes/db" in text and "O6b" in text, doc
+        assert "mounts no volume" not in " ".join(text.split()), doc
+    architecture = (REPO_ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    storage = architecture.split("**It does not ship storage**")[1].split("\n- ")[0]
+    assert "database: postgres" in storage, "the template map still calls every render stateless"
+
+
+def _rule(root: Path, path: str, alert: str) -> dict:
+    rules = yaml.safe_load((root / path).read_text())
+    found = [r for g in rules["spec"]["groups"] for r in g["rules"] if r.get("alert") == alert]
+    assert len(found) == 1, f"{alert} in {path}: {found}"
+    return found[0]
+
+
+def test_database_absent_follows_any_instance_serial(repo):
+    """CNPG re-creates a lost instance under the next serial (<slug>-db-2), so a
+    pinned pod name pages for ever on a healthy database."""
+    _skip_without_db(repo.answers)
+    slug, namespace = repo.answers["app_slug"], repo.answers["app_namespace"]
+    rule = _rule(repo.path, f"{DB}/prometheusrule.yaml", "DatabaseAbsent")
+    assert rule["expr"] == (
+        f'absent(cnpg_collector_up{{namespace="{namespace}", pod=~"{slug}-db-[0-9]+"}})'
+    )
+    assert "15m" in rule["annotations"]["description"]
+    assert rule["annotations"]["runbook_url"] == repo.answers["db_runbook_url"]
+
+
+def test_the_role_uri_encodes_a_space_as_percent_20(repo):
+    """urlquery is query escaping: a space becomes '+', which libpq reads in
+    URI userinfo as a literal plus."""
+    _skip_without_db(repo.answers)
+    docs = list(yaml.safe_load_all((repo.path / DB / "externalsecret-roles.yaml").read_text()))
+    for doc in docs:
+        uri = doc["spec"]["target"]["template"]["data"]["uri"]
+        assert '{{ .password | urlquery | replace "+" "%20" }}' in uri, uri
+    onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text()
+    assert "without spaces" in onboarding
+
+
+def _selects(selector: dict, labels: dict) -> bool:
+    """Whether a LabelSelector matches a pod carrying `labels`."""
+    if any(labels.get(k) != v for k, v in (selector.get("matchLabels") or {}).items()):
+        return False
+    for expression in selector.get("matchExpressions") or []:
+        key, operator, values = expression["key"], expression["operator"], expression.get("values")
+        present = key in labels
+        if operator == "In" and not (present and labels[key] in values):
+            return False
+        if operator == "NotIn" and present and labels[key] in values:
+            return False
+        if operator == "Exists" and not present:
+            return False
+        if operator == "DoesNotExist" and present:
+            return False
+    return True
+
+
+def _db_pods(slug: str) -> dict[str, dict]:
+    """The labels the dump and instance pods carry, the app's name label among them."""
+    return {
+        "dump": {
+            "app.kubernetes.io/name": slug,
+            "app.kubernetes.io/component": "db",
+            "app.kubernetes.io/instance": f"{slug}-pg-dump",
+        },
+        "instance": {
+            "app.kubernetes.io/name": slug,
+            "app.kubernetes.io/component": "db",
+            "cnpg.io/cluster": f"{slug}-db",
+        },
+    }
+
+
+# The vendored check-scrape-wiring.py does not credit a podSelector carrying
+# matchExpressions, so the scrape allow keeps matchLabels only and selects the db pods
+# too; it opens app_port to observability, so copier rejects 5432, 8000 and 9187 there.
+SCRAPE_GATE_SELECTOR_EXEMPT = {"allow-scrape-from-observability"}
+
+
+def test_the_scrape_allow_opens_no_database_port(repo):
+    """The scrape allow selects the db pods too, so its port, app_port, must
+    not be one the db pods listen on; db-allow-ingress names those ports."""
+    _skip_without_db(repo.answers)
+    db_docs = yaml.safe_load_all((repo.path / DB / "networkpolicy.yaml").read_text())
+    db_ingress = next(d for d in db_docs if d and d["metadata"]["name"] == "db-allow-ingress")
+    db_ports = {p["port"] for rule in db_ingress["spec"]["ingress"] for p in rule["ports"]}
+    assert db_ports == {5432, 8000, 9187}, f"the db pods' ports changed: {sorted(db_ports)}"
+    scrape_ports = set()
+    for path in _manifests(repo.path, "networkpolicy*"):
+        for policy in yaml.safe_load_all(path.read_text()):
+            if (policy or {}).get("metadata", {}).get("name") in SCRAPE_GATE_SELECTOR_EXEMPT:
+                scrape_ports |= {
+                    p["port"] for rule in policy["spec"]["ingress"] for p in rule["ports"]
+                }
+    app_port = int(repo.answers["app_port"])
+    assert app_port not in db_ports, f"the fixture answers app_port {app_port}, a db port"
+    expected = {app_port} if repo.answers["enable_servicemonitor"] else set()
+    assert scrape_ports == expected, scrape_ports
+    assert not scrape_ports & db_ports, f"the scrape allow opens db port(s) {scrape_ports & db_ports}"
+
+
+def test_no_app_policy_selects_the_database_pods(repo):
+    """The instance and dump pods carry the app's name label; an app allow that
+    selects them gives the credential-holding dump public egress and opens the
+    instances to Traefik and the scraper."""
+    _skip_without_db(repo.answers)
+    slug = repo.answers["app_slug"]
+    db_pods = _db_pods(slug)
+    app_pod = {"app.kubernetes.io/name": slug}
+    allows = []
+    for path in _manifests(repo.path, "networkpolicy*"):
+        for policy in yaml.safe_load_all(path.read_text()):
+            spec = (policy or {}).get("spec") or {}
+            name = (policy or {}).get("metadata", {}).get("name")
+            if name in SCRAPE_GATE_SELECTOR_EXEMPT:
+                continue
+            if spec.get("ingress") or spec.get("egress"):
+                allows.append((name, spec["podSelector"]))
+    assert allows, "kubernetes/flux carries no allow policy"
+    for name, selector in allows:
+        assert _selects(selector, app_pod), f"{name} no longer selects the app's pods"
+        for pod, labels in db_pods.items():
+            assert not _selects(selector, labels), f"{name} selects the database {pod} pod"
+
+
+def test_app_db_egress_does_not_select_the_database_pods(repo):
+    """The instance and dump pods carry the app's name label, so a name-only
+    selector hands them the app's egress to Postgres as well."""
+    _skip_without_db(repo.answers)
+    slug = repo.answers["app_slug"]
+    docs = yaml.safe_load_all((repo.path / DB / "networkpolicy.yaml").read_text())
+    policy = next(d for d in docs if d and d["metadata"]["name"] == "app-allow-egress-db")
+    selector = policy["spec"]["podSelector"]
+    assert _selects(selector, {"app.kubernetes.io/name": slug}), "no longer selects the app's pods"
+    for pod, labels in _db_pods(slug).items():
+        assert not _selects(selector, labels), f"app-allow-egress-db selects the database {pod} pod"
+
+
+def test_architecture_names_what_selects_the_database_pods(repo):
+    """The database paragraph names each app policy that excludes the db pods,
+    and the scrape allow that still selects them while the gate is exempt."""
+    _skip_without_db(repo.answers)
+    architecture = (repo.path / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    paragraph = architecture.split("The instance and dump pods carry")[1].split("\n\n")[0]
+    assert "The app's NetworkPolicies" not in paragraph, "overclaims every app policy"
+    wide = [line for line in paragraph.splitlines() if len(line) > 80]
+    assert not wide, f"db paragraph renders past 80 columns: {wide}"
+    for path in _manifests(repo.path, "networkpolicy*"):
+        for policy in yaml.safe_load_all(path.read_text()):
+            spec = (policy or {}).get("spec") or {}
+            if spec.get("ingress") or spec.get("egress"):
+                name = policy["metadata"]["name"]
+                assert f"`{name}`" in paragraph, f"{name} is unnamed in the db paragraph"
+    scrape_named = "`allow-scrape-from-observability`" in paragraph
+    assert scrape_named is bool(repo.answers["enable_servicemonitor"])
+
+
+def test_the_wiring_quota_counts_the_database_claim(repo):
+    """tenant-local does not enforce a claim's size, so the quota is the cap."""
+    quotas = [d for d in _onboarding_wiring(repo.path) if d.get("kind") == "ResourceQuota"]
+    assert len(quotas) == 1
+    hard = quotas[0]["spec"]["hard"]
+    storage_key = "tenant-local.storageclass.storage.k8s.io/requests.storage"
+    if _wants_db(repo.answers):
+        size = int(repo.answers["db_storage_size"].removesuffix("Gi"))
+        assert hard["persistentvolumeclaims"] == "4"
+        assert hard[storage_key] == f"{size * 2}Gi"
+    else:
+        assert "persistentvolumeclaims" not in hard and storage_key not in hard
+
+
+def test_o6b_registers_the_dump_with_the_backup_freshness_check(repo):
+    """A dump nobody watches stops silently; the cluster's freshness alert only
+    knows the apps it is told about."""
+    _skip_without_db(repo.answers)
+    slug = repo.answers["app_slug"]
+    onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text()
+    o6b = onboarding.split("### O6b")[1].split("\n### ")[0]
+    assert "nas_storage_backup_artifact_apps" in o6b
+    assert f'{{name: {slug}, pattern: "{slug}-*.sql.gz"}}' in o6b
+    assert f'absent(backup_artifact_last_mtime_seconds{{app="{slug}"}})' in o6b
+    assert "check-backup-artifact-apps" in o6b
+
+
+def test_the_dump_runs_the_server_image(repo):
+    """pg_dump must never be older than the server it dumps."""
+    _skip_without_db(repo.answers)
+    cluster = yaml.safe_load((repo.path / DB / "cluster.yaml").read_text())
+    cronjob = yaml.safe_load((repo.path / DB / "cronjob-pg-dump.yaml").read_text())
+    containers = cronjob["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"]
+    assert [c["image"] for c in containers] == [cluster["spec"]["imageName"]]
+
+
+def test_the_app_mounts_its_database_secret_as_files(repo):
+    deployment = yaml.safe_load((repo.path / FLUX / "deployment.yaml").read_text())
+    pod = deployment["spec"]["template"]["spec"]
+    secrets = {v["secret"]["secretName"] for v in pod["volumes"] if "secret" in v}
+    expected = {f"{repo.answers['app_slug']}-db-app", f"{repo.answers['app_slug']}-db-ca"}
+    probe = pod["containers"][0]["readinessProbe"]["httpGet"]["path"]
+    if _wants_db(repo.answers):
+        assert expected <= secrets
+        slug = repo.answers["app_slug"]
+        by_name = {v["name"]: v for v in pod["volumes"]}
+        assert by_name["db"]["secret"] == {"secretName": f"{slug}-db-app"}
+        assert by_name["db-ca"]["secret"]["items"] == [{"key": "ca.crt", "path": "ca.crt"}]
+        assert {s for s in secrets if s.startswith(f"{slug}-db-")} == expected
+        mounts = pod["containers"][0]["volumeMounts"]
+        assert not any("subPath" in m for m in mounts)
+        assert {m["name"]: m["mountPath"] for m in mounts if m["name"].startswith("db")} == {
+            "db": "/var/run/secrets/db",
+            "db-ca": "/var/run/secrets/db-ca",
+        }
+        assert probe == "/readyz"
+        assert pod["containers"][0]["livenessProbe"]["httpGet"]["path"] == "/"
+    else:
+        assert not expected & secrets
+        assert probe == "/"
+
+
+def test_the_database_gates_ship_with_the_database(repo):
+    for gate in ("check-cnpg-clusters.py", "check-pvc-storageclass.py"):
+        assert (repo.path / "scripts" / gate).is_file() is _wants_db(repo.answers)
+
+
+def _drop_prune_annotation(cluster: dict) -> None:
+    del cluster["metadata"]["annotations"]["kustomize.toolkit.fluxcd.io/prune"]
+
+
+def _drop_storage_class(cluster: dict) -> None:
+    del cluster["spec"]["storage"]["storageClass"]
+
+
+def _patch_out_prune_annotation(work: Path) -> None:
+    """Strip the prune guard with a Kustomize patch and leave cluster.yaml whole:
+    only a gate reading the built output sees what Flux applies."""
+    path = work / DB / "kustomization.yaml"
+    document = yaml.safe_load(path.read_text())
+    remove = [{"op": "remove", "path": "/metadata/annotations/kustomize.toolkit.fluxcd.io~1prune"}]
+    document.setdefault("patches", []).append(
+        {"target": {"kind": "Cluster"}, "patch": yaml.safe_dump(remove)}
+    )
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+
+
+def _mutate_cluster(work: Path, mutate) -> None:
+    cluster_path = work / DB / "cluster.yaml"
+    cluster = yaml.safe_load(cluster_path.read_text())
+    mutate(cluster)
+    cluster_path.write_text(yaml.safe_dump(cluster))
+
+
+def test_the_database_gates_run_green_and_reject_a_dropped_safeguard_or_class(repo, tmp_path):
+    """Both shipped forms (the `database` task, the db-manifest-check job) pass the
+    render; check-cnpg-clusters fails on a prune annotation dropped in the source
+    or by a patch, check-pvc-storageclass on a dropped class."""
+    _skip_without_db(repo.answers)
+    require_tool("kustomize", "database gates", _TOOLCHAIN_HINT, ci_optional=True)
+    mutations = (
+        ("prune", lambda work: _mutate_cluster(work, _drop_prune_annotation), "safeguard"),
+        ("class", lambda work: _mutate_cluster(work, _drop_storage_class), None),
+        ("patch", _patch_out_prune_annotation, "safeguard"),
+    )
+    env = _offline_kubeconform(tmp_path / "offline" / "bin")
+    for label, mutate, header in mutations:
+        for work, script in _gate_runs(repo, tmp_path, f"db-{label}", "database", "db-manifest-check"):
+            result = _run(work, "sh", "-c", script, env=env)
+            assert result.returncode == 0, result.stdout + result.stderr
+            mutate(work)
+            result = _run(work, "sh", "-c", script, env=env)
+            assert result.returncode != 0, f"the {label} mutation passed the gate"
+            if header:
+                assert header in result.stderr, result.stdout + result.stderr
+
+
+def test_validate_render_runs_the_database_gates_over_the_built_tree(repo, tmp_path, monkeypatch):
+    """A patch in kubernetes/db/kustomization.yaml changes what Flux applies and
+    leaves every source file intact, so the gates must read `kustomize build`."""
+    _skip_without_db(repo.answers)
+    require_tool("kustomize", "validate_render database gates", _TOOLCHAIN_HINT, ci_optional=True)
+    monkeypatch.setattr(validate_render, "_kubeconform", lambda *args, **kwargs: None)
+    work = tmp_path / "validate-db"
+    shutil.copytree(repo.path, work)
+    runner = validate_render.Runner(work)
+    validate_render._validate_db(runner, work, "unused", repo.answers["k8s_version"])
+    assert runner.failures == []
+    _patch_out_prune_annotation(work)
+    runner = validate_render.Runner(work)
+    validate_render._validate_db(runner, work, "unused", repo.answers["k8s_version"])
+    assert "cnpg clusters" in runner.failures, runner.failures
+
+
+def test_validate_render_reads_the_dump_time_zone_from_the_build(repo, tmp_path, monkeypatch):
+    """A patch can replace the dump CronJob's zone and leave the source file
+    valid, so the timezone gate must read `kustomize build`."""
+    _skip_without_db(repo.answers)
+    require_tool("kustomize", "validate_render dump timezone", _TOOLCHAIN_HINT, ci_optional=True)
+    monkeypatch.setattr(validate_render, "_kubeconform", lambda *args, **kwargs: None)
+    work = tmp_path / "validate-db-tz"
+    shutil.copytree(repo.path, work)
+    path = work / DB / "kustomization.yaml"
+    document = yaml.safe_load(path.read_text())
+    replace = [{"op": "replace", "path": "/spec/timeZone", "value": "America/Los_Angelos"}]
+    document.setdefault("patches", []).append(
+        {"target": {"kind": "CronJob"}, "patch": yaml.safe_dump(replace)}
+    )
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+    runner = validate_render.Runner(work)
+    validate_render._validate_db(runner, work, "unused", repo.answers["k8s_version"])
+    assert runner.failures == ["dump timezone"], runner.failures
+
+
+PRUNE = "kustomize.toolkit.fluxcd.io/prune"
+
+
+def _static_claims_flux_may_prune(tree: Path) -> list[str]:
+    """Claims in `kustomize build kubernetes/db` bound to a named volume and
+    missing the prune guard: pruning one releases its volume for good."""
+    result = _run(tree, "kustomize", "build", DB)
+    assert result.returncode == 0, result.stderr
+    return [
+        doc["metadata"]["name"]
+        for doc in yaml.safe_load_all(result.stdout)
+        if doc and doc.get("kind") == "PersistentVolumeClaim"
+        and doc.get("spec", {}).get("volumeName")
+        and (doc["metadata"].get("annotations") or {}).get(PRUNE) != "disabled"
+    ]
+
+
+def test_every_statically_bound_claim_is_never_pruned_in_the_built_tree(repo, tmp_path):
+    """Checked on the build output, so a kustomize patch cannot strip the guard
+    unseen. The vendored check-pvc-storageclass gate subsumes this once
+    weisssrv-lib ships the same check."""
+    _skip_without_db(repo.answers)
+    require_tool("kustomize", "database built-tree checks", _TOOLCHAIN_HINT, ci_optional=True)
+    assert _static_claims_flux_may_prune(repo.path) == []
+    work = tmp_path / "prune-pvc"
+    shutil.copytree(repo.path, work)
+    path = work / DB / "kustomization.yaml"
+    document = yaml.safe_load(path.read_text())
+    remove = [{"op": "remove", "path": "/metadata/annotations/kustomize.toolkit.fluxcd.io~1prune"}]
+    document.setdefault("patches", []).append(
+        {"target": {"kind": "PersistentVolumeClaim"}, "patch": yaml.safe_dump(remove)}
+    )
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+    assert _static_claims_flux_may_prune(work) == [f"{repo.answers['app_slug']}-pg-dump"]
+
+
+@pytest.mark.parametrize("keyword", ["true", "null", "off"])
+def test_a_yaml_keyword_db_name_still_renders_a_string(answers, keyword):
+    """The validator refuses a YAML keyword as db_name; the manifests still carry
+    a string without it, so initdb and the role Secrets name the database."""
+    env = jinja2.Environment(  # noqa: S701 - rendering our own template, not HTML
+        keep_trailing_newline=True, undefined=jinja2.StrictUndefined
+    )
+    values = {**answers, "db_name": keyword}
+    cluster = yaml.safe_load(
+        env.from_string((DB_TEMPLATE_DIR / "cluster.yaml.jinja").read_text()).render(**values)
+    )
+    assert cluster["spec"]["bootstrap"]["initdb"]["database"] == keyword
+    roles = (DB_TEMPLATE_DIR / "externalsecret-roles.yaml.jinja").read_text()
+    for doc in yaml.safe_load_all(env.from_string(roles).render(**values)):
+        assert doc["spec"]["target"]["template"]["data"]["dbname"] == keyword
+
+
+def test_the_gitlab_db_job_validates_the_db_tree_with_kubeconform(repo, tmp_path):
+    """The flux-lint include builds kubernetes/flux only, so db-manifest-check
+    is the pipeline's one schema check of kubernetes/db, on the Taskfile's pins."""
+    _skip_without_db(repo.answers)
+    if repo.answers["ci_shape"] != "gitlab_selfhosted":
+        pytest.skip("no GitLab pipeline rendered")
+    ci = render_app.load_ci(repo.path / ".gitlab-ci.yml")
+    body = _resolved(ci, "db-manifest-check")
+    script = [" ".join(str(line).split()) for line in body["script"]]
+    lint = [
+        index for index, line in enumerate(script)
+        if line.startswith("bash scripts/flux-lint.sh --mode simple")
+        and "--kustomize-path kubernetes/db" in line
+    ]
+    assert lint, f"db-manifest-check runs no kubeconform over kubernetes/db: {script}"
+    gates = [index for index, line in enumerate(script) if line.startswith("python3 ")]
+    assert lint[0] < min(gates), "kubeconform must run before the python gates"
+    fetch = [line for line in body["before_script"] if "scripts/ci-fetch-tools.py" in line]
+    assert fetch and {"kustomize", "kubeconform"} <= set(fetch[0].split()), body["before_script"]
+    taskvars = yaml.safe_load((repo.path / "Taskfile.yml").read_text())["vars"]
+    for key in ("ALLOWED_SKIPS", "K8S_VERSION", "CRD_CATALOG_REF"):
+        assert str(body["variables"][key]) == str(taskvars[key]), key
+    env = _stubbed_path(tmp_path / "db-invalid" / "bin", "kind: Service\n", INVALID_SUMMARY,
+                        kubeconform_rc=1)
+    result = subprocess.run(
+        ["sh", "-c", _job_shell(ci, "db-manifest-check")],
+        cwd=repo.path, capture_output=True, text=True, env=env,
+    )
+    assert result.returncode != 0, "db-manifest-check passed an invalid kubernetes/db resource"
+    assert "Invalid: 1" in result.stdout + result.stderr
+
+
+def test_the_pdb_leaves_the_database_pods_out(repo):
+    """An integer minAvailable counts every pod the selector matches: a database
+    pod in it lets a drain evict every app replica, and blocks the instance's
+    own eviction while the app is unready."""
+    _skip_without_db(repo.answers)
+    pdbs = _manifests(repo.path, "pdb")
+    if not pdbs:
+        pytest.skip("no PodDisruptionBudget rendered")
+    slug = repo.answers["app_slug"]
+    selector = yaml.safe_load(pdbs[0].read_text())["spec"]["selector"]
+    assert _selects(selector, {"app.kubernetes.io/name": slug}), "the PDB lost the app pods"
+    for pod, labels in _db_pods(slug).items():
+        assert not _selects(selector, labels), f"the PDB counts the database {pod} pod"
+
+
+def test_the_database_gates_have_a_pre_commit_hook(repo, tmp_path):
+    """On `github` and `none` the hook is the only automatic runner of the
+    kubernetes/db gates; it passes the render and reds a dropped safeguard."""
+    _skip_without_db(repo.answers)
+    hooks = {hook["id"]: hook for hook in _local_hooks(repo)}
+    assert "database" in hooks, "no pre-commit hook runs the kubernetes/db gates"
+    if not shutil.which("python"):
+        pytest.skip("no `python` on PATH to stand in for the hook venv's")
+    work = tmp_path / "hook"
+    shutil.copytree(repo.path, work)
+    command = shlex.split(hooks["database"]["entry"])
+    result = _run(work, *command)
+    assert result.returncode == 0, result.stdout + result.stderr
+    _mutate_cluster(work, _drop_prune_annotation)
+    result = _run(work, *command)
+    assert result.returncode != 0, "the database hook passed a Cluster with no prune guard"
+    shutil.copy(repo.path / DB / "cluster.yaml", work / DB / "cluster.yaml")
+    assert _run(work, *command).returncode == 0, "restoring cluster.yaml left the hook red"
+    _patch_out_prune_annotation(work)
+    result = _run(work, *command)
+    assert result.returncode != 0, "the database hook passed a patch stripping the prune guard"
+
+
+def test_the_lint_tasks_run_their_database_arm(repo, tmp_path):
+    """Under `set -e` every red above comes from the kubernetes/flux cmd, so the
+    kubernetes/db cmds need their own assertion and a red of their own."""
+    _skip_without_db(repo.answers)
+    tasks = yaml.safe_load((repo.path / "Taskfile.yml").read_text())["tasks"]
+    flux_lint = [" ".join(cmd.split()) for cmd in tasks["flux-lint"]["cmds"]]
+    assert any("--kustomize-path kubernetes/db" in cmd for cmd in flux_lint), flux_lint
+    assert "python3 scripts/check-netpol-except-parity.py kubernetes/db" in tasks["netpol"]["cmds"]
+    assert (
+        "python3 scripts/check-kustomization.py kubernetes/db" in tasks["kustomization"]["cmds"]
+    )
+    env = _offline_kubeconform(tmp_path / "offline" / "bin")
+    for work, script in _gate_runs(repo, tmp_path, "db-unlisted", "kustomization", "db-manifest-check"):
+        (work / DB / "configmap.yaml").write_text(
+            "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: unlisted\n"
+        )
+        result = _run(work, "sh", "-c", script, env=env)
+        assert result.returncode != 0, "an unlisted kubernetes/db manifest passed the gate"
+        assert "not listed" in result.stdout + result.stderr
+
+
+def test_generated_db_manifests_build(repo):
+    """kubernetes/db is built by its own Kustomization, so a tree kustomize cannot
+    build fails only here and in validate_render."""
+    _skip_without_db(repo.answers)
+    require_tool("kustomize", "generated-manifest build", _TOOLCHAIN_HINT, ci_optional=True)
+    result = _run(repo.path, "kustomize", "build", DB)
+    assert result.returncode == 0, result.stderr
+    kinds = {d["kind"] for d in yaml.safe_load_all(result.stdout) if d}
+    expected = {
+        "Cluster", "ObjectStore", "ScheduledBackup", "CronJob",
+        "PodMonitor", "PrometheusRule", "NetworkPolicy", "ExternalSecret",
+    }
+    assert expected <= kinds, sorted(expected - kinds)

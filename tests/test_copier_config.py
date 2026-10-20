@@ -29,7 +29,17 @@ NO_DEFAULT = ("app_slug", "git_namespace", "copyright_holder")
 # Cluster facts, undefaulted for the same reason: a defaults-only render would
 # otherwise lint, build and reconcile while publishing hostnames in someone
 # else's zone and pulling from someone else's registry.
-CLUSTER_NO_DEFAULT = ("external_domain", "internal_domain", "internal_vip", "runbook_url")
+CLUSTER_NO_DEFAULT = (
+    "external_domain",
+    "internal_domain",
+    "internal_vip",
+    "runbook_url",
+    # The database's cluster facts: B2 bucket names are global, so a guessed one
+    # names a bucket nobody created, and the API server nodes are the site's own.
+    "db_backup_bucket",
+    "db_apiserver_cidrs",
+    "db_runbook_url",
+)
 
 # The rest of the cluster block, which composes from the answers above rather
 # than naming a site: derived is safe precisely because the literal is gone.
@@ -262,6 +272,49 @@ def test_app_port_rejects_ports_the_pod_cannot_bind(port, rejected):
     assert bool(_validator_message("app_port", app_port=port)) is rejected
 
 
+# The ports the CloudNativePG instance pods listen on: PostgreSQL, the instance
+# manager's status endpoint, and the metrics exporter.
+DB_POD_PORTS = (5432, 8000, 9187)
+
+
+@pytest.mark.parametrize(
+    "database,port,rejected",
+    [
+        ("postgres", 8080, False),
+        *[("postgres", port, True) for port in DB_POD_PORTS],
+        *[("none", port, False) for port in DB_POD_PORTS],
+    ],
+)
+def test_database_rejects_an_app_port_the_db_pods_listen_on(database, port, rejected):
+    """The scrape allow selects on the app's name label alone, which the db pods
+    carry too, so an app_port equal to a db port opens it to observability."""
+    message = _validator_message("database", database=database, app_port=port)
+    assert bool(message) is rejected, message or "accepted, but should not be"
+    if rejected:
+        assert "app_port" in message and str(port) in message, message
+
+
+def test_copier_rejects_a_db_port_as_app_port(tmp_path):
+    """The database validator is wired on a choice question, end to end."""
+    src = render_app.copy_source(tmp_path)
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "copier", "copy", "--defaults", "--trust",
+            "--data-file", str(render_app.ANSWERS),
+            "--data", "database=postgres",
+            "--data", "app_port=8000",
+            str(src), str(tmp_path / "out"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0, "app_port 8000 was accepted with a database"
+    assert "question 'database'" in result.stdout + result.stderr, (
+        "the render failed for some other reason:\n" + result.stdout + result.stderr
+    )
+    assert not (tmp_path / "out" / "kubernetes").exists(), "a rejected render wrote manifests"
+
+
 @pytest.mark.parametrize(
     "vault,rejected",
     [
@@ -485,6 +538,79 @@ VALIDATOR_CASES = [
         "a single quote closes the quoted YAML scalar it renders into on every alert",
         {},
     ),
+    ("db_name", "nai", None, {}),
+    ("db_name", "not-an-insider", "a hyphen is not legal in an unquoted identifier", {}),
+    ("db_name", "true", "renders as a YAML boolean, not the database name", {}),
+    ("db_name", "yes", "renders as a YAML boolean, not the database name", {}),
+    ("db_name", "null", "renders as a YAML null, so initdb gets no database name", {}),
+    ("db_name", "off", "a YAML 1.1 boolean to the parsers that still read 1.1", {}),
+    ("db_name", "true_store", None, {}),
+    ("db_name", "postgres", "CNPG cannot create a built-in database as the app's", {}, "built-in"),
+    ("db_name", "template0", "CNPG cannot create a built-in database as the app's", {}, "built-in"),
+    ("db_name", "template1", "CNPG cannot create a built-in database as the app's", {}, "built-in"),
+    ("db_name", "postgres_app", None, {}),
+    ("db_role_prefix", "nai", None, {}),
+    ("db_role_prefix", "Nai", "roles are created lowercase and the uri names them unquoted", {}),
+    ("db_role_prefix", "pg_nai", "PostgreSQL reserves role names starting with pg_", {}, "pg_"),
+    ("db_role_prefix", "nai_pg", None, {}),
+    ("db_storage_size", "20Gi", None, {}),
+    ("db_storage_size", "20G", "a decimal G size is not the Gi quantity the storage quota counts", {}),
+    ("db_backup_endpoint", "https://s3.us-west-004.backblazeb2.com", None, {}),
+    ("db_backup_endpoint", "s3.us-west-004.backblazeb2.com", "no scheme, so Barman reads a bucket path", {}),
+    ("db_backup_endpoint", "https://s3.us-west-004.backblazeb2.com:443", None, {}),
+    ("db_backup_endpoint", "https://store.example:9000", "db-allow-egress opens only port 443", {}),
+    ("db_backup_endpoint", "https://store.example/bucket", "a path is not part of an S3 endpoint", {}),
+    ("db_backup_endpoint", "https://minio.storage.svc", "db-allow-egress opens 443 to public addresses only", {}, "public object store"),
+    ("db_backup_endpoint", "https://minio.storage.svc.cluster.local", "db-allow-egress opens 443 to public addresses only", {}, "public object store"),
+    ("db_backup_endpoint", "https://nas.local", "db-allow-egress opens 443 to public addresses only", {}, "public object store"),
+    ("db_backup_endpoint", "https://s3.corp.internal", "db-allow-egress opens 443 to public addresses only", {}, "public object store"),
+    ("db_backup_endpoint", "https://localhost", "db-allow-egress opens 443 to public addresses only", {}, "public object store"),
+    ("db_backup_endpoint", "https://minio.localhost", "db-allow-egress opens 443 to public addresses only", {}, "public object store"),
+    ("db_backup_endpoint", "https://10.0.10.5", "db-allow-egress opens 443 to public addresses only", {}, "public object store"),
+    ("db_backup_endpoint", "https://203.0.113.7:443", "db-allow-egress opens 443 to public addresses only", {}, "public object store"),
+    ("db_backup_endpoint", "https://s3.eu-central-003.backblazeb2.com", None, {}),
+    ("db_apiserver_cidrs", "10.0.10.222/32,10.0.10.223/32", None, {}),
+    ("db_apiserver_cidrs", "10.0.10.222", "a bare address is not a CIDR the ipBlock accepts", {}),
+    (
+        "db_apiserver_cidrs",
+        "10.0.10.222/32,999.999.999.999/32",
+        "an octet over 255 fails NetworkPolicy admission",
+        {},
+    ),
+    (
+        "db_apiserver_cidrs",
+        "10.0.10.222/32,10.0.0.0/8",
+        "a /8 opens 6443 egress to a whole network, not the API server nodes",
+        {},
+    ),
+    ("db_apiserver_cidrs", "10.0.10.222/99", "a prefix over 32 is no IPv4 CIDR", {}),
+    ("db_backup_item", "CNPG Backup", None, {}),
+    ("db_backup_item", 'Backup "Prod"', "a double quote closes the quoted remoteRef key", {}),
+    ("db_backup_item", "Backup\\Prod", "a backslash starts an escape in the quoted key", {}),
+    ("db_backup_item", " CNPG Backup", "1Password matches the title exactly, padding included", {}),
+    ("db_roles_item", "Database", None, {}),
+    ("db_roles_item", 'Database "Production"', "a double quote closes the quoted remoteRef key", {}),
+    ("db_roles_item", "Data\tbase", "a control character is no title anyone typed", {}),
+    ("db_roles_item", "Database ", "1Password matches the title exactly, padding included", {}),
+    ("db_backup_bucket", "weisssrv-cnpg-recipe-box", None, {}),
+    ("db_backup_bucket", "Recipe_Box", "renders unquoted into s3://<bucket>/, and S3 names are lowercase", {}),
+    ("db_backup_bucket", "s3://box-cnpg", "a scheme is not a bucket name", {}),
+    ("db_dump_timezone", "America/Los_Angeles", None, {}),
+    ("db_dump_timezone", "Etc/GMT+8", None, {}),
+    ("db_dump_timezone", "Pacific Time", "renders unquoted into timeZone:, and the CronJob is refused at apply", {}),
+    (
+        "db_runbook_url",
+        "https://git.example.com/homelab/cluster/-/blob/main/docs/postgres.md#postgres-down",
+        None,
+        {},
+    ),
+    ("db_runbook_url", "git.example.com/docs", "no scheme, so the alert annotation is not a link", {}),
+    (
+        "db_runbook_url",
+        "https://git.example.com/it's",
+        "a single quote closes the quoted YAML scalar DatabaseAbsent renders it into",
+        {},
+    ),
 ]
 
 
@@ -515,6 +641,7 @@ def test_validator_accepts_and_rejects(case):
 DEDICATED_VALIDATOR_TESTS = {
     "app_slug": "test_app_slug_must_be_a_dns_label",
     "app_port": "test_app_port_rejects_ports_the_pod_cannot_bind",
+    "database": "test_database_rejects_an_app_port_the_db_pods_listen_on",
     "internal_domain": "test_internal_domain_rejects_a_colliding_pair",
     "onepassword_vault": "test_onepassword_vault_rejects_names_the_store_cannot_carry",
     "lib_ref": "test_lib_ref_takes_release_tags_only",

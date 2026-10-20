@@ -39,6 +39,15 @@ vendored:
   # without the companion every tenant's egress fence exits 2 on import.
   - lib: scripts/gate_common.py
     consumer: template/scripts/gate_common.py
+  # The database component's two corpus gates; both import gate_common.py from
+  # their own directory, which every render already carries.
+  - lib: scripts/check-cnpg-clusters.py
+    consumer: "template/scripts/{% if database == 'postgres' and secrets_backend == 'onepassword' %}check-cnpg-clusters.py{% endif %}"
+  - lib: scripts/check-pvc-storageclass.py
+    consumer: "template/scripts/{% if database == 'postgres' and secrets_backend == 'onepassword' %}check-pvc-storageclass.py{% endif %}"
+  # db-manifest-check fetches kustomize with it, on a runner image that has none.
+  - lib: scripts/ci-fetch-tools.py
+    consumer: "template/scripts/{% if database == 'postgres' and secrets_backend == 'onepassword' and ci_shape == 'gitlab_selfhosted' %}ci-fetch-tools.py{% endif %}"
   - lib: scripts/check-ci-include-job-names.py
     consumer: "template/scripts/{% if ci_shape == 'gitlab_selfhosted' %}check-ci-include-job-names.py{% endif %}"
   - lib: scripts/check-lib-pins.py

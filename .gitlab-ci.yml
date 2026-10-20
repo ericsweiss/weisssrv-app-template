@@ -4,7 +4,7 @@ spec:
     lib_ref:
       # Single source for every weisssrv-lib pin below. An input interpolates
       # before `include:` resolves; a variable does not exist yet there.
-      default: v0.21.1
+      default: v0.22.1
 ---
 # CI for the template itself. The generic jobs come from the shared library, so
 # the template is linted by the same tooling it hands to a generated repo.
@@ -247,6 +247,11 @@ validate-rendered-app:
       --data enable_hpa=true --data enable_vpa=true
       --data enable_registry_pull_secret=true --data enable_image_build=true
       --data enable_sso=true --data replica_count=3
+    # The contrast fixture with the database on: kubernetes/db and every
+    # database arm rendered from answers unlike the reference cluster's.
+    - >-
+      python3 tests/validate_render.py --answers tests/answers-unlike.yml
+      --data secrets_backend=onepassword --data database=postgres
     # The contrast fixture on the GitLab shape: its pipeline, rendered from
     # answers unlike the reference cluster's.
     - >-

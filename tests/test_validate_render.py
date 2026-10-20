@@ -417,6 +417,63 @@ def test_the_catalog_url_embeds_the_pinned_ref(tmp_path) -> None:
     assert "abc123" in validate_render._catalog(tmp_path)
 
 
+def _dump_cronjob(zone: str) -> str:
+    """-> a `kustomize build kubernetes/db` output carrying the dump CronJob."""
+    return (
+        "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: other\n---\n"
+        "apiVersion: batch/v1\nkind: CronJob\nmetadata:\n  name: app-pg-dump\n"
+        f"spec:\n  timeZone: {zone}\n"
+    )
+
+
+def test_a_typo_time_zone_fails_the_dump_gate(tmp_path, capsys) -> None:
+    """The copier validator checks shape only, and Kubernetes refuses an unknown
+    zone at admission, which stalls the db Kustomization."""
+    runner = validate_render.Runner(tmp_path)
+    validate_render._check_dump_timezone(runner, _dump_cronjob("America/Los_Angelos"))
+    assert runner.failures == ["dump timezone"]
+    assert "America/Los_Angelos" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "answers", ["answers-weisssrv-shaped.yml", "answers-unlike.yml"]
+)
+def test_the_fixture_time_zones_pass_the_dump_gate(tmp_path, answers) -> None:
+    fixture = yaml.safe_load((Path(__file__).parent / answers).read_text())
+    runner = validate_render.Runner(tmp_path)
+    validate_render._check_dump_timezone(runner, _dump_cronjob(fixture["db_dump_timezone"]))
+    assert runner.failures == []
+
+
+def test_a_missing_tz_database_fails_rather_than_skips(tmp_path, capsys, monkeypatch) -> None:
+    """With no system tzdata and no tzdata wheel every zone is unknown: that is
+    a broken test environment, never a pass."""
+    monkeypatch.setattr(validate_render.zoneinfo, "available_timezones", set)
+    runner = validate_render.Runner(tmp_path)
+    validate_render._check_dump_timezone(runner, _dump_cronjob("Etc/UTC"))
+    assert runner.failures == ["dump timezone"]
+    assert "tzdata" in capsys.readouterr().out
+
+
+def test_a_db_build_without_the_dump_cronjob_fails_the_dump_gate(tmp_path) -> None:
+    runner = validate_render.Runner(tmp_path)
+    validate_render._check_dump_timezone(runner, "apiVersion: v1\nkind: ConfigMap\n")
+    assert runner.failures == ["dump timezone"]
+
+
+def test_a_patched_time_zone_in_the_build_fails_the_dump_gate(tmp_path) -> None:
+    """A kustomize patch can replace the zone, so the gate reads the built
+    output: a valid zone in the source file must not hide a patched one."""
+    db = tmp_path / "kubernetes" / "db"
+    db.mkdir(parents=True)
+    (db / "cronjob-pg-dump.yaml").write_text(
+        "apiVersion: batch/v1\nkind: CronJob\nspec:\n  timeZone: Etc/UTC\n"
+    )
+    runner = validate_render.Runner(tmp_path)
+    validate_render._check_dump_timezone(runner, _dump_cronjob("Mars/Olympus_Mons"))
+    assert runner.failures == ["dump timezone"]
+
+
 def test_onboarding_wiring_is_empty_without_a_fence(tmp_path) -> None:
     assert validate_render._onboarding_wiring(tmp_path) == ""
     docs = tmp_path / "docs"
@@ -536,6 +593,40 @@ def test_validate_runs_every_gate(tmp_path, monkeypatch) -> None:
         "scrape wiring",
         "kustomization",
     }
+
+
+def test_validate_builds_and_gates_the_database_tree(tmp_path, monkeypatch) -> None:
+    """kubernetes/db is reconciled by its own Kustomization, so the flux build
+    never reaches it: a render carrying the tree gets its own build and gates."""
+    labels: list[str] = []
+
+    def record(self, name, *command, stdin=None):
+        labels.append(name)
+        # The zone is read from the build, never from the source file.
+        if name == "kustomize build db":
+            return _dump_cronjob("Mars/Olympus_Mons")
+        return _SUMMARY
+
+    monkeypatch.setattr(validate_render.Runner, "gate", record)
+    monkeypatch.setattr(validate_render, "_make_git_tree", lambda root: None)
+    monkeypatch.setattr(validate_render, "_catalog", lambda root: "catalog")
+    monkeypatch.setattr(validate_render, "_onboarding_wiring", lambda root: "---\n")
+    db = tmp_path / "kubernetes" / "db"
+    db.mkdir(parents=True)
+    (db / "cluster.yaml").write_text("---\n")
+    (db / "cronjob-pg-dump.yaml").write_text(
+        "apiVersion: batch/v1\nkind: CronJob\nspec:\n  timeZone: Etc/UTC\n"
+    )
+    answers = {"k8s_version": "1.36.0", "lib_project": "x/y", "app_namespace": "ns"}
+    assert validate_render.validate(tmp_path, answers) == ["dump timezone"]
+    assert {
+        "kustomize build db",
+        "kubeconform db",
+        "netpol except db",
+        "kustomization db",
+        "cnpg clusters",
+        "pvc storageclass",
+    } <= set(labels)
 
 
 def _stub_main(monkeypatch, tmp_path: Path, failures: list[str]) -> None:
