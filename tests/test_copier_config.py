@@ -551,6 +551,8 @@ VALIDATOR_CASES = [
     ("db_name", "postgres_app", None, {}),
     ("db_role_prefix", "nai", None, {}),
     ("db_role_prefix", "Nai", "roles are created lowercase and the uri names them unquoted", {}),
+    ("db_role_prefix", "pg_nai", "PostgreSQL reserves role names starting with pg_", {}, "pg_"),
+    ("db_role_prefix", "nai_pg", None, {}),
     ("db_storage_size", "20Gi", None, {}),
     ("db_storage_size", "20G", "a decimal G size is not the Gi quantity the storage quota counts", {}),
     ("db_backup_endpoint", "https://s3.us-west-004.backblazeb2.com", None, {}),

@@ -617,6 +617,9 @@ db_role_prefix:
     {% if not (db_role_prefix | regex_search('^[a-z_][a-z0-9_]{0,50}$')) %}
     db_role_prefix must be a lowercase PostgreSQL identifier of at most 51
     characters, so the role names stay within 63
+    {% elif db_role_prefix | regex_search('^pg_') %}
+    db_role_prefix must not start with pg_: PostgreSQL reserves role names with
+    that prefix, so the generated roles could never be created
     {% endif %}
 
 db_storage_size:
