@@ -373,10 +373,10 @@ k8s_version:
     Under `gitlab_selfhosted` it reaches both the pipeline and Taskfile.yml from
     this answer; under `github` the vendored workflow carries the library's own
     literal, which you edit by hand if your cluster differs (docs/CI-SHAPES.md).
-  default: "1.36.0"
+  default: "1.37.1"
   validator: >-
     {% if not (k8s_version | regex_search('^[0-9]+\\.[0-9]+\\.[0-9]+$')) %}
-    k8s_version must be a full X.Y.Z version, e.g. 1.36.0 — kubeconform's
+    k8s_version must be a full X.Y.Z version, e.g. 1.37.1 — kubeconform's
     -kubernetes-version takes no bare minor.
     {% endif %}
 

@@ -77,7 +77,7 @@ is an example, not a value you can accept by pressing enter.
 | `git_namespace` | — | The group/user path that owns the repo. Also the middle segment of the image path. |
 | `privileged_runner_tag` | `infrastructure` | Runner tag for the one job that needs a privileged runner (the image build); asked only for the GitLab shape with a build. |
 | `ci_cpu_selector` | `{{ node_label_domain }}/cpu=modern` | Node selector pinning the CPU-sensitive jobs — secret detection always, the image build when it exists — to a modern CPU. Asked for the whole GitLab shape, because the library defaults it to its own cluster's label domain and a selector no node carries leaves the job Pending. Required, and must match the runner's `node_selector_overwrite_allowed` regex `^[a-z0-9.-]+/cpu=(modern\|legacy)$`: the pipeline always passes the input, and an empty value fails that regex at pod creation rather than skipping the pin. |
-| `k8s_version` | `1.36.0` | The Kubernetes minor kubeconform validates against, in the pipeline and `Taskfile.yml`. |
+| `k8s_version` | `1.37.1` | The Kubernetes minor kubeconform validates against, in the pipeline and `Taskfile.yml`. |
 
 ### Secrets
 
