@@ -3385,15 +3385,10 @@ def _db_pods(slug: str) -> dict[str, dict]:
     }
 
 
-# The vendored check-scrape-wiring.py does not credit a podSelector carrying
-# matchExpressions, so the scrape allow keeps matchLabels only and selects the db pods
-# too; it opens app_port to observability, so copier rejects 5432, 8000 and 9187 there.
-SCRAPE_GATE_SELECTOR_EXEMPT = {"allow-scrape-from-observability"}
-
-
 def test_the_scrape_allow_opens_no_database_port(repo):
-    """The scrape allow selects the db pods too, so its port, app_port, must
-    not be one the db pods listen on; db-allow-ingress names those ports."""
+    """Copier rejects a db pod port as app_port, so the scrape allow's port never
+    names one even if its component exclusion were dropped; db-allow-ingress
+    names those ports."""
     _skip_without_db(repo.answers)
     db_docs = yaml.safe_load_all((repo.path / DB / "networkpolicy.yaml").read_text())
     db_ingress = next(d for d in db_docs if d and d["metadata"]["name"] == "db-allow-ingress")
@@ -3402,7 +3397,7 @@ def test_the_scrape_allow_opens_no_database_port(repo):
     scrape_ports = set()
     for path in _manifests(repo.path, "networkpolicy*"):
         for policy in yaml.safe_load_all(path.read_text()):
-            if (policy or {}).get("metadata", {}).get("name") in SCRAPE_GATE_SELECTOR_EXEMPT:
+            if (policy or {}).get("metadata", {}).get("name") == "allow-scrape-from-observability":
                 scrape_ports |= {
                     p["port"] for rule in policy["spec"]["ingress"] for p in rule["ports"]
                 }
@@ -3426,8 +3421,6 @@ def test_no_app_policy_selects_the_database_pods(repo):
         for policy in yaml.safe_load_all(path.read_text()):
             spec = (policy or {}).get("spec") or {}
             name = (policy or {}).get("metadata", {}).get("name")
-            if name in SCRAPE_GATE_SELECTOR_EXEMPT:
-                continue
             if spec.get("ingress") or spec.get("egress"):
                 allows.append((name, spec["podSelector"]))
     assert allows, "kubernetes/flux carries no allow policy"
@@ -3452,7 +3445,7 @@ def test_app_db_egress_does_not_select_the_database_pods(repo):
 
 def test_architecture_names_what_selects_the_database_pods(repo):
     """The database paragraph names each app policy that excludes the db pods,
-    and the scrape allow that still selects them while the gate is exempt."""
+    the scrape allow among them when the render ships it."""
     _skip_without_db(repo.answers)
     architecture = (repo.path / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     paragraph = architecture.split("The instance and dump pods carry")[1].split("\n\n")[0]

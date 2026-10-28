@@ -286,8 +286,8 @@ DB_POD_PORTS = (5432, 8000, 9187)
     ],
 )
 def test_database_rejects_an_app_port_the_db_pods_listen_on(database, port, rejected):
-    """The scrape allow selects on the app's name label alone, which the db pods
-    carry too, so an app_port equal to a db port opens it to observability."""
+    """The app's allows keep off the db pods, which share its name label, by one
+    component term; a distinct app_port keeps a db port out of them regardless."""
     message = _validator_message("database", database=database, app_port=port)
     assert bool(message) is rejected, message or "accepted, but should not be"
     if rejected:

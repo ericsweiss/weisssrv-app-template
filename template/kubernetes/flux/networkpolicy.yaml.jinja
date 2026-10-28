@@ -51,6 +51,13 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: {{ app_slug }}
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+    # The database and dump pods share the name label; kubernetes/db opens theirs.
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values: [db]
+{%- endif %}
   policyTypes:
     - Ingress
   ingress:
