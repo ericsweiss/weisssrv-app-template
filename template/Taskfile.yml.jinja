@@ -166,7 +166,7 @@ tasks:
 {%- if database == 'postgres' and secrets_backend == 'onepassword' %}
 
   database:
-    desc: "The built CNPG Cluster keeps its backup, drain and prune safeguards and a pinned storage class (needs pyyaml + kustomize)."
+    desc: "The built CNPG Cluster keeps its backup, drain and prune safeguards, every claim a pinned storage class, and the static dump claim its prune guard (needs pyyaml + kustomize)."
     # The gates read `kustomize build`, what Flux applies: a patch in
     # kustomization.yaml can strip a safeguard every source file still carries.
     preconditions:

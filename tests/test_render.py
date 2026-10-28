@@ -13,6 +13,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tomllib
 from dataclasses import dataclass
 from fnmatch import fnmatch
@@ -3619,27 +3620,23 @@ def test_validate_render_reads_the_dump_time_zone_from_the_build(repo, tmp_path,
 PRUNE = "kustomize.toolkit.fluxcd.io/prune"
 
 
-def _static_claims_flux_may_prune(tree: Path) -> list[str]:
-    """Claims in `kustomize build kubernetes/db` bound to a named volume and
-    missing the prune guard: pruning one releases its volume for good."""
-    result = _run(tree, "kustomize", "build", DB)
-    assert result.returncode == 0, result.stderr
-    return [
-        doc["metadata"]["name"]
-        for doc in yaml.safe_load_all(result.stdout)
-        if doc and doc.get("kind") == "PersistentVolumeClaim"
-        and doc.get("spec", {}).get("volumeName")
-        and (doc["metadata"].get("annotations") or {}).get(PRUNE) != "disabled"
-    ]
+def _pvc_gate_over_the_build(tree: Path) -> subprocess.CompletedProcess:
+    """The rendered check-pvc-storageclass over `kustomize build kubernetes/db`."""
+    built = _run(tree, "kustomize", "build", DB)
+    assert built.returncode == 0, built.stderr
+    return subprocess.run(
+        [sys.executable, "scripts/check-pvc-storageclass.py"],
+        cwd=tree, input=built.stdout, capture_output=True, text=True,
+    )
 
 
-def test_every_statically_bound_claim_is_never_pruned_in_the_built_tree(repo, tmp_path):
-    """Checked on the build output, so a kustomize patch cannot strip the guard
-    unseen. The vendored check-pvc-storageclass gate subsumes this once
-    weisssrv-lib ships the same check."""
+def test_the_pvc_gate_rejects_a_static_claim_patched_out_of_the_prune_guard(repo, tmp_path):
+    """The vendored gate holds a volumeName claim to the prune guard on the built
+    tree, so a kustomize patch that strips the annotation fails it."""
     _skip_without_db(repo.answers)
     require_tool("kustomize", "database built-tree checks", _TOOLCHAIN_HINT, ci_optional=True)
-    assert _static_claims_flux_may_prune(repo.path) == []
+    result = _pvc_gate_over_the_build(repo.path)
+    assert result.returncode == 0, result.stdout + result.stderr
     work = tmp_path / "prune-pvc"
     shutil.copytree(repo.path, work)
     path = work / DB / "kustomization.yaml"
@@ -3649,7 +3646,10 @@ def test_every_statically_bound_claim_is_never_pruned_in_the_built_tree(repo, tm
         {"target": {"kind": "PersistentVolumeClaim"}, "patch": yaml.safe_dump(remove)}
     )
     path.write_text(yaml.safe_dump(document, sort_keys=False))
-    assert _static_claims_flux_may_prune(work) == [f"{repo.answers['app_slug']}-pg-dump"]
+    result = _pvc_gate_over_the_build(work)
+    assert result.returncode == 1, result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    assert f"{repo.answers['app_slug']}-pg-dump" in output and PRUNE in output, output
 
 
 @pytest.mark.parametrize("keyword", ["true", "null", "off"])
