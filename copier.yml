@@ -373,10 +373,10 @@ k8s_version:
     Under `gitlab_selfhosted` it reaches both the pipeline and Taskfile.yml from
     this answer; under `github` the vendored workflow carries the library's own
     literal, which you edit by hand if your cluster differs (docs/CI-SHAPES.md).
-  default: "1.36.0"
+  default: "1.37.1"
   validator: >-
     {% if not (k8s_version | regex_search('^[0-9]+\\.[0-9]+\\.[0-9]+$')) %}
-    k8s_version must be a full X.Y.Z version, e.g. 1.36.0 — kubeconform's
+    k8s_version must be a full X.Y.Z version, e.g. 1.37.1 — kubeconform's
     -kubernetes-version takes no bare minor.
     {% endif %}
 
@@ -585,9 +585,9 @@ database:
   validator: >-
     {% if database == 'postgres' and app_port | int in [5432, 8000, 9187] %}
     app_port {{ app_port }} is a port the database pods listen on (5432 PostgreSQL,
-    8000 the CloudNativePG instance manager, 9187 its metrics), and the app's
-    scrape NetworkPolicy also selects those pods, so it would open that port to
-    the observability namespace. Choose another app_port.
+    8000 the CloudNativePG instance manager, 9187 its metrics). The app's allow
+    policies keep off those pods by one component label, and a distinct app_port
+    keeps a database port out of them regardless. Choose another app_port.
     {% endif %}
 
 db_name:
@@ -749,7 +749,7 @@ lib_ref:
     it reads. Use a RELEASE TAG (vX.Y.Z): the library's include contract is
     explicit that a branch is never a valid pin, and a branch deleted after
     merge takes every include with it.
-  default: "v0.22.1"
+  default: "v0.23.0"
   validator: >-
     {% if not (lib_ref | regex_search('^v\\d+\\.\\d+\\.\\d+$')) %}
     lib_ref must be a release TAG of the form vX.Y.Z (e.g. v1.2.3). The

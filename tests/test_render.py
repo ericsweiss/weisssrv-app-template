@@ -13,6 +13,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tomllib
 from dataclasses import dataclass
 from fnmatch import fnmatch
@@ -3385,15 +3386,10 @@ def _db_pods(slug: str) -> dict[str, dict]:
     }
 
 
-# The vendored check-scrape-wiring.py does not credit a podSelector carrying
-# matchExpressions, so the scrape allow keeps matchLabels only and selects the db pods
-# too; it opens app_port to observability, so copier rejects 5432, 8000 and 9187 there.
-SCRAPE_GATE_SELECTOR_EXEMPT = {"allow-scrape-from-observability"}
-
-
 def test_the_scrape_allow_opens_no_database_port(repo):
-    """The scrape allow selects the db pods too, so its port, app_port, must
-    not be one the db pods listen on; db-allow-ingress names those ports."""
+    """Copier rejects a db pod port as app_port, so the scrape allow's port never
+    names one even if its component exclusion were dropped; db-allow-ingress
+    names those ports."""
     _skip_without_db(repo.answers)
     db_docs = yaml.safe_load_all((repo.path / DB / "networkpolicy.yaml").read_text())
     db_ingress = next(d for d in db_docs if d and d["metadata"]["name"] == "db-allow-ingress")
@@ -3402,7 +3398,7 @@ def test_the_scrape_allow_opens_no_database_port(repo):
     scrape_ports = set()
     for path in _manifests(repo.path, "networkpolicy*"):
         for policy in yaml.safe_load_all(path.read_text()):
-            if (policy or {}).get("metadata", {}).get("name") in SCRAPE_GATE_SELECTOR_EXEMPT:
+            if (policy or {}).get("metadata", {}).get("name") == "allow-scrape-from-observability":
                 scrape_ports |= {
                     p["port"] for rule in policy["spec"]["ingress"] for p in rule["ports"]
                 }
@@ -3426,8 +3422,6 @@ def test_no_app_policy_selects_the_database_pods(repo):
         for policy in yaml.safe_load_all(path.read_text()):
             spec = (policy or {}).get("spec") or {}
             name = (policy or {}).get("metadata", {}).get("name")
-            if name in SCRAPE_GATE_SELECTOR_EXEMPT:
-                continue
             if spec.get("ingress") or spec.get("egress"):
                 allows.append((name, spec["podSelector"]))
     assert allows, "kubernetes/flux carries no allow policy"
@@ -3452,7 +3446,7 @@ def test_app_db_egress_does_not_select_the_database_pods(repo):
 
 def test_architecture_names_what_selects_the_database_pods(repo):
     """The database paragraph names each app policy that excludes the db pods,
-    and the scrape allow that still selects them while the gate is exempt."""
+    the scrape allow among them when the render ships it."""
     _skip_without_db(repo.answers)
     architecture = (repo.path / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     paragraph = architecture.split("The instance and dump pods carry")[1].split("\n\n")[0]
@@ -3626,27 +3620,32 @@ def test_validate_render_reads_the_dump_time_zone_from_the_build(repo, tmp_path,
 PRUNE = "kustomize.toolkit.fluxcd.io/prune"
 
 
-def _static_claims_flux_may_prune(tree: Path) -> list[str]:
-    """Claims in `kustomize build kubernetes/db` bound to a named volume and
-    missing the prune guard: pruning one releases its volume for good."""
-    result = _run(tree, "kustomize", "build", DB)
-    assert result.returncode == 0, result.stderr
-    return [
-        doc["metadata"]["name"]
-        for doc in yaml.safe_load_all(result.stdout)
-        if doc and doc.get("kind") == "PersistentVolumeClaim"
-        and doc.get("spec", {}).get("volumeName")
-        and (doc["metadata"].get("annotations") or {}).get(PRUNE) != "disabled"
-    ]
+def _pvc_gate_over_the_build(tree: Path) -> subprocess.CompletedProcess:
+    """The rendered check-pvc-storageclass over `kustomize build kubernetes/db`."""
+    built = _run(tree, "kustomize", "build", DB)
+    assert built.returncode == 0, built.stderr
+    return subprocess.run(
+        [sys.executable, "scripts/check-pvc-storageclass.py"],
+        cwd=tree, input=built.stdout, capture_output=True, text=True,
+    )
 
 
-def test_every_statically_bound_claim_is_never_pruned_in_the_built_tree(repo, tmp_path):
-    """Checked on the build output, so a kustomize patch cannot strip the guard
-    unseen. The vendored check-pvc-storageclass gate subsumes this once
-    weisssrv-lib ships the same check."""
+def test_the_rendered_comment_gate_passes_a_database_render(repo):
+    """kubernetes/db and the database arms carry comments no other render has,
+    and the tenant's comment-length job runs this gate over the whole tree."""
+    _skip_without_db(repo.answers)
+    assert (repo.path / DB).is_dir(), "the database render ships no kubernetes/db"
+    result = _run(repo.path, sys.executable, "scripts/check-comment-length.py", ".")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_the_pvc_gate_rejects_a_static_claim_patched_out_of_the_prune_guard(repo, tmp_path):
+    """The vendored gate holds a volumeName claim to the prune guard on the built
+    tree, so a kustomize patch that strips the annotation fails it."""
     _skip_without_db(repo.answers)
     require_tool("kustomize", "database built-tree checks", _TOOLCHAIN_HINT, ci_optional=True)
-    assert _static_claims_flux_may_prune(repo.path) == []
+    result = _pvc_gate_over_the_build(repo.path)
+    assert result.returncode == 0, result.stdout + result.stderr
     work = tmp_path / "prune-pvc"
     shutil.copytree(repo.path, work)
     path = work / DB / "kustomization.yaml"
@@ -3656,7 +3655,10 @@ def test_every_statically_bound_claim_is_never_pruned_in_the_built_tree(repo, tm
         {"target": {"kind": "PersistentVolumeClaim"}, "patch": yaml.safe_dump(remove)}
     )
     path.write_text(yaml.safe_dump(document, sort_keys=False))
-    assert _static_claims_flux_may_prune(work) == [f"{repo.answers['app_slug']}-pg-dump"]
+    result = _pvc_gate_over_the_build(work)
+    assert result.returncode == 1, result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    assert f"{repo.answers['app_slug']}-pg-dump" in output and PRUNE in output, output
 
 
 @pytest.mark.parametrize("keyword", ["true", "null", "off"])

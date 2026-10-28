@@ -77,7 +77,7 @@ is an example, not a value you can accept by pressing enter.
 | `git_namespace` | — | The group/user path that owns the repo. Also the middle segment of the image path. |
 | `privileged_runner_tag` | `infrastructure` | Runner tag for the one job that needs a privileged runner (the image build); asked only for the GitLab shape with a build. |
 | `ci_cpu_selector` | `{{ node_label_domain }}/cpu=modern` | Node selector pinning the CPU-sensitive jobs — secret detection always, the image build when it exists — to a modern CPU. Asked for the whole GitLab shape, because the library defaults it to its own cluster's label domain and a selector no node carries leaves the job Pending. Required, and must match the runner's `node_selector_overwrite_allowed` regex `^[a-z0-9.-]+/cpu=(modern\|legacy)$`: the pipeline always passes the input, and an empty value fails that regex at pod creation rather than skipping the pin. |
-| `k8s_version` | `1.36.0` | The Kubernetes minor kubeconform validates against, in the pipeline and `Taskfile.yml`. |
+| `k8s_version` | `1.37.1` | The Kubernetes minor kubeconform validates against, in the pipeline and `Taskfile.yml`. |
 
 ### Secrets
 
@@ -107,7 +107,7 @@ component is wired and a disabled one leaves nothing behind. There is no
 
 | Answer | Default | What it drives |
 |---|---|---|
-| `database` | `none` | `postgres` renders `kubernetes/db/`: a one-instance CloudNativePG `Cluster`, its object store and nightly base backup, three role Secrets, network policies, a PodMonitor, a nightly `pg_dump` and an absence alert, plus the Deployment's file mounts and `/readyz` probe. Needs the cluster's CloudNativePG module and its `tenant-local` StorageClass (ONBOARDING O6b). With `postgres`, `app_port` must not be 5432, 8000 or 9187: the app's scrape NetworkPolicy also selects the database pods, so it would open that database port to the observability namespace. |
+| `database` | `none` | `postgres` renders `kubernetes/db/`: a one-instance CloudNativePG `Cluster`, its object store and nightly base backup, three role Secrets, network policies, a PodMonitor, a nightly `pg_dump` and an absence alert, plus the Deployment's file mounts and `/readyz` probe. Needs the cluster's CloudNativePG module and its `tenant-local` StorageClass (ONBOARDING O6b). With `postgres`, `app_port` must not be 5432, 8000 or 9187: the app's allow policies exclude the database pods, which share its name label, by one component label, and a distinct port keeps a database port out of them regardless. |
 | `db_name` | the slug with `-` as `_` | The database name: a lowercase identifier, not a YAML keyword such as `true` or `null`, and not a PostgreSQL built-in (`postgres`, `template0`, `template1`), which CNPG cannot create as the application database. |
 | `db_role_prefix` | `db_name` | The roles `<prefix>_migrate`, `<prefix>_app` and `<prefix>_ro`. |
 | `db_storage_size` | `20Gi` | The instance claim, requested from `tenant-local` and counted by the namespace's storage quota. |
@@ -123,7 +123,7 @@ component is wired and a disabled one leaves nothing behind. There is no
 
 | Answer | Default | What it drives |
 |---|---|---|
-| `lib_ref` | `v0.22.1` | The tag the generated pipeline declares in its `spec:` header and every `include:` reads. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
+| `lib_ref` | `v0.23.0` | The tag the generated pipeline declares in its `spec:` header and every `include:` reads. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
 | `lib_project` | `eric/weisssrv-lib` | The library's project path. `include: project:` resolves instance-locally, so the library must live on the same GitLab as the repo. |
 
 ---

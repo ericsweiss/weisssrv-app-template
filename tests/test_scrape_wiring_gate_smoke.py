@@ -7,6 +7,7 @@ evidence: only a mutated pair shows the gate is armed.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -506,16 +507,11 @@ def test_every_selected_service_with_its_own_policy_passes(tmp_path):
         (
             {
                 "namespaceSelector": {
-                    "matchExpressions": [
-                        {
-                            "key": "kubernetes.io/metadata.name",
-                            "operator": "In",
-                            "values": ["observability"],
-                        }
-                    ]
+                    "matchLabels": {"kubernetes.io/metadata.name": "observability"},
+                    "matchExpressions": [{"key": "tier", "operator": "Exists"}],
                 }
             },
-            "matchExpressions",
+            "namespaceSelector.matchExpressions",
         ),
         ({"namespaceSelector": {"matchLabels": {"team": "platform"}}}, "labels other than"),
         ({"ipBlock": {"cidr": "10.42.0.0/16"}}, "ipBlock"),
@@ -524,7 +520,7 @@ def test_every_selected_service_with_its_own_policy_passes(tmp_path):
             "empty namespaceSelector",
         ),
     ],
-    ids=["ns-match-expressions", "ns-other-label", "ip-block", "empty-ns-with-pods"],
+    ids=["ns-narrowed-by-expressions", "ns-other-label", "ip-block", "empty-ns-with-pods"],
 )
 def test_an_unmodelled_peer_shape_is_named_in_the_failure(tmp_path, peer, expected):
     """Declining an unmodelled shape is right; doing it silently sends a tenant
@@ -535,7 +531,28 @@ def test_an_unmodelled_peer_shape_is_named_in_the_failure(tmp_path, peer, expect
     assert result.returncode == 1, result.stdout + result.stderr
     output = result.stdout + result.stderr
     assert expected in output, output
-    assert "does not " in output
+    assert re.search(r"(does not|cannot) (model|resolve)", output), output
+
+
+def test_a_namespace_named_by_match_expressions_is_credited(tmp_path):
+    """An `In` term on kubernetes.io/metadata.name names the namespace as surely
+    as the matchLabels form does."""
+    policy = _allow()
+    policy["spec"]["ingress"][0]["from"] = [
+        {
+            "namespaceSelector": {
+                "matchExpressions": [
+                    {
+                        "key": "kubernetes.io/metadata.name",
+                        "operator": "In",
+                        "values": ["observability"],
+                    }
+                ]
+            }
+        }
+    ]
+    result = _run(_write(tmp_path, _base(_service_monitor(), policy)))
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_an_egress_only_policy_type_is_not_credited(tmp_path):
