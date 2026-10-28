@@ -3,7 +3,7 @@
 # PLACEHOLDER service image — replace it with your application's real build.
 # deployment.yaml depends on two invariants: run NON-ROOT as UID 65532, and
 # write nothing to the root filesystem. A real build pins its base by digest.
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
