@@ -49,7 +49,7 @@ variables:
   # than skips once $CI is set.
   WEISSSRV_LIB_PATH: "$CI_PROJECT_DIR/.tmp/weisssrv-lib"
   COPIER_VERSION: "9.17.0"
-  PYYAML_VERSION: "6.0.2"
+  PYYAML_VERSION: "6.0.3"
   YAMLLINT_VERSION: "1.38.0"
   RUFF_VERSION: "0.16.7"
 

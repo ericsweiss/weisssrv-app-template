@@ -37,7 +37,7 @@ repos:
         name: egress fence
         entry: python scripts/check-netpol-except-parity.py kubernetes/flux
         language: python
-        additional_dependencies: ["pyyaml==6.0.2"]
+        additional_dependencies: ["pyyaml==6.0.3"]
         pass_filenames: false
         files: ^(kubernetes/|scripts/check-)
         always_run: true
@@ -48,7 +48,7 @@ repos:
           --namespace {{ app_namespace }}
           --prometheus-pod-label app.kubernetes.io/name=prometheus
         language: python
-        additional_dependencies: ["pyyaml==6.0.2"]
+        additional_dependencies: ["pyyaml==6.0.3"]
         pass_filenames: false
         files: ^(kubernetes/|scripts/check-)
         always_run: true
@@ -56,7 +56,7 @@ repos:
         name: kustomization resource list
         entry: python scripts/check-kustomization.py kubernetes/flux
         language: python
-        additional_dependencies: ["pyyaml==6.0.2"]
+        additional_dependencies: ["pyyaml==6.0.3"]
         pass_filenames: false
         files: ^(kubernetes/|scripts/check-)
         always_run: true
@@ -72,7 +72,7 @@ repos:
           && python scripts/check-kustomization.py kubernetes/db
           && python scripts/check-netpol-except-parity.py kubernetes/db'
         language: python
-        additional_dependencies: ["pyyaml==6.0.2"]
+        additional_dependencies: ["pyyaml==6.0.3"]
         pass_filenames: false
         files: ^(kubernetes/|scripts/check-)
         always_run: true

@@ -31,7 +31,7 @@ env:
   KUBECONFORM_SHA256: "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883"
   SHELLCHECK_VERSION: "0.11.0"
   SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
-  RUFF_VERSION: "0.16.7"
+  RUFF_VERSION: "0.17.3"
   GITLEAKS_VERSION: "8.30.1"
   GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
   # The cluster's Kubernetes minor. Set repository variable K8S_VERSION to your
@@ -50,7 +50,7 @@ env:
   ALLOWED_SKIPS: ${{ vars.ALLOWED_SKIPS || '0' }}
   # Held equal to ci/validate/flux-lint.yml's pyyaml_version by
   # tests/test_pin_parity.py.
-  PYYAML_VERSION: "6.0.2"
+  PYYAML_VERSION: "6.0.3"
   # Ref of datreeio/CRDs-catalog the kubeconform schema location resolves
   # against, pinned so a catalog rewrite cannot change what this gate accepts.
   # The fallback is held equal to flux-lint.yml's crd_catalog_ref by test_pin_parity.
