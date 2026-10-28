@@ -3630,6 +3630,15 @@ def _pvc_gate_over_the_build(tree: Path) -> subprocess.CompletedProcess:
     )
 
 
+def test_the_rendered_comment_gate_passes_a_database_render(repo):
+    """kubernetes/db and the database arms carry comments no other render has,
+    and the tenant's comment-length job runs this gate over the whole tree."""
+    _skip_without_db(repo.answers)
+    assert (repo.path / DB).is_dir(), "the database render ships no kubernetes/db"
+    result = _run(repo.path, sys.executable, "scripts/check-comment-length.py", ".")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_the_pvc_gate_rejects_a_static_claim_patched_out_of_the_prune_guard(repo, tmp_path):
     """The vendored gate holds a volumeName claim to the prune guard on the built
     tree, so a kustomize patch that strips the annotation fails it."""
