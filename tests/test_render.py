@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
-from fnmatch import fnmatch
+from fnmatch import fnmatch, fnmatchcase
 from pathlib import Path
 
 import jinja2
@@ -65,6 +65,15 @@ QUESTION_NAMES = sorted(
 )
 
 
+def _copier_data(overrides: dict) -> dict[str, str]:
+    """`overrides` as copier's --data takes them: every value a string, a
+    boolean in YAML's lowercase spelling."""
+    return {
+        key: str(value).lower() if isinstance(value, bool) else str(value)
+        for key, value in overrides.items()
+    }
+
+
 @pytest.fixture(scope="session")
 def answers() -> dict:
     return yaml.safe_load(render_app.ANSWERS.read_text())
@@ -75,9 +84,24 @@ def answers_b() -> dict:
     return yaml.safe_load(render_app.ANSWERS_B.read_text())
 
 
+# The answers file each answer fixture loads, by fixture name.
+_ANSWER_PATHS = {"answers": render_app.ANSWERS, "answers_b": render_app.ANSWERS_B}
+
+
+def _render(factory, label: str) -> Path:
+    """Render RENDERS[label]: the answers file and overrides `repo` reads for it too."""
+    _, answers_fixture, overrides = RENDERS[label]
+    return render_app.render(
+        factory.mktemp(f"render-{label}"),
+        answers=_ANSWER_PATHS[answers_fixture],
+        dest_name=f"render-{label}",
+        data=_copier_data(overrides) or None,
+    )
+
+
 @pytest.fixture(scope="session")
 def rendered(tmp_path_factory) -> Path:
-    return render_app.render(tmp_path_factory.mktemp("render"))
+    return _render(tmp_path_factory, "shaped")
 
 
 @pytest.fixture(scope="session")
@@ -87,21 +111,13 @@ def rendered_b(tmp_path_factory) -> Path:
     It is what makes a hardcoded value visible; under the shaped fixture a
     carried-over literal renders identically to a correct substitution.
     """
-    return render_app.render(
-        tmp_path_factory.mktemp("render-b"),
-        answers=render_app.ANSWERS_B,
-        dest_name="render-b",
-    )
+    return _render(tmp_path_factory, "unlike")
 
 
 @pytest.fixture(scope="session")
 def rendered_none(tmp_path_factory) -> Path:
     """Fixture A with ci_shape overridden: the render that ships no pipeline."""
-    return render_app.render(
-        tmp_path_factory.mktemp("render-none"),
-        dest_name="render-none",
-        data={"ci_shape": "none"},
-    )
+    return _render(tmp_path_factory, "none-shape")
 
 
 @pytest.fixture(scope="session")
@@ -110,11 +126,7 @@ def rendered_no_secrets(tmp_path_factory) -> Path:
     block, no ClusterSecretStore. The pull credential is overridden with it
     because it is an ExternalSecret too.
     """
-    return render_app.render(
-        tmp_path_factory.mktemp("render-no-secrets"),
-        dest_name="render-no-secrets",
-        data={"secrets_backend": "none", "enable_registry_pull_secret": "false"},
-    )
+    return _render(tmp_path_factory, "no-secrets")
 
 
 # The library project the gitlab-unlike render answers. It must differ from
@@ -122,15 +134,14 @@ def rendered_no_secrets(tmp_path_factory) -> Path:
 # written as a literal renders correctly everywhere else in this suite.
 ALT_LIB_PROJECT = "seaworks/brinemoor-lib"
 
-# Fixture B, moved onto the GitLab shape with the image build on. Overriding
-# rather than adding a third answers FILE is the idiom the other derived renders
-# use, and it is what keeps every other value unlike fixture A's for free.
+# Fixture B, moved onto the GitLab shape with the image build on. Every other
+# value stays fixture B's and differs from fixture A's, except lib_ref.
 GITLAB_UNLIKE_OVERRIDES = {
     "ci_shape": "gitlab_selfhosted",
     # The GitLab pipeline is only legal on a GitLab forge, and copier.yml's
     # validator says so, so the shape override carries the forge with it.
     "forge": "gitlab",
-    "enable_image_build": "true",
+    "enable_image_build": True,
     "lib_project": ALT_LIB_PROJECT,
 }
 
@@ -144,23 +155,14 @@ def rendered_gitlab_unlike(tmp_path_factory, answers, answers_b) -> Path:
     assert ALT_LIB_PROJECT not in {answers["lib_project"], answers_b["lib_project"]}, (
         "ALT_LIB_PROJECT now coincides with a fixture answer — pick one neither uses"
     )
-    return render_app.render(
-        tmp_path_factory.mktemp("render-gitlab-unlike"),
-        answers=render_app.ANSWERS_B,
-        dest_name="render-gitlab-unlike",
-        data=GITLAB_UNLIKE_OVERRIDES,
-    )
+    return _render(tmp_path_factory, "gitlab-unlike")
 
 
 @pytest.fixture(scope="session")
 def rendered_gitlab_no_build(tmp_path_factory) -> Path:
     """The GitLab pipeline with the image build off: no `build` stage, no
     docker-build include, no Dockerfile. The combination no fixture answers."""
-    return render_app.render(
-        tmp_path_factory.mktemp("render-gitlab-no-build"),
-        dest_name="render-gitlab-no-build",
-        data={"enable_image_build": "false"},
-    )
+    return _render(tmp_path_factory, "gitlab-no-build")
 
 
 @pytest.fixture(scope="session")
@@ -168,16 +170,7 @@ def rendered_github_none(tmp_path_factory) -> Path:
     """No pipeline on a GitHub-hosted repo: the file set the `forge` answer
     changes on its own, with that forge's word for a reviewed change. `enable_hpa`
     rides along so the default HPA-off, VPA-on pair is rendered somewhere."""
-    return render_app.render(
-        tmp_path_factory.mktemp("render-github-none"),
-        dest_name="render-github-none",
-        data={
-            "ci_shape": "none",
-            "forge": "github",
-            "change_request": "pull request",
-            "enable_hpa": "false",
-        },
-    )
+    return _render(tmp_path_factory, "github-none")
 
 
 @pytest.fixture(scope="session")
@@ -185,17 +178,7 @@ def rendered_forge_other(tmp_path_factory) -> Path:
     """A forge that is neither GitLab nor GitHub: no forge metadata renders, and
     `change_request` is answered rather than computed. It is also the only render
     with the HPA on, the VPA off and SSO with no LAN hostname."""
-    return render_app.render(
-        tmp_path_factory.mktemp("render-forge-other"),
-        dest_name="render-forge-other",
-        data={
-            "ci_shape": "none",
-            "forge": "other",
-            "change_request": "pull request",
-            "enable_vpa": "false",
-            "enable_internal_ingress": "false",
-        },
-    )
+    return _render(tmp_path_factory, "forge-other")
 
 
 # Kept out of RENDERS: it proves one filter, not a file set, so it needs no
@@ -216,7 +199,9 @@ def rendered_mixed_case_git_namespace(tmp_path_factory, answers, answers_b) -> P
         tmp_path_factory.mktemp("render-mixed-git-ns"),
         answers=render_app.ANSWERS_B,
         dest_name="render-mixed-git-ns",
-        data={"git_namespace": MIXED_CASE_GIT_NAMESPACE, "enable_image_build": "true"},
+        data=_copier_data(
+            {"git_namespace": MIXED_CASE_GIT_NAMESPACE, "enable_image_build": True}
+        ),
     )
 
 
@@ -227,27 +212,7 @@ def rendered_image_github(tmp_path_factory) -> Path:
     `github` plus `enable_image_build: true` gates the build-image workflow's
     conditional path, and no fixture answers that combination.
     """
-    return render_app.render(
-        tmp_path_factory.mktemp("render-image"),
-        answers=render_app.ANSWERS_B,
-        dest_name="render-image",
-        data={"enable_image_build": "true"},
-    )
-
-
-# Fixture B with every optional component on. The contrast fixture answers them
-# all off, so without this render seven optional manifests and the forward-auth
-# middleware are never scanned for a carried-over reference-cluster literal.
-UNLIKE_FULL_OVERRIDES = {
-    "enable_servicemonitor": "true",
-    "enable_internal_ingress": "true",
-    "enable_hpa": "true",
-    "enable_vpa": "true",
-    "enable_registry_pull_secret": "true",
-    "enable_image_build": "true",
-    "enable_sso": "true",
-    "replica_count": "3",
-}
+    return _render(tmp_path_factory, "github-image")
 
 
 @pytest.fixture(scope="session")
@@ -255,49 +220,17 @@ def rendered_unlike_full(tmp_path_factory) -> Path:
     """The contrast fixture with every component on: the ServiceMonitor, HPA, VPA, PDB,
     internal route, pull credential and forward-auth middleware all come from answers
     that are not the reference cluster's."""
-    return render_app.render(
-        tmp_path_factory.mktemp("render-unlike-full"),
-        answers=render_app.ANSWERS_B,
-        dest_name="render-unlike-full",
-        data=UNLIKE_FULL_OVERRIDES,
-    )
-
-
-# The contrast fixture with the database on: the only render in which
-# kubernetes/db and every database arm come from answers unlike fixture A's.
-UNLIKE_DB_OVERRIDES = {"secrets_backend": "onepassword", "database": "postgres"}
+    return _render(tmp_path_factory, "unlike-full")
 
 
 @pytest.fixture(scope="session")
 def rendered_unlike_db(tmp_path_factory) -> Path:
-    return render_app.render(
-        tmp_path_factory.mktemp("render-unlike-db"),
-        answers=render_app.ANSWERS_B,
-        dest_name="render-unlike-db",
-        data=UNLIKE_DB_OVERRIDES,
-    )
-
-
-# The vault the alt-vault render answers. It must differ from both fixtures'
-# answers, or the assertion would pass on a hardcoded string.
-ALT_VAULT = "Tidewrack"
+    return _render(tmp_path_factory, "unlike-db")
 
 
 @pytest.fixture(scope="session")
-def rendered_alt_vault(tmp_path_factory, answers, answers_b) -> Path:
-    """Fixture A with a different 1Password vault. The contrast fixture uses the
-    GitLab backend, so this is the only render in which the 1Password wiring
-    branch is produced from an answer that is not the reference cluster's."""
-    answered = {answers["onepassword_vault"], answers_b["onepassword_vault"]}
-    assert ALT_VAULT not in answered, (
-        f"ALT_VAULT now coincides with a fixture answer ({sorted(answered)}) — "
-        "pick one neither fixture uses"
-    )
-    return render_app.render(
-        tmp_path_factory.mktemp("render-vault"),
-        dest_name="render-vault",
-        data={"onepassword_vault": ALT_VAULT},
-    )
+def rendered_private(tmp_path_factory) -> Path:
+    return _render(tmp_path_factory, "private")
 
 
 @dataclass(frozen=True)
@@ -310,8 +243,8 @@ class Repo:
 
 
 # label -> (render fixture, answer fixture, the answers that render overrode).
-# A derived render answers everything else like its base fixture, so the
-# overrides keep the assertions and the tree on the same answer set.
+# The single source: _render builds each tree from its entry and `repo` reads
+# the same entry, so the assertions and the tree stay on one answer set.
 RENDERS = {
     "shaped": ("rendered", "answers", {}),
     "unlike": ("rendered_b", "answers_b", {}),
@@ -343,14 +276,10 @@ RENDERS = {
             "enable_internal_ingress": False,
         },
     ),
-    # The GitLab shape from unlike answers. Copier takes `--data` as strings,
-    # so the booleans are restated here as the values the render resolved.
-    "gitlab-unlike": (
-        "rendered_gitlab_unlike",
-        "answers_b",
-        {**GITLAB_UNLIKE_OVERRIDES, "enable_image_build": True},
-    ),
+    "gitlab-unlike": ("rendered_gitlab_unlike", "answers_b", GITLAB_UNLIKE_OVERRIDES),
     "gitlab-no-build": ("rendered_gitlab_no_build", "answers", {"enable_image_build": False}),
+    # Every optional component on, so the optional manifests and the forward-auth
+    # middleware are scanned for a carried-over reference-cluster literal.
     "unlike-full": (
         "rendered_unlike_full",
         "answers_b",
@@ -365,7 +294,18 @@ RENDERS = {
             "replica_count": 3,
         },
     ),
-    "unlike-db": ("rendered_unlike_db", "answers_b", UNLIKE_DB_OVERRIDES),
+    # The only render in which kubernetes/db comes from answers unlike fixture A's.
+    "unlike-db": (
+        "rendered_unlike_db",
+        "answers_b",
+        {"secrets_backend": "onepassword", "database": "postgres"},
+    ),
+    # The public route off: SSO goes with the public route it gates.
+    "private": (
+        "rendered_private",
+        "answers",
+        {"enable_public_ingress": False, "enable_sso": False},
+    ),
 }
 
 
@@ -476,10 +416,10 @@ def test_the_two_fixtures_answer_differently(answers, answers_b):
     key that drifts back into agreement silently disarms the leak check."""
     assert set(answers) == set(answers_b), "the two fixtures answer different question sets"
     shared = {k for k, v in answers.items() if answers_b[k] == v}
-    # The library is the same upstream in both on purpose (a fixture pinned
-    # elsewhere would exercise includes no real tenant gets), and the two
-    # all-optional-components-off answers coincide by construction.
-    assert shared <= {"lib_ref", "lib_project"}, (
+    # The library is the same upstream in both on purpose: a fixture pinned
+    # elsewhere would exercise includes no real tenant gets. Both publish a
+    # public route; the `private` render covers `false`.
+    assert shared <= {"lib_ref", "lib_project", "enable_public_ingress"}, (
         "answers that must differ between the fixtures now coincide: "
         + ", ".join(sorted(shared))
     )
@@ -489,11 +429,6 @@ def test_the_two_fixtures_answer_differently(answers, answers_b):
 # Keep this list SHORT: an entry here is coverage given up, so each names the
 # targeted gate that replaces it.
 CROSS_RENDER_EXEMPT = {
-    "privileged_runner_tag": (
-        "'infrastructure' is also the name of the platform Flux Kustomization the "
-        "operator wiring dependsOn — test_build_job_carries_the_privileged_tag is "
-        "the targeted gate"
-    ),
     "k8s_version": (
         "the GitHub shape's workflows are vendored byte-identically from the "
         "library and carry its own literal — test_k8s_version_reaches_the_gitlab_"
@@ -520,22 +455,7 @@ UPSTREAM_REPOS = ("weisssrv-lib", "weisssrv-app-template", "weisssrv-cluster-tem
 # Byte-identical library copies, read from the manifest so a template-owned file
 # beside them stays scanned. They cannot take an answer, and the vendored GitHub
 # workflows narrate the GitLab job, so "merge request" there is another forge's.
-def _vendored_render_paths() -> frozenset[str]:
-    """Every `vendored:` copy under template/, as a path relative to a render."""
-    document = yaml.safe_load(
-        (REPO_ROOT / "scripts" / "vendored-manifest.yml").read_text(encoding="utf-8")
-    )
-    paths = set()
-    for entry in document.get("vendored") or []:
-        consumer = entry if isinstance(entry, str) else entry["consumer"]
-        if not consumer.startswith("template/"):
-            continue
-        bare = re.sub(r"\{%.*?%\}", "", consumer[len("template/") :])
-        paths.add("/".join(part for part in bare.split("/") if part))
-    return frozenset(paths)
-
-
-VENDORED_FILES = _vendored_render_paths()
+VENDORED_FILES = render_app.vendored_render_paths()
 
 
 # Every render built on fixture B. A fixture-A value in one of these is copied,
@@ -702,8 +622,8 @@ def test_the_pipeline_carries_no_fixture_a_values(
     rendered_gitlab_unlike, answers, answers_b
 ):
     """The anti-hardcode scan applied to .gitlab-ci.yml, which fixture B never
-    renders. `privileged_runner_tag` and `k8s_version` are un-exempted here,
-    their CROSS_RENDER_EXEMPT collisions being outside the pipeline.
+    renders. `k8s_version` is un-exempted here, its CROSS_RENDER_EXEMPT
+    collision being outside the pipeline.
     """
     effective = {**answers_b, **GITLAB_UNLIKE_OVERRIDES}
     leaks = []
@@ -1019,7 +939,6 @@ def test_alert_expressions_are_namespace_scoped(repo):
             assert f'namespace="{namespace}"' in alert["expr"], (
                 f"{alert['alert']} does not scope its selector to the namespace"
             )
-            assert alert["annotations"]["runbook_url"] == repo.answers["runbook_url"]
     # Pin the set itself: iterating whatever is there cannot notice an alert
     # that stopped shipping, and docs/ARCHITECTURE.md names each one.
     alerts = {r["alert"] for g in rule["spec"]["groups"] for r in g["rules"]}
@@ -1060,14 +979,26 @@ def test_routes_and_certificates_pair_up(repo):
         )
         served |= names
     slug = repo.answers["app_slug"]
-    assert f"{slug}.{repo.answers['external_domain']}" in served
-    if repo.answers["enable_internal_ingress"]:
-        assert f"{slug}.{repo.answers['internal_domain']}" in served
+    wanted = {
+        f"{slug}.{repo.answers['external_domain']}": repo.answers["enable_public_ingress"],
+        f"{slug}.{repo.answers['internal_domain']}": repo.answers["enable_internal_ingress"],
+    }
+    assert served == {host for host, on in wanted.items() if on}, sorted(served)
+    if not repo.answers["enable_public_ingress"]:
+        public = f"{slug}.{repo.answers['external_domain']}"
+        for doc in ("README.md", "docs/ONBOARDING.md", "docs/ARCHITECTURE.md", "docs/RUNBOOKS.md"):
+            assert public not in (repo.path / doc).read_text(), f"{doc} names {public}"
+
+
+def _public_route(repo) -> dict:
+    if not repo.answers["enable_public_ingress"]:
+        pytest.skip("no public route on this render")
+    return yaml.safe_load((repo.path / FLUX / "ingressroute.yaml").read_text())
 
 
 def test_hostnames_come_from_the_answers(repo):
     slug, external = repo.answers["app_slug"], repo.answers["external_domain"]
-    route = yaml.safe_load((repo.path / FLUX / "ingressroute.yaml").read_text())
+    route = _public_route(repo)
     assert f"Host(`{slug}.{external}`)" in route["spec"]["routes"][0]["match"]
     assert route["metadata"]["annotations"]["external-dns.alpha.kubernetes.io/target"] == external
 
@@ -1096,7 +1027,7 @@ def test_the_ephemeral_limit_stays_above_the_tmp_volume(repo):
 
 
 def test_sso_middleware_matches_the_answer(repo):
-    route = yaml.safe_load((repo.path / FLUX / "ingressroute.yaml").read_text())
+    route = _public_route(repo)
     middlewares = [m["name"] for m in route["spec"]["routes"][0]["middlewares"]]
     assert ("authentik-auth" in middlewares) is repo.answers["enable_sso"]
 
@@ -1133,10 +1064,10 @@ def test_a_mixed_case_git_namespace_is_lowercased_only_in_the_image(
         if repository in text:
             naming.add(str(path.relative_to(root)))
     for expected in ("README.md", "docs/ONBOARDING.md", FLUX + "/deployment.yaml"):
-        assert expected in naming, f"{expected} no longer names the image repository"
+        assert expected in naming, f"{expected} does not name the image repository"
 
     assert MIXED_CASE_GIT_NAMESPACE in (root / "CODEOWNERS").read_text()
-    assert MIXED_CASE_GIT_NAMESPACE in (root / "docs" / "ONBOARDING.md").read_text()
+    assert MIXED_CASE_GIT_NAMESPACE in _onboarding(root)
 
 
 def test_every_image_path_lowercases_the_namespace():
@@ -1176,13 +1107,22 @@ def test_license_names_the_answered_holder(repo):
     assert copyright_lines[0].endswith(repo.answers["copyright_holder"]), copyright_lines[0]
 
 
+def _onboarding(root: Path) -> str:
+    return (root / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+
+
+def _onboarding_step(root: Path, heading: str) -> str:
+    """The body of one `### {heading}` step, up to the next step or section."""
+    return re.split(r"\n##+ ", _onboarding(root).split(f"\n### {heading}", 1)[1])[0]
+
+
 def _onboarding_wiring(root: Path) -> list[dict]:
     """The documents of the operator wiring file, out of its Markdown fence.
 
     Nothing else parses them, so the file the operator applies by hand is
     validated only here.
     """
-    fenced = (root / "docs" / "ONBOARDING.md").read_text().split("```yaml")[1].split("```")[0]
+    fenced = _onboarding(root).split("```yaml")[1].split("```")[0]
     return [d for d in yaml.safe_load_all(fenced) if isinstance(d, dict)]
 
 
@@ -1241,7 +1181,7 @@ def test_the_wiring_kustomization_points_at_this_repo(repo):
         # with no NetworkPolicies, role Secrets, backups or monitoring.
         wanted = "Orphan" if tree == DB else None
         assert spec.get("deletionPolicy") == wanted, f"{name} deletionPolicy"
-    onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text()
+    onboarding = _onboarding(repo.path)
     assert "No `postBuild` block" not in onboarding, "the prose contradicts the wiring"
 
 
@@ -1258,27 +1198,87 @@ def test_gitlab_wiring_store_names_the_answered_instance(rendered_b, answers_b):
     assert "SecretRef" in provider["auth"], f"auth keys: {sorted(provider['auth'])}"
 
 
-def test_onepassword_wiring_store_names_the_answered_vault(rendered_alt_vault):
-    """The 1Password store names the answered vault.
+# The reference cluster's platform vault. A tenant render never names it: a
+# store or token covering it lets the tenant namespace read every platform item.
+CLUSTER_VAULT = "Homelab"
 
-    The shaped fixture answers the reference cluster's vault, so only this
-    render, which changes that one answer, tells substitution from a literal.
-    """
-    provider = _onboarding_store(rendered_alt_vault)["spec"]["provider"]["onepassword"]
-    assert provider["vaults"] == {ALT_VAULT: 1}
-    assert "Homelab" not in (rendered_alt_vault / "docs" / "ONBOARDING.md").read_text()
+# The rendered files that describe the secrets model to a person or an agent.
+SECRETS_MODEL_DOCS = (
+    "docs/ONBOARDING.md",
+    "docs/ARCHITECTURE.md",
+    "README.md",
+    "CLAUDE.md",
+    ".claude/skills/project-development/SKILL.md",
+)
+
+
+def test_onepassword_store_and_onboarding_name_only_the_tenant_vault(repo):
+    """The store, the token and the grant all name the tenant's own vault, and
+    no rendered doc names the cluster's vault or a shared-vault model."""
+    if repo.answers["secrets_backend"] != "onepassword":
+        pytest.skip("the 1Password branch is not rendered")
+    vault = repo.answers["onepassword_vault"]
+    assert vault == repo.answers["app_namespace"]
+    provider = _onboarding_store(repo.path)["spec"]["provider"]["onepassword"]
+    assert provider["vaults"] == {vault: 1}, f"store vaults: {provider['vaults']}"
+    onboarding = _onboarding(repo.path)
+    named = re.findall(r'(?:--vaults?|op vault (?:get|create)) "([^"]*)"', onboarding)
+    assert named, "O1 renders no op command scoped to a vault"
+    assert set(named) == {vault}, f"op commands name vaults {sorted(set(named))}"
+    for command in ("op vault create", "op connect vault grant", "op connect token create"):
+        assert command in onboarding, f"O1 lacks `{command}`"
+    slug = repo.answers["app_slug"]
+    assert f"op connect token create <CLUSTER>-{slug}-eso" in onboarding, (
+        "the Connect token name is not cluster-prefixed"
+    )
+    for rel in SECRETS_MODEL_DOCS:
+        text = (repo.path / rel).read_text()
+        assert CLUSTER_VAULT not in text, f"{rel} names the cluster vault"
+        assert "shared vault" not in text, f"{rel} describes a shared-vault model"
+
+
+def test_o2b_names_a_single_pull_host_once(tmp_path_factory, answers):
+    """With one registry host, O2b says so instead of naming it twice as if
+    the credential were keyed to a second, internal name."""
+    host = answers["registry_host"]
+    render = render_app.render(
+        tmp_path_factory.mktemp("render-one-pull-host"),
+        dest_name="render-one-pull-host",
+        data={"registry_pull_host": host},
+    )
+    o2b = _onboarding_step(render, "O2b")
+    assert "keyed into the same credential" not in o2b, o2b
+    assert f"both name `{host}`" in o2b, o2b
+
+
+def test_an_unanswered_vault_defaults_to_the_namespace(tmp_path_factory):
+    """The vault answer is REMOVED so only the default decides, and the
+    namespace differs from every other answer so the store can only have taken it."""
+    scratch = tmp_path_factory.mktemp("render-vault-default")
+    answers_file = render_app.answers_without(scratch, "onepassword_vault")
+    assert yaml.safe_load(answers_file.read_text())["secrets_backend"] == "onepassword"
+    repo = render_app.render(
+        scratch,
+        answers=answers_file,
+        dest_name="render-vault-default",
+        data={"app_namespace": "driftwood"},
+    )
+    recorded = yaml.safe_load((repo / ".copier-answers.yml").read_text())
+    assert recorded["onepassword_vault"] == "driftwood"
+    provider = _onboarding_store(repo)["spec"]["provider"]["onepassword"]
+    assert provider["vaults"] == {"driftwood": 1}, f"store vaults: {provider['vaults']}"
 
 
 def test_a_boolean_shaped_vault_name_survives_the_store(tmp_path_factory):
-    """`No` is a YAML 1.1 boolean, and Kubernetes parses manifest YAML with a
+    """`no` is a YAML 1.1 boolean, and Kubernetes parses manifest YAML with a
     1.1 parser. Unquoted, the key becomes `false` and the store names a vault
     that does not exist."""
     render = render_app.render(
         tmp_path_factory.mktemp("render-bool-vault"),
         dest_name="render-bool-vault",
-        data={"onepassword_vault": "No"},
+        data={"app_namespace": "no", "onepassword_vault": "no"},
     )
-    assert _onboarding_store(render)["spec"]["provider"]["onepassword"]["vaults"] == {"No": 1}
+    assert _onboarding_store(render)["spec"]["provider"]["onepassword"]["vaults"] == {"no": 1}
 
 
 def test_pull_secret_is_wired_into_the_pod(repo):
@@ -1385,7 +1385,7 @@ def test_raising_the_skip_budget_names_the_pipelines_own_copy(repo):
         )
         workflow = (repo.path / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         assert "vars.ALLOWED_SKIPS" in workflow, (
-            "the vendored ci.yml no longer reads vars.ALLOWED_SKIPS; the doc points at "
+            "the vendored ci.yml does not read vars.ALLOWED_SKIPS; the doc points at "
             "a variable nothing consumes"
         )
     else:
@@ -1542,13 +1542,18 @@ def test_the_two_pipelines_pin_one_toolchain(rendered):
     assert not drifted, "the two pipelines disagree on a pin:\n  " + "\n  ".join(drifted)
 
 
-def test_build_job_carries_the_privileged_tag(rendered, answers):
-    """The targeted gate CROSS_RENDER_EXEMPT gives up the blanket scan for."""
-    ci = render_app.load_ci(rendered / ".gitlab-ci.yml")
-    build = [
-        i for i in ci["include"]
-        if isinstance(i, dict) and str(i.get("file", "")).endswith("docker-build.yml")
+def _includes(ci: dict, suffix: str) -> list[dict]:
+    """The pipeline's mapping includes whose `file:` ends in `suffix`."""
+    return [
+        include for include in ci.get("include") or []
+        if isinstance(include, dict) and str(include.get("file", "")).endswith(suffix)
     ]
+
+
+def test_build_job_carries_the_privileged_tag(rendered, answers):
+    """The build include carries the answered runner tag and CPU selector."""
+    ci = render_app.load_ci(rendered / ".gitlab-ci.yml")
+    build = _includes(ci, "docker-build.yml")
     assert len(build) == 1, "the image build must be included exactly once"
     assert build[0]["inputs"]["tags"] == [answers["privileged_runner_tag"]]
     assert build[0]["inputs"]["cpu_selector"] == answers["ci_cpu_selector"]
@@ -1562,10 +1567,7 @@ def test_the_image_build_runs_after_the_secret_scan(request, render_fixture):
     ci = render_app.load_ci(request.getfixturevalue(render_fixture) / ".gitlab-ci.yml")
     stages = ci["stages"]
     assert stages.index("build") > stages.index("security"), stages
-    build = [
-        i for i in ci["include"]
-        if isinstance(i, dict) and str(i.get("file", "")).endswith("docker-build.yml")
-    ]
+    build = _includes(ci, "docker-build.yml")
     assert "needs" not in (build[0].get("inputs") or {}), (
         "the build passes a `needs:` input, which would let it start before the security stage"
     )
@@ -1622,14 +1624,42 @@ def _resolved(ci: dict, name: str, seen: tuple[str, ...] = ()) -> dict:
         assert target in ci, f"{name} extends {target}, which the pipeline does not define"
         assert target.startswith("."), f"{name} extends {target}, which is not a hidden job"
         assert target not in seen, f"extends cycle at {target}"
-        parent = _resolved(ci, target, (*seen, name))
-        # GitLab merges hashes across `extends:`, so a job's own `variables:`
-        # adds to its template's rather than replacing them.
-        variables = {**(parent.get("variables") or {}), **(body.get("variables") or {})}
-        body = {**parent, **body}
-        if variables:
-            body["variables"] = variables
+        body = _deep_merge(_resolved(ci, target, (*seen, name)), body)
     return body
+
+
+def _deep_merge(parent: dict, child: dict) -> dict:
+    """GitLab's `extends:` merge: hashes merge at every depth, and any other
+    value, a list included, is replaced by the child's."""
+    merged = dict(parent)
+    for key, value in child.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def test_extends_merges_hashes_at_every_depth():
+    """A job's own `variables:` adds to its template's, a nested hash merges
+    too, and a list is replaced whole."""
+    ci = {
+        ".base": {
+            "variables": {"A": "1", "B": "1"},
+            "cache": {"key": "base", "policy": {"when": "always", "pull": True}},
+            "script": ["base"],
+        },
+        "job": {
+            "extends": ".base",
+            "variables": {"B": "2"},
+            "cache": {"policy": {"pull": False}},
+            "script": ["job"],
+        },
+    }
+    resolved = _resolved(ci, "job")
+    assert resolved["variables"] == {"A": "1", "B": "2"}
+    assert resolved["cache"] == {"key": "base", "policy": {"when": "always", "pull": False}}
+    assert resolved["script"] == ["job"]
 
 
 def _job_shell(ci: dict, name: str) -> str:
@@ -1715,10 +1745,7 @@ def test_secret_detection_carries_the_cpu_selector(rendered, answers):
     the scan is unschedulable and sits Pending until the job times out.
     """
     ci = render_app.load_ci(rendered / ".gitlab-ci.yml")
-    scan = [
-        i for i in ci["include"]
-        if isinstance(i, dict) and str(i.get("file", "")).endswith("secret-detection.yml")
-    ]
+    scan = _includes(ci, "secret-detection.yml")
     assert len(scan) == 1, "secret detection must be included exactly once"
     assert scan[0]["inputs"]["cpu_selector"] == answers["ci_cpu_selector"]
 
@@ -1727,10 +1754,7 @@ def test_k8s_version_reaches_the_gitlab_shape(rendered, answers):
     """The other targeted gate: the answer must reach both places the GitLab
     shape validates from, so they cannot disagree."""
     ci = render_app.load_ci(rendered / ".gitlab-ci.yml")
-    flux_lint = [
-        i for i in ci["include"]
-        if isinstance(i, dict) and str(i.get("file", "")).endswith("flux-lint.yml")
-    ]
+    flux_lint = _includes(ci, "flux-lint.yml")
     assert flux_lint[0]["inputs"]["k8s_version"] == answers["k8s_version"]
     taskfile = yaml.safe_load((rendered / "Taskfile.yml").read_text())
     assert taskfile["vars"]["K8S_VERSION"] == answers["k8s_version"]
@@ -1741,10 +1765,7 @@ def test_the_crd_catalog_pin_reaches_the_gitlab_shape(rendered):
     only this test stops the job and `task flux-lint` resolving different CR
     schemas — and the include taking the library's own default silently."""
     ci = render_app.load_ci(rendered / ".gitlab-ci.yml")
-    flux_lint = [
-        i for i in ci["include"]
-        if isinstance(i, dict) and str(i.get("file", "")).endswith("flux-lint.yml")
-    ]
+    flux_lint = _includes(ci, "flux-lint.yml")
     passed = flux_lint[0]["inputs"].get("crd_catalog_ref")
     assert passed, (
         "the flux-lint include passes no crd_catalog_ref, so the job takes the "
@@ -1838,15 +1859,22 @@ def _run(repo_path: Path, *command: str, env: dict | None = None) -> subprocess.
     return subprocess.run(command, cwd=repo_path, capture_output=True, text=True, env=env)
 
 
-def _offline_kubeconform(bindir: Path) -> dict[str, str]:
-    """An env whose kubeconform prints a clean summary, so a job script that runs
-    flux-lint.sh over the real `kustomize build` needs no schema download."""
+def _stub_bin(bindir: Path, stubs: dict[str, str]) -> dict[str, str]:
+    """An env whose PATH leads with `bindir`, holding one executable shell stub
+    per name in `stubs`, each running its body."""
     bindir.mkdir(parents=True)
-    (bindir / "kubeconform").write_text(f"#!/bin/sh\nprintf '%s\\n' '{CLEAN_SUMMARY}'\n")
-    (bindir / "kubeconform").chmod(0o755)
+    for name, body in stubs.items():
+        (bindir / name).write_text(f"#!/bin/sh\n{body}")
+        (bindir / name).chmod(0o755)
     env = dict(os.environ)
     env["PATH"] = f"{bindir}{os.pathsep}{env['PATH']}"
     return env
+
+
+def _offline_kubeconform(bindir: Path) -> dict[str, str]:
+    """An env whose kubeconform prints a clean summary, so a job script that runs
+    flux-lint.sh over the real `kustomize build` needs no schema download."""
+    return _stub_bin(bindir, {"kubeconform": f"printf '%s\\n' '{CLEAN_SUMMARY}'\n"})
 
 
 def test_generated_repo_passes_yamllint(repo):
@@ -1874,7 +1902,7 @@ def test_generated_repo_passes_its_doc_link_check(repo, tmp_path):
     result = _run(tree, "python3", "scripts/check-doc-links.py")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "AGENTS.md" in _run(tree, "git", "ls-files", "--", "*.md").stdout, (
-        "the tracked scan saw no AGENTS.md — this gate fell back to docs/ again"
+        "the tracked scan saw no AGENTS.md — this gate reads only docs/"
     )
 
 
@@ -1905,6 +1933,7 @@ def test_generated_manifests_validate(repo):
             "validate-rendered-app runs this gate in CI"
         )
     built = _run(repo.path, "kustomize", "build", FLUX)
+    assert built.returncode == 0, built.stderr
     # Read from the render, so this test and `task flux-lint` cannot resolve
     # different schema sets.
     catalog_ref = yaml.safe_load((repo.path / "Taskfile.yml").read_text())["vars"][
@@ -2071,20 +2100,22 @@ def test_rendered_markdown_has_no_blank_run(repo):
         )
 
 
-# O2 and O2b are conditional on the secret backend and the pull credential;
-# every other step is unconditional, and a missing one leaves the operator a gap
-# they cannot see.
-ONBOARDING_STEPS = tuple(f"### O{n} " for n in (1, 3, 4, 5, 6, 7, 8, 9))
+# O2, O2b, O2d, O2e and O6b follow the secret backend, the pull credential, the
+# CI shape, the image build and the database; every other step is unconditional,
+# and a missing one leaves the operator a gap they cannot see.
+ONBOARDING_STEPS = tuple(
+    f"### O{n} " for n in ("1", "2c", "3", "4", "5", "6", "7", "8", "9", "10")
+)
 
 
 @pytest.mark.parametrize("step", ONBOARDING_STEPS)
 def test_onboarding_ships_every_step(repo, step):
-    onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+    onboarding = _onboarding(repo.path)
     assert step in onboarding, f"docs/ONBOARDING.md is missing {step.strip()}"
 
 
 def test_onboarding_ships_the_secret_steps_with_a_backend(repo):
-    onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+    onboarding = _onboarding(repo.path)
     wanted = repo.answers["secrets_backend"] != "none"
     assert ("### O2 " in onboarding) is wanted
 
@@ -2109,17 +2140,13 @@ def test_the_image_repository_is_lowercase(repo):
 
 
 # answers fixture name -> the file validate-rendered-app names with --answers.
-_ANSWERS_FILES = {"answers": render_app.ANSWERS.name, "answers_b": render_app.ANSWERS_B.name}
+_ANSWERS_FILES = {fixture: path.name for fixture, path in _ANSWER_PATHS.items()}
 
 
 def _answer_set(answers_file: str, data: dict) -> tuple:
     """One render, as (answers file, its --data overrides) with values as CI
     spells them: copier takes every --data as a string."""
-    normalised = {
-        key: str(value).lower() if isinstance(value, bool) else str(value)
-        for key, value in data.items()
-    }
-    return (answers_file, frozenset(normalised.items()))
+    return (answers_file, frozenset(_copier_data(data).items()))
 
 
 # The answers file each validate-rendered-app line names, by basename.
@@ -2215,7 +2242,7 @@ def test_the_cursorrules_pointer_restates_no_rules(repo):
     rules = (repo.path / ".cursorrules").read_text(encoding="utf-8")
     assert "project-development.mdc" in rules
     assert not [line for line in rules.splitlines() if line.startswith("- ")], (
-        ".cursorrules carries rule bullets again — they belong in the .mdc only"
+        ".cursorrules carries rule bullets — they belong in the .mdc only"
     )
 
 
@@ -2235,6 +2262,32 @@ def test_the_shipped_agent_permissions_are_announced_and_deny_the_main_push(repo
     )
 
 
+def test_the_shipped_deny_list_leaves_feature_branch_pushes_to_ask(repo):
+    """A deny entry matching a feature-branch push turns the `ask` on `git push`
+    into a refusal for every branch. A `Bash(prefix:*)` rule matches its prefix,
+    `*` included, at a word boundary."""
+    deny = json.loads((repo.path / ".claude/settings.json").read_text())["permissions"]["deny"]
+    prefixes = [e[len("Bash(") : -len(":*)")] for e in deny if e.startswith("Bash(git push")]
+
+    def denied(command: str) -> bool:
+        return any(fnmatchcase(command, p) or fnmatchcase(command, p + " *") for p in prefixes)
+
+    for command in (
+        "git push origin HEAD",
+        "git push origin HEAD:feat/x",
+        "git push -u origin feat/x",
+        "git push origin main-fix",
+        "git push origin feat/x:refs/heads/maintenance",
+    ):
+        assert not denied(command), f"{command!r} is denied"
+    for command in (
+        "git push origin main",
+        "git push origin HEAD:main",
+        "git push origin feat/x:refs/heads/main",
+    ):
+        assert denied(command), f"{command!r} is not denied"
+
+
 _NOT_PUSHED = "does NOT push to"
 
 
@@ -2244,10 +2297,10 @@ def test_a_non_ghcr_answer_is_flagged_on_the_github_shape(
     """The vendored build workflow publishes from its own literals, so an
     answered registry the GitHub shape cannot honour has to be said out loud —
     and only there. Both terms of the condition get a negative case."""
-    flagged = (rendered_image_github / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+    flagged = _onboarding(rendered_image_github)
     assert _NOT_PUSHED in flagged
 
-    gitlab = (rendered / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+    gitlab = _onboarding(rendered)
     assert _NOT_PUSHED not in gitlab, "a GitLab tenant has no GitHub workflow to warn about"
 
     ghcr = render_app.render(
@@ -2256,7 +2309,7 @@ def test_a_non_ghcr_answer_is_flagged_on_the_github_shape(
         dest_name="render-ghcr",
         data={"enable_image_build": "true", "registry_host": "ghcr.io"},
     )
-    onboarding = (ghcr / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+    onboarding = _onboarding(ghcr)
     assert _NOT_PUSHED not in onboarding, "ghcr.io IS what the vendored workflow pushes to"
 
     # docs/VERSIONING.md tells the tenant where the build lands, so it may not
@@ -2278,7 +2331,7 @@ def test_the_pull_credential_steps_follow_the_forge(rendered, tmp_path_factory):
         dest_name="render-pull-other",
         data=shared,
     )
-    steps = (other / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+    steps = _onboarding(other)
     assert "### O2b " in steps
     assert "gitlab+deploy-token" not in steps, "a GitHub tenant has no GitLab deploy tokens"
     assert "read:packages" not in steps, "that scope belongs to ghcr.io, not this registry"
@@ -2289,9 +2342,9 @@ def test_the_pull_credential_steps_follow_the_forge(rendered, tmp_path_factory):
         dest_name="render-pull-ghcr",
         data={**shared, "registry_host": "ghcr.io", "registry_pull_host": "ghcr.io"},
     )
-    assert "read:packages" in (ghcr / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+    assert "read:packages" in _onboarding(ghcr)
 
-    gitlab = (rendered / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+    gitlab = _onboarding(rendered)
     assert "read_registry" in gitlab and "gitlab+deploy-token" in gitlab
     assert "read:packages" not in gitlab, "that scope belongs to ghcr.io"
 
@@ -2312,7 +2365,7 @@ def _auths(path: Path, values: tuple[str, str] = ("robot", "plain-token")) -> di
     }
     for pattern, replacement in substitutions.items():
         body, count = re.subn(pattern, lambda _match, value=replacement: value, body)
-        assert count, f"the template no longer contains the action {pattern}"
+        assert count, f"the template does not contain the action {pattern}"
     assert "{{" not in body, f"an unevaluated Go action is left in {body!r}"
     return json.loads(body)["auths"]
 
@@ -2388,14 +2441,14 @@ def test_the_unanswered_pull_host_follows_the_answered_registry(tmp_path_factory
     assert set(_auths(render / FLUX / "externalsecret-registry.yaml")) == {
         answers["registry_host"]
     }
-    onboarding = (render / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+    onboarding = _onboarding(render)
     assert "read:packages" not in onboarding, (
         "the GHCR walkthrough must not render for an image that lives elsewhere"
     )
 
 
 def test_onboarding_ships_the_pull_credential_step_with_the_component(repo):
-    onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+    onboarding = _onboarding(repo.path)
     wanted = repo.answers["enable_registry_pull_secret"] and (
         repo.answers["secrets_backend"] != "none"
     )
@@ -2405,7 +2458,7 @@ def test_onboarding_ships_the_pull_credential_step_with_the_component(repo):
 def test_the_github_shape_names_the_k8s_version_the_workflow_hardcodes(rendered_b, answers_b):
     """The vendored workflows carry the library's own `env.K8S_VERSION` literal
     and cannot take an answer, so the divergence has to be said out loud."""
-    onboarding = (rendered_b / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+    onboarding = _onboarding(rendered_b)
     assert "K8S_VERSION" in onboarding
     assert answers_b["k8s_version"] in onboarding
 
@@ -2483,6 +2536,23 @@ def test_every_local_hook_runs_a_path_the_render_ships(repo):
             f"hook {hook['id']} files: {hook['files']!r} matches none of the paths it "
             "runs over, so pre-commit never invokes it"
         )
+
+
+def test_the_doc_links_hook_runs_the_task_s_path_pass(repo):
+    """The hook carries the task's whole environment: without the path pass it
+    passes a commit naming a missing file, and an ignore list that differs
+    lets the task and the hook disagree on the same tree."""
+    task = yaml.safe_load((repo.path / "Taskfile.yml").read_text())["tasks"]["doc-links"]
+    task_env = {key: str(value) for key, value in task["env"].items()}
+    hook = next(h for h in _local_hooks(repo) if h["id"] == "doc-links")
+    tokens = shlex.split(hook["entry"])
+    assert tokens[0] == "env", f"doc-links hook sets no environment: {hook['entry']}"
+    hook_env = dict(t.split("=", 1) for t in tokens[1:] if "=" in t)
+    assert hook_env == task_env
+    # A doc breaks when a file it cites is renamed, so no Markdown-only filter.
+    assert hook.get("always_run") is True and "files" not in hook, (
+        "the doc-links hook runs the path pass but skips a commit that touches no Markdown"
+    )
 
 
 def test_the_hook_filter_check_can_fail(repo):
@@ -2568,16 +2638,13 @@ def _stubbed_path(
     """An env whose kustomize emits `render` and whose kubeconform prints
     `summary` and exits `kubeconform_rc`, so the rendered gate runs where
     neither binary is installed."""
-    bindir.mkdir(parents=True)
-    (bindir / "kustomize").write_text(f"#!/bin/sh\nprintf '%s' '{render}'\n")
-    (bindir / "kubeconform").write_text(
-        f"#!/bin/sh\nprintf '%s\\n' '{summary}'\nexit {kubeconform_rc}\n"
+    return _stub_bin(
+        bindir,
+        {
+            "kustomize": f"printf '%s' '{render}'\n",
+            "kubeconform": f"printf '%s\\n' '{summary}'\nexit {kubeconform_rc}\n",
+        },
     )
-    for name in ("kustomize", "kubeconform"):
-        (bindir / name).chmod(0o755)
-    env = dict(os.environ)
-    env["PATH"] = f"{bindir}{os.pathsep}{env['PATH']}"
-    return env
 
 
 def test_the_manifest_gate_rejects_an_empty_build(repo, tmp_path):
@@ -2596,7 +2663,7 @@ def test_the_manifest_gate_rejects_a_skipped_schema(repo, tmp_path):
     """kubeconform also exits 0 on a resource it skipped for want of a schema,
     which in a tenant repo is most of them. A budget over ALLOWED_SKIPS reds."""
     script = _flux_lint_script(repo)
-    assert "scripts/flux-lint.sh" in script, "the task no longer runs the vendored gate"
+    assert "scripts/flux-lint.sh" in script, "the task does not run the vendored gate"
     env = _stubbed_path(tmp_path / "skips" / "bin", "kind: Service\n", SKIPPED_SUMMARY)
     result = subprocess.run(
         ["sh", "-c", script], cwd=repo.path, capture_output=True, text=True, env=env
@@ -2653,18 +2720,17 @@ def test_the_manifest_gate_hands_kubeconform_a_file_it_parses(repo, tmp_path):
     """The whole gate turns on this one argument: kubeconform skips a file whose
     name it does not recognise without saying so, and `Skipped: 0` then clears
     the budget. No positional argument at all is the stdin form, which it reads."""
-    bindir = tmp_path / "parses" / "bin"
-    bindir.mkdir(parents=True)
     argv = tmp_path / "parses" / "argv"
-    (bindir / "kustomize").write_text("#!/bin/sh\nprintf '%s\\n' 'kind: Service'\n")
-    (bindir / "kubeconform").write_text(
-        f'#!/bin/sh\nfor arg in "$@"; do echo "$arg" >> "{argv}"; done\n'
-        f"printf '%s\\n' '{CLEAN_SUMMARY}'\n"
+    env = _stub_bin(
+        tmp_path / "parses" / "bin",
+        {
+            "kustomize": "printf '%s\\n' 'kind: Service'\n",
+            "kubeconform": (
+                f'for arg in "$@"; do echo "$arg" >> "{argv}"; done\n'
+                f"printf '%s\\n' '{CLEAN_SUMMARY}'\n"
+            ),
+        },
     )
-    for name in ("kustomize", "kubeconform"):
-        (bindir / name).chmod(0o755)
-    env = dict(os.environ)
-    env["PATH"] = f"{bindir}{os.pathsep}{env['PATH']}"
     result = subprocess.run(
         ["sh", "-c", _flux_lint_script(repo)],
         cwd=repo.path,
@@ -2874,7 +2940,7 @@ def test_the_scrape_gate_rejects_a_stale_port(repo, tmp_path):
     port = repo.answers["app_port"]
     for work, script in _scrape_wiring_runs(repo, tmp_path, "stale-port"):
         policies = (work / FLUX / "networkpolicy.yaml").read_text()
-        assert f"port: {port}" in policies, "the scrape allow no longer names the app port"
+        assert f"port: {port}" in policies, "the scrape allow does not name the app port"
         (work / FLUX / "networkpolicy.yaml").write_text(
             policies.replace(f"port: {port}", f"port: {port + 1}")
         )
@@ -3105,9 +3171,7 @@ def rendered_off_forge_registry(tmp_path_factory, answers) -> Path:
 def test_the_pull_credential_step_follows_the_registry(rendered_off_forge_registry):
     """The credential is a property of the registry, not of the forge: a GitLab
     tenant on Harbor has no deploy token to create."""
-    onboarding = (rendered_off_forge_registry / "docs" / "ONBOARDING.md").read_text(
-        encoding="utf-8"
-    )
+    onboarding = _onboarding(rendered_off_forge_registry)
     assert "gitlab+deploy-token" not in onboarding, "a Harbor tenant is sent to a GitLab token"
     assert "robot account, deploy token or pull-scoped token" in onboarding
 
@@ -3125,25 +3189,23 @@ def test_the_off_forge_registry_warning_names_the_project_registry(
     The on-forge render pins the subdomain arm: fixture A's registry is a
     subdomain of its `git_host`, so inverting that test starts warning everyone.
     """
-    off_forge = (rendered_off_forge_registry / "docs" / "ONBOARDING.md").read_text(
-        encoding="utf-8"
-    )
+    off_forge = _onboarding(rendered_off_forge_registry)
     assert NOT_PROJECT_REGISTRY in off_forge, "the off-forge registry is not flagged"
-    on_forge = (rendered / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+    on_forge = _onboarding(rendered)
     assert NOT_PROJECT_REGISTRY not in on_forge, (
         "a registry hosted on the forge's own domain is flagged as off-forge"
     )
 
 
 def test_the_secret_step_names_the_backend_s_own_key(repo):
-    """Step 3 tells the tenant which object to create. The two backends spell
+    """Tenant checklist step 3 tells the tenant which object to create. The two backends spell
     the name differently, and a GitLab variable cannot even hold `api-key`."""
     if repo.answers["secrets_backend"] == "none":
-        return
-    onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+        pytest.skip("no secrets backend, so no secret step")
+    onboarding = _onboarding(repo.path)
     external = (repo.path / FLUX / "externalsecret.yaml").read_text()
     wanted = "api-key" if repo.answers["secrets_backend"] == "onepassword" else "APP_API_KEY"
-    assert wanted in external, f"the ExternalSecret no longer reads {wanted}"
+    assert wanted in external, f"the ExternalSecret does not read {wanted}"
     assert wanted in onboarding, f"step 3 does not name {wanted}"
 
 
@@ -3151,7 +3213,7 @@ def test_the_vpa_is_documented_only_where_it_ships(repo):
     """A doc step naming a manifest the answers did not render is an
     instruction the reader cannot carry out."""
     wanted = repo.answers["enable_vpa"]
-    onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text(encoding="utf-8")
+    onboarding = _onboarding(repo.path)
     assert ("vpa.yaml" in onboarding) is wanted
     architecture = (repo.path / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     assert ("VPA" in architecture) is wanted
@@ -3167,7 +3229,7 @@ def test_the_vpa_cap_matches_the_container_limit(repo):
     kubelet rejects, and anything but RequestsOnly lets the VPA rewrite the
     limit it is capped by. A comment in either file cannot catch an edit."""
     if not repo.answers["enable_vpa"]:
-        return
+        pytest.skip("no VPA on this render")
     vpa = yaml.safe_load((repo.path / FLUX / "vpa.yaml").read_text())
     policies = vpa["spec"]["resourcePolicy"]["containerPolicies"]
     policy = next((p for p in policies if p["containerName"] == "*"), None)
@@ -3299,8 +3361,31 @@ def test_the_dump_is_a_db_component_selected_by_its_instance(repo):
     }
 
 
+def test_every_static_claim_names_a_volume_the_namespace_owns(repo):
+    """Tenant admission accepts a storageClassName "" claim only when its
+    volumeName starts with the namespace, and O6b names that same volume."""
+    prefix = f"{repo.answers['app_namespace']}-"
+    static = {}
+    for path in sorted((repo.path / "kubernetes").rglob("*.yaml")):
+        for doc in yaml.safe_load_all(path.read_text()):
+            if isinstance(doc, dict) and doc.get("kind") == "PersistentVolumeClaim":
+                spec = doc.get("spec") or {}
+                if spec.get("storageClassName") == "":
+                    static[doc["metadata"]["name"]] = spec.get("volumeName") or ""
+    for claim, volume in static.items():
+        assert volume.startswith(prefix), (claim, volume)
+    if _wants_db(repo.answers):
+        slug, namespace = repo.answers["app_slug"], repo.answers["app_namespace"]
+        assert static == {f"{slug}-pg-dump": f"{namespace}-pg-dump"}
+        text = " ".join(_onboarding(repo.path).split())
+        assert (
+            f"NFS PersistentVolume `{namespace}-pg-dump` pre-bound to "
+            f"`{namespace}/{slug}-pg-dump`"
+        ) in text
+
+
 def test_the_onboarding_wiring_reconciles_the_database_first(repo):
-    text = (repo.path / "docs" / "ONBOARDING.md").read_text()
+    text = _onboarding(repo.path)
     assert ("path: ./kubernetes/db" in text) is _wants_db(repo.answers)
     assert (f"    - name: {repo.answers['app_slug']}-db\n" in text) is _wants_db(repo.answers)
     assert ("### O6b" in text) is _wants_db(repo.answers)
@@ -3327,6 +3412,54 @@ def _rule(root: Path, path: str, alert: str) -> dict:
     return found[0]
 
 
+_GITLAB_A = "https://git.ericsweiss.com/eric/recipe-box/-/blob/main/docs/RUNBOOKS.md"
+_GITHUB_A = "https://git.ericsweiss.com/eric/recipe-box/blob/main/docs/RUNBOOKS.md"
+_GITLAB_B = "https://forge.brinemoor.test/seaworks/tidepool/-/blob/main/docs/RUNBOOKS.md"
+_GITHUB_B = "https://forge.brinemoor.test/seaworks/tidepool/blob/main/docs/RUNBOOKS.md"
+
+# Each render's runbooks page as its forge serves the file, written out so a
+# wrong path shape for one forge arm fails. None: forge `other` has no known
+# file URL shape, so every alert links its answered runbook URL directly.
+RUNBOOKS_PAGES = {
+    "shaped": _GITLAB_A,
+    "unlike": _GITHUB_B,
+    "none-shape": _GITLAB_A,
+    "no-secrets": _GITLAB_A,
+    "github-none": _GITHUB_A,
+    "github-image": _GITHUB_B,
+    "forge-other": None,
+    "gitlab-unlike": _GITLAB_B,
+    "gitlab-no-build": _GITLAB_A,
+    "unlike-full": _GITHUB_B,
+    "unlike-db": _GITHUB_B,
+    "private": _GITLAB_A,
+}
+
+
+def test_every_alert_links_its_own_runbook_section(repo):
+    """Each alert's runbook_url is a section of this repo's docs/RUNBOOKS.md
+    on a GitLab or GitHub forge, the page carries one heading per shipped alert,
+    so no anchor dangles, and the page links the platform runbooks."""
+    text = (repo.path / "docs" / "RUNBOOKS.md").read_text()
+    headings = re.findall(r"^## (\S+)$", text, re.M)
+    alerts = {}
+    for path in sorted((repo.path / "kubernetes").rglob("prometheusrule.yaml")):
+        for group in yaml.safe_load(path.read_text())["spec"]["groups"]:
+            for rule in group["rules"]:
+                alerts[rule["alert"]] = rule["annotations"]["runbook_url"]
+    assert sorted(alerts) == sorted(headings), f"alerts {sorted(alerts)}, sections {headings}"
+    page = RUNBOOKS_PAGES[repo.label]
+    for alert, url in alerts.items():
+        fallback = "db_runbook_url" if alert == "DatabaseAbsent" else "runbook_url"
+        want = f"{page}#{alert.lower()}" if page else repo.answers[fallback]
+        assert url == want, (alert, url)
+    assert ("DatabaseAbsent" in alerts) is _wants_db(repo.answers)
+    assert f"]({repo.answers['runbook_url']})" in text
+    if _wants_db(repo.answers):
+        database = text.split("## DatabaseAbsent")[1]
+        assert f"]({repo.answers['db_runbook_url']})" in database
+
+
 def test_database_absent_follows_any_instance_serial(repo):
     """CNPG re-creates a lost instance under the next serial (<slug>-db-2), so a
     pinned pod name pages for ever on a healthy database."""
@@ -3337,7 +3470,6 @@ def test_database_absent_follows_any_instance_serial(repo):
         f'absent(cnpg_collector_up{{namespace="{namespace}", pod=~"{slug}-db-[0-9]+"}})'
     )
     assert "15m" in rule["annotations"]["description"]
-    assert rule["annotations"]["runbook_url"] == repo.answers["db_runbook_url"]
 
 
 def test_the_role_uri_encodes_a_space_as_percent_20(repo):
@@ -3348,7 +3480,7 @@ def test_the_role_uri_encodes_a_space_as_percent_20(repo):
     for doc in docs:
         uri = doc["spec"]["target"]["template"]["data"]["uri"]
         assert '{{ .password | urlquery | replace "+" "%20" }}' in uri, uri
-    onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text()
+    onboarding = _onboarding(repo.path)
     assert "without spaces" in onboarding
 
 
@@ -3426,7 +3558,7 @@ def test_no_app_policy_selects_the_database_pods(repo):
                 allows.append((name, spec["podSelector"]))
     assert allows, "kubernetes/flux carries no allow policy"
     for name, selector in allows:
-        assert _selects(selector, app_pod), f"{name} no longer selects the app's pods"
+        assert _selects(selector, app_pod), f"{name} does not select the app's pods"
         for pod, labels in db_pods.items():
             assert not _selects(selector, labels), f"{name} selects the database {pod} pod"
 
@@ -3439,7 +3571,7 @@ def test_app_db_egress_does_not_select_the_database_pods(repo):
     docs = yaml.safe_load_all((repo.path / DB / "networkpolicy.yaml").read_text())
     policy = next(d for d in docs if d and d["metadata"]["name"] == "app-allow-egress-db")
     selector = policy["spec"]["podSelector"]
-    assert _selects(selector, {"app.kubernetes.io/name": slug}), "no longer selects the app's pods"
+    assert _selects(selector, {"app.kubernetes.io/name": slug}), "the selector does not select the app's pods"
     for pod, labels in _db_pods(slug).items():
         assert not _selects(selector, labels), f"app-allow-egress-db selects the database {pod} pod"
 
@@ -3474,7 +3606,164 @@ def test_the_wiring_quota_counts_the_database_claim(repo):
         assert hard["persistentvolumeclaims"] == "4"
         assert hard[storage_key] == f"{size * 2}Gi"
     else:
-        assert "persistentvolumeclaims" not in hard and storage_key not in hard
+        # The cluster's tenant-wiring gate requires both keys on every tenant;
+        # a tenant that ships no claim caps them at zero.
+        assert hard["persistentvolumeclaims"] == "0"
+        assert hard[storage_key] == "0"
+
+
+PRUNE_DISABLED = {"kustomize.toolkit.fluxcd.io/prune": "disabled"}
+
+
+def _wiring_named(wiring: list[dict], kind: str, name: str) -> dict:
+    found = [d for d in wiring if d.get("kind") == kind and d["metadata"]["name"] == name]
+    assert len(found) == 1, f"the wiring carries {len(found)} {kind} {name}"
+    return found[0]
+
+
+def test_the_wiring_guards_what_outlives_it(repo):
+    """A pruned Namespace cascades to every object and PVC in it, and the caps,
+    the hostname grant and its bindings must outlive the wiring with it."""
+    namespace = repo.answers["app_namespace"]
+    slug = repo.answers["app_slug"]
+    wiring = _onboarding_wiring(repo.path)
+    guarded = [
+        ("Namespace", namespace),
+        ("ResourceQuota", f"{slug}-quota"),
+        ("LimitRange", f"{slug}-limits"),
+        ("ConfigMap", f"tenant-routing-{namespace}"),
+        ("ValidatingAdmissionPolicyBinding", f"tenant-traefik-hostnames-{namespace}"),
+        ("ValidatingAdmissionPolicyBinding", f"tenant-certificates-{namespace}"),
+    ]
+    for kind, name in guarded:
+        annotations = _wiring_named(wiring, kind, name)["metadata"].get("annotations") or {}
+        assert PRUNE_DISABLED.items() <= annotations.items(), f"{kind} {name} is prunable"
+    removal = _onboarding_step(repo.path, "Removal")
+    assert "PVCs survive" not in removal, "Removal promises what the cascade would undo"
+    assert "does not prune the Namespace" in " ".join(removal.split())
+
+
+def test_the_wiring_caps_ephemeral_storage(repo):
+    """emptyDir and writable layers draw on the node's disk; the quota and the
+    LimitRange bound what the namespace writes there, and the cluster gate
+    requires every key."""
+    wiring = _onboarding_wiring(repo.path)
+    slug = repo.answers["app_slug"]
+    hard = _wiring_named(wiring, "ResourceQuota", f"{slug}-quota")["spec"]["hard"]
+    for key in ("requests.ephemeral-storage", "limits.ephemeral-storage"):
+        assert key in hard, f"the quota does not cap {key}"
+    limit_range = _wiring_named(wiring, "LimitRange", f"{slug}-limits")
+    (container,) = [e for e in limit_range["spec"]["limits"] if e["type"] == "Container"]
+    for section in ("default", "defaultRequest", "max"):
+        assert "ephemeral-storage" in container[section], f"no ephemeral-storage {section}"
+    for section in ("default", "max"):
+        assert "cpu" not in container[section], f"a cpu {section} throttles every container"
+
+
+def test_the_wiring_grants_exactly_the_routed_hostnames(repo):
+    """Both admission policies read the grant: a route or certificate naming a
+    host outside it is refused, and with no grant every one is."""
+    namespace = repo.answers["app_namespace"]
+    wiring = _onboarding_wiring(repo.path)
+    grant = _wiring_named(wiring, "ConfigMap", f"tenant-routing-{namespace}")
+    assert grant["metadata"]["namespace"] == "flux-system", "the tenant could edit its grant"
+    granted = {h.strip() for h in grant["data"]["hosts"].splitlines() if h.strip()}
+    docs = _docs(repo.path)
+    routed = {
+        host
+        for d in docs
+        if d["kind"] == "IngressRoute"
+        for r in d["spec"]["routes"]
+        for host in re.findall(r"Host\(`([^`]+)`\)", r["match"])
+    } | {host for d in docs if d["kind"] == "Certificate" for host in d["spec"]["dnsNames"]}
+    assert routed, "the render routes no hostname, so this check proves nothing"
+    assert granted == routed, f"granted {sorted(granted)}, routed {sorted(routed)}"
+    assert not any("*" in h for h in granted), "a wildcard grant refuses every write"
+    for policy in ("tenant-traefik-hostnames", "tenant-certificates"):
+        binding = _wiring_named(
+            wiring, "ValidatingAdmissionPolicyBinding", f"{policy}-{namespace}"
+        )["spec"]
+        assert binding["policyName"] == policy
+        assert binding["validationActions"] == ["Deny"]
+        assert binding["paramRef"] == {
+            "name": f"tenant-routing-{namespace}",
+            "namespace": "flux-system",
+            "parameterNotFoundAction": "Deny",
+        }
+        assert binding["matchResources"] == {
+            "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": namespace}}
+        }
+
+
+def test_the_wiring_reader_is_read_only(repo):
+    """The tenant's kubeconfig identity reads its namespace and its own Flux
+    objects, never Secrets and never a write."""
+    slug, namespace = repo.answers["app_slug"], repo.answers["app_namespace"]
+    wiring = _onboarding_wiring(repo.path)
+    account = _wiring_named(wiring, "ServiceAccount", f"{slug}-reader")
+    assert account["metadata"]["namespace"] == namespace
+    subject = [{"kind": "ServiceAccount", "name": f"{slug}-reader", "namespace": namespace}]
+    view = _wiring_named(wiring, "RoleBinding", f"{slug}-reader-view")
+    assert view["metadata"]["namespace"] == namespace
+    assert view["roleRef"]["kind"] == "ClusterRole" and view["roleRef"]["name"] == "view"
+    assert view["subjects"] == subject
+    role = _wiring_named(wiring, "Role", f"{slug}-reader")
+    assert role["metadata"]["namespace"] == "flux-system"
+    kustomizations = {
+        d["metadata"]["name"] for d in wiring if d.get("kind") == "Kustomization"
+    }
+    named = set()
+    for rule in role["rules"]:
+        assert set(rule["verbs"]) <= {"get", "list", "watch"}, rule["verbs"]
+        assert rule.get("resourceNames"), "an unnamed rule reads every tenant's objects"
+        named |= set(rule["resourceNames"])
+    assert kustomizations <= named, "the reader cannot see one of its Kustomizations"
+    binding = _wiring_named(wiring, "RoleBinding", f"{slug}-reader")
+    assert binding["metadata"]["namespace"] == "flux-system"
+    assert binding["roleRef"] == {
+        "kind": "Role", "name": f"{slug}-reader", "apiGroup": "rbac.authorization.k8s.io"
+    }
+    assert binding["subjects"] == subject
+    onboarding = _onboarding(repo.path)
+    assert f"create token {slug}-reader" in onboarding
+
+
+def test_the_bootstrap_secrets_reach_the_unmanaged_secrets_allowlist(repo):
+    """Every hand-made Secret the wiring needs has no controller owner, so the
+    cluster's unmanaged-secrets gate fails the wiring change without its entry."""
+    slug, namespace = repo.answers["app_slug"], repo.answers["app_namespace"]
+    wiring = _onboarding_wiring(repo.path)
+    source = _wiring_named(wiring, "GitRepository", slug)
+    assert source["spec"]["secretRef"] == {"name": f"{slug}-git-auth"}
+    onboarding = _onboarding(repo.path)
+    assert f"flux-system/{slug}-git-auth" in onboarding
+    assert f"flux create secret git {slug}-git-auth" in onboarding
+    backend = repo.answers["secrets_backend"]
+    if backend != "none":
+        name = "onepassword-connect-token" if backend == "onepassword" else "gitlab-api-token"
+        assert f'"{namespace}/{name}": "tenant ESO bootstrap"' in onboarding
+
+
+def test_the_build_runner_step_ships_with_the_tagged_build(repo):
+    """The tagged build job pends forever without a runner carrying the tag, so
+    the operator step that provides it renders exactly when the job does."""
+    onboarding = _onboarding(repo.path)
+    built = repo.answers["ci_shape"] == "gitlab_selfhosted" and repo.answers["enable_image_build"]
+    assert ("### O2e " in onboarding) == built
+    if built:
+        step = _onboarding_step(repo.path, "O2e")
+        assert f"`{repo.answers['privileged_runner_tag']}`" in step, step
+
+
+def test_the_library_job_token_step_follows_the_gitlab_shape(repo):
+    """Only the GitLab pipeline clones the library with its job token."""
+    onboarding = _onboarding(repo.path)
+    wanted = repo.answers["ci_shape"] == "gitlab_selfhosted"
+    assert ("### O2d " in onboarding) is wanted
+    if wanted:
+        o2d = _onboarding_step(repo.path, "O2d")
+        assert repo.answers["lib_project"] in o2d
+        assert f"{repo.answers['git_namespace']}/{repo.answers['app_slug']}" in o2d
 
 
 def test_o6b_registers_the_dump_with_the_backup_freshness_check(repo):
@@ -3482,8 +3771,7 @@ def test_o6b_registers_the_dump_with_the_backup_freshness_check(repo):
     knows the apps it is told about."""
     _skip_without_db(repo.answers)
     slug = repo.answers["app_slug"]
-    onboarding = (repo.path / "docs" / "ONBOARDING.md").read_text()
-    o6b = onboarding.split("### O6b")[1].split("\n### ")[0]
+    o6b = _onboarding_step(repo.path, "O6b")
     assert "nas_storage_backup_artifact_apps" in o6b
     assert f'{{name: {slug}, pattern: "{slug}-*.sql.gz"}}' in o6b
     assert f'absent(backup_artifact_last_mtime_seconds{{app="{slug}"}})' in o6b
@@ -3733,6 +4021,7 @@ def test_the_database_gates_have_a_pre_commit_hook(repo, tmp_path):
     assert "database" in hooks, "no pre-commit hook runs the kubernetes/db gates"
     if not shutil.which("python"):
         pytest.skip("no `python` on PATH to stand in for the hook venv's")
+    require_tool("kustomize", "database pre-commit hook", _TOOLCHAIN_HINT)
     work = tmp_path / "hook"
     shutil.copytree(repo.path, work)
     command = shlex.split(hooks["database"]["entry"])
@@ -3759,6 +4048,7 @@ def test_the_lint_tasks_run_their_database_arm(repo, tmp_path):
     assert (
         "python3 scripts/check-kustomization.py kubernetes/db" in tasks["kustomization"]["cmds"]
     )
+    require_tool("kustomize", "database lint tasks", _TOOLCHAIN_HINT)
     env = _offline_kubeconform(tmp_path / "offline" / "bin")
     for work, script in _gate_runs(repo, tmp_path, "db-unlisted", "kustomization", "db-manifest-check"):
         (work / DB / "configmap.yaml").write_text(

@@ -37,7 +37,7 @@ including the deploy-notes prompt about new secrets and cluster-side wiring.
 | `kustomize build` + kubeconform | `flux-lint` (library template), running the repo's own `scripts/flux-lint.sh` | `flux-lint` job, the same checks inline | `task flux-lint`, the same `scripts/flux-lint.sh` |
 | ruff | `python-lint` (library template) | `python-lint` job | `task python-lint` |
 | shellcheck | n/a — no GitLab counterpart; a tenant with shell scripts adds the library's `shellcheck` template | `shellcheck` job, skipped when the repo has no `.sh` files | n/a |
-| Markdown link check | `lint-docs-links` (library template) | `lint-docs-links` job | `task doc-links` |
+| Markdown link check | `lint-docs-links` (library template) | `lint-docs-links` job | `task doc-links` and the pre-commit hook |
 | Comment convention (`check-comment-length.py`) | `comment-length` (library template), plus `task comment-length` locally | `comment-length` job, plus `task comment-length` locally | `task comment-length` |
 | Secret scanning | GitLab Secret Detection (gitleaks under the hood), findings block | gitleaks directly, same `.gitleaks.toml`, findings block | pre-commit gitleaks hook |
 | Library pin gate | `lib-pin-check`, plus `task lib-pins` locally — the pins and `scripts/lib-ref-sites.yml`'s sites against the declared `lib_ref` | n/a — no includes to pin | n/a |
@@ -61,9 +61,9 @@ to the include's `crd_catalog_ref` and to `db-manifest-check`, so all three read
 one schema set.
 
 The empty-build guard, the skipped-schema guard and the integer check on the
-skip budget exist twice: in the library's `flux-lint` simple arm, and in the
-rendered `Taskfile.yml`'s shell because a CI template cannot serve a local task.
-`tests/test_render.py` is the only thing holding the two in step.
+skip budget live in the vendored `scripts/flux-lint.sh`, which `task flux-lint`
+and the GitLab `flux-lint` job both run. The GitHub shape's vendored `ci.yml`
+repeats them inline, and the library's own tests exercise both copies.
 
 Both pipelined shapes drive the **same** vendored `scripts/semantic-release.py`
 with `--platform {gitlab,github}`, so there is one implementation to audit
@@ -102,8 +102,8 @@ announces its skip when there is none.
 - **`registry_host`.** The vendored build workflow publishes to
   `ghcr.io/<owner>/<repo>` from its own literals, so a GitHub tenant answering
   another registry gets an image reference nothing pushed to. Answer `ghcr.io`,
-  or swap the workflow's login step and its `REGISTRY`/`IMAGE_NAME`, which makes
-  the copy no longer byte-identical — record that as a deliberate fork.
+  or swap the workflow's login step and its `REGISTRY`/`IMAGE_NAME`. That breaks
+  byte-identity, so record the copy as a deliberate fork.
 - **A privileged runner is not needed.** GitHub-hosted runners ship Docker,
   which is why only the GitLab shape asks for `privileged_runner_tag`.
 

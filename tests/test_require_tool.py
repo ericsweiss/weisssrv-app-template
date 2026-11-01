@@ -4,8 +4,6 @@ checkout reports that or certifies a check it never ran.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 from conftest import require_env, require_tool
 
@@ -24,16 +22,9 @@ def _outcome(ci_optional: bool = False) -> str:
 
 
 @pytest.fixture
-def ambient_ci():
-    """CI as a job sets it: in the real environment, not via monkeypatch, so a
-    fixture-scoped view of the variable is exercised too."""
-    previous = os.environ.get("CI")
-    os.environ["CI"] = "true"
-    yield
-    if previous is None:
-        del os.environ["CI"]
-    else:
-        os.environ["CI"] = previous
+def ambient_ci(monkeypatch):
+    """Set CI=true for this test only, as every pipeline job sets it."""
+    monkeypatch.setenv("CI", "true")
 
 
 def test_a_missing_binary_fails_when_ci_is_set(ambient_ci):

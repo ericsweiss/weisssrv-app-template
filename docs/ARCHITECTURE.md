@@ -102,17 +102,22 @@ list.
 
 The pytest suite asserts structure with no external binaries, so it runs
 anywhere. `tests/validate_render.py` runs what a generated repo's own pipeline
-runs — yamllint, `kustomize build`, kubeconform, a second kubeconform pass over
-`docs/ONBOARDING.md`'s wiring block, ruff, the doc-link checker, the
-egress-fence, scrape-wiring and kustomization gates, the library-pin gate and,
-with `--lib-path`, the vendored-copy gate — against a render. A render carrying
-`kubernetes/db` also gets that tree built, schema-checked and run through the
-egress-fence, kustomization, CNPG-safeguard and storage-class gates (the last
-also holding a statically bound claim to its prune guard), and the
-dump CronJob's `timeZone` in that built output checked against the IANA
-database (the system tzdata or the `tzdata` wheel; with neither, the gate fails
-rather than skips). That is the only way to learn that a repo this template
-produces would fail its own gates.
+runs against a render. This is the only way to learn that a repo this template
+produces would fail its own gates. It runs these gates:
+
+- yamllint, `kustomize build` and kubeconform.
+- A second kubeconform pass over `docs/ONBOARDING.md`'s wiring block.
+- ruff and the doc-link checker.
+- The egress-fence, scrape-wiring and kustomization gates.
+- The library-pin gate.
+- With `--lib-path`, the vendored-copy gate.
+
+A render carrying `kubernetes/db` also gets that tree built and schema-checked.
+It runs through the egress-fence, kustomization, CNPG-safeguard and
+storage-class gates. The storage-class gate also holds a
+statically bound claim to its prune guard. The dump CronJob's `timeZone` in the
+built output is checked against the IANA database. That is the system tzdata or
+the `tzdata` wheel. With neither, the gate fails rather than skips.
 
 ```
 python3 tests/validate_render.py                               # fixture A
@@ -128,28 +133,29 @@ python3 tests/validate_render.py --lib-path ../weisssrv-lib --allow-ref-mismatch
 The vendored-copy gate compares against the library's blobs AT the pinned tag,
 so the checkout `--lib-path` names may sit anywhere. The include-contract gates
 read library templates out of that working tree instead, so they need it at the
-pinned ref; `--allow-ref-mismatch` turns that failure into a printed warning,
+pinned ref. `--allow-ref-mismatch` turns that failure into a printed warning,
 for validating against an unreleased library. CI never passes it.
 
 The render is `git init`-ed before the gates run. The doc-link checker reads
 `git ls-files`, and an untracked tree would silently narrow it to `docs/` and
 two root files.
 
-One render per invocation. Exit 0 when every gate passes, 1 on a failure, and 2
-when a required tool is missing, because a validator that quietly skips itself
-is not one.
+One render per invocation. Exit 0 when every gate passes and 1 on a failure.
+Exit 2 when the run cannot start: a required tool is missing, a `--data` pair is
+malformed, or the rendered Taskfile pins no `CRD_CATALOG_REF`. A missing tool
+is exit 2, never a skip.
 
 ## The one gate no render can carry
 
-The vendored copies live in this repository, not in a generated one: the helpers
-at the root are what this repo lints and, where it has the tree for them, runs
-on itself; the same helpers under `template/scripts/` and the GitHub workflows
-are what it hands to a tenant. Every gate script is a byte-identical library copy, as are the `ci.yml`,
-`release.yml` and `build-image.yml` workflows, which is every workflow the
-GitHub shape ships. That relationship is
-recorded HERE, in `scripts/vendored-manifest.yml`, and checked by the library's
-`check-vendored-copies.py`, which `tests/validate_render.py --lib-path` runs
-against a checkout at `copier.yml`'s `lib_ref` default.
+The vendored copies live in this repository, not in a generated one. The
+helpers at the root are what this repo lints, and runs on itself where it has a
+tree for them. The helpers under `template/scripts/` and the GitHub workflows
+are what it hands to a tenant. Every gate script and every workflow the GitHub
+shape ships is a byte-identical library copy.
+
+`scripts/vendored-manifest.yml` records that relationship. The library's
+`check-vendored-copies.py` checks it, and `tests/validate_render.py --lib-path`
+runs that check against a checkout at `copier.yml`'s `lib_ref` default.
 
 Listing the fork alongside the copy is what makes the gate hold in both
 directions: a deliberate fork that quietly converges fails, and a fork whose
@@ -172,9 +178,9 @@ The rendered manifests name platform objects directly, so a target cluster must
 provide them. The list is in
 [CONSUMING.md § What your cluster must provide](CONSUMING.md#what-your-cluster-must-provide),
 and the tenant-side copy is rendered from
-`template/docs/ARCHITECTURE.md.jinja` — keep the two in agreement. A render test
-asserts that the objects the manifests bind to are named in the tenant copy. A cluster
-generated by
+`template/docs/ARCHITECTURE.md.jinja`. Keep the two in agreement. A render
+test asserts that the objects the manifests bind to are named in the tenant
+copy. A cluster generated by
 [`weisssrv-cluster-template`](https://git.ericsweiss.com/eric/weisssrv-cluster-template)
 is the reference implementation.
 
@@ -194,8 +200,9 @@ detail. The generated `docs/ARCHITECTURE.md` says so where the tenant reads it.
 - **It does not ship storage**, except the optional database component
   (`database: postgres`), whose storage and backups ONBOARDING O6b describes.
   Otherwise the generated app is stateless. Adding a volume is an operator step
-  and storage-class-agnostic; ONBOARDING step O6 works the reference cluster's
-  zvol flow as the example.
+  that ONBOARDING O6 describes. The claim names the `tenant-local` StorageClass,
+  or a platform-written static PV named `<namespace>-<purpose>` that is
+  pre-bound to it.
 - **It does not create the cluster.** That is
   [`weisssrv-cluster-template`](https://git.ericsweiss.com/eric/weisssrv-cluster-template),
   which this template's cluster-identity answers are designed to match.

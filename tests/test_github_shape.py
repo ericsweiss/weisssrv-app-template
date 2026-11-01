@@ -34,7 +34,7 @@ RUN_GATE = re.compile(r"run_gate ([\w.-]+\.py)")
 
 @pytest.fixture(scope="session")
 def github_render(tmp_path_factory) -> Path:
-    """The github shape: answers-unlike answers `ci_shape: github`."""
+    """The github shape, rendered from answers-unlike.yml."""
     return render_app.render(
         tmp_path_factory.mktemp("render-github"),
         answers=render_app.ANSWERS_B,

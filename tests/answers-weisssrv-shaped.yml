@@ -1,7 +1,6 @@
 ---
-# Answer fixture A: the same shape as the reference cluster, every optional
-# component on. Every ASKED question in copier.yml needs an entry here; a
-# computed one is left out, so the render proves the expression that makes it.
+# Answer fixture A: the reference cluster's shape, every optional component on.
+# It answers every asked question, even one these answers make copier skip.
 app_slug: recipe-box
 app_namespace: recipe-box
 app_port: 8080
@@ -18,24 +17,23 @@ runbook_url: https://git.ericsweiss.com/eric/weisssrv/-/blob/main/docs/29-flux-o
 
 ci_shape: gitlab_selfhosted
 forge: gitlab
-# Only `forge: other` is asked for this word; answered anyway so the fixture
-# covers the whole question set, and equal to what the default computes.
+# Equal to what the default computes for `forge: gitlab`.
 change_request: merge request
 enable_image_build: true
 git_host: git.ericsweiss.com
 git_namespace: eric
-privileged_runner_tag: infrastructure
+privileged_runner_tag: tenant-build
 ci_cpu_selector: esweiss.com/cpu=modern
 k8s_version: "1.37.1"
 
 secrets_backend: onepassword
-onepassword_vault: Homelab
+# The tenant's own vault, equal to app_namespace as the cluster's gate requires.
+onepassword_vault: recipe-box
 secret_item: App Secrets
-# Never asked (the GitLab backend is not selected); answered so the fixture
-# covers the whole question set.
 gitlab_api_url: https://git.ericsweiss.com
 
 enable_servicemonitor: true
+enable_public_ingress: true
 enable_internal_ingress: true
 enable_hpa: true
 enable_vpa: true

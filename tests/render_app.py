@@ -7,18 +7,17 @@ stays here is this repository's own.
 from __future__ import annotations
 
 import importlib.util
-import sys
+import re
 from pathlib import Path
 
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import copier_render
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ANSWERS = REPO_ROOT / "tests" / "answers-weisssrv-shaped.yml"
 ANSWERS_B = REPO_ROOT / "tests" / "answers-unlike.yml"
+VENDORED_MANIFEST = REPO_ROOT / "scripts" / "vendored-manifest.yml"
 
 # What CI's validate-rendered-app job creates inside the project directory: a full
 # library clone and the extracted kustomize/kubeconform tarballs. Copying
@@ -82,8 +81,52 @@ def load_gate(name: str, directory: str):
     return module
 
 
+def rendered_name(consumer: str) -> str:
+    """The path a template file renders to: jinja tags, empty segments and the
+    `.jinja` suffix dropped. A conditional name's tags wrap the whole name."""
+    bare = re.sub(r"\{%.*?%\}", "", consumer)
+    return "/".join(part for part in bare.split("/") if part).removesuffix(".jinja")
+
+
+def consumer_paths(
+    sections: tuple[str, ...] = ("vendored", "forked"),
+    document: dict | None = None,
+) -> list[str]:
+    """Every consumer path the manifest's `sections` name, in either entry form.
+    `document`, when given, stands in for the parsed VENDORED_MANIFEST."""
+    if document is None:
+        document = yaml.safe_load(VENDORED_MANIFEST.read_text(encoding="utf-8")) or {}
+    return [
+        entry if isinstance(entry, str) else entry["consumer"]
+        for section in sections
+        for entry in document.get(section) or []
+    ]
+
+
+def vendored_render_paths(manifest: Path = VENDORED_MANIFEST) -> frozenset[str]:
+    """Every `vendored:` copy under template/, as a path relative to a render.
+
+    A declared fork diverges on purpose, so it is scanned as this repo's own file.
+    """
+    document = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+    return frozenset(
+        rendered_name(consumer[len("template/") :])
+        for consumer in consumer_paths(("vendored",), document)
+        if consumer.startswith("template/")
+    )
+
+
 def copy_source(scratch: Path) -> Path:
     return copier_render.copy_source(REPO_ROOT, scratch, extra_ignore=_EXTRA_IGNORE)
+
+
+def answers_without(scratch: Path, name: str) -> Path:
+    """Write ANSWERS minus `name` into `scratch`, so only its default decides it."""
+    answers = yaml.safe_load(ANSWERS.read_text(encoding="utf-8"))
+    del answers[name]
+    path = scratch / "answers-without.yml"
+    path.write_text(yaml.safe_dump(answers), encoding="utf-8")
+    return path
 
 
 def render(

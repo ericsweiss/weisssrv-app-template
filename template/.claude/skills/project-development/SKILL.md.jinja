@@ -41,8 +41,8 @@ task render               # exactly what Flux will apply
 {% if enable_image_build %}task build                # docker build
 {% endif %}```
 
-Secret detection is {% if ci_shape == 'none' %}pre-commit only{% else %}pipeline-only; `pre-commit install` covers it locally{% endif %}.
-Fix lint before opening the {{ change_request }}.
+Secret detection runs {% if ci_shape == 'none' %}only in the pre-commit hooks{% else %}in the pipeline and in the pre-commit hooks{% endif %}, so run
+`pre-commit install` once. Fix lint before opening the {{ change_request }}.
 
 ## Deploy + verify
 
@@ -67,28 +67,18 @@ tag that does not exist in the registry.
 
 ## Conventions already wired in `kubernetes/flux/`
 
-The full account is [`docs/ARCHITECTURE.md`](../../../docs/ARCHITECTURE.md); the
-short version, for editing:
+[`docs/ARCHITECTURE.md`](../../../docs/ARCHITECTURE.md) is the full account.
+Read the section for the part you edit:
 
-- **Routing.** Public `{{ app_slug }}.{{ external_domain }}` is self-serve — the
-  IngressRoute's `external-dns` target annotation provisions the record.
-  Platform middlewares are referenced cross-namespace from their owning
-  namespace (`hsts-header` from `traefik`{% if enable_sso %}, `authentik-auth` from `authentik`{% endif %}).
-- **TLS.** A per-host `Certificate` issues into this namespace; Traefik reads the
-  Secret only from the route's own namespace.
+- Routing, middlewares and TLS: § Request path.
 {%- if secrets_backend != 'none' %}
-- **Secrets.** `ExternalSecret` → `ClusterSecretStore`
-  `{{ secrets_backend }}-{{ app_slug }}` (operator-owned, scoped to this
-  namespace).
-{%- if secrets_backend == 'onepassword' %} `remoteRef.key` is the prefixed item
-  title `"{{ app_slug }}: <Item>"`, `remoteRef.property` the field.
+- The ExternalSecret and its store: § Secret flow.
 {%- endif %}
-{%- endif %}
-- **Alerts.** Every expression pins `namespace`: tenant rules are evaluated
-  cluster-wide, so an unpinned `absent()` never fires once any namespace has
-  a like-named Deployment.
-- **Hardening.** Non-root, read-only root filesystem, dropped capabilities, and
-  soft avoidance of the storage node.
+- Storage and placement: § Storage & scheduling.
+- Ingress and egress fences: § Network policy.
+- Metrics, alerts and logs: § Observability.
+
+Pod hardening is a hard rule in [`CLAUDE.md`](../../../CLAUDE.md#hard-rules).
 
 ## The image
 {% if enable_image_build %}

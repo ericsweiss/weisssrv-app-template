@@ -17,6 +17,7 @@ is recorded as `_src_path` in `.copier-answers.yml`, alongside the answers
 | `docs/ONBOARDING.md` | the wiring the operator adds once, rendered with this repo's names |
 | `docs/ARCHITECTURE.md` | how this app rides the shared platform |
 | `docs/VERSIONING.md` | what the release job reads from commit subjects |
+| `docs/RUNBOOKS.md` | one section per alert this repo raises, which its `runbook_url` links |
 {%- if enable_image_build %}
 | `Dockerfile` | placeholder service image — **replace it with your build** |
 {%- endif %}
@@ -27,8 +28,10 @@ is recorded as `_src_path` in `.copier-answers.yml`, alongside the answers
 {%- endif %}
 | `Taskfile.yml` | the local gates and the read-only cluster checks |
 
-Enabled components: routing on `{{ app_slug }}.{{ external_domain }}`
-{%- if enable_internal_ingress %} and `{{ app_slug }}.{{ internal_domain }}`{% endif %},
+Enabled components: routing on
+{%- if enable_public_ingress %} `{{ app_slug }}.{{ external_domain }}`{% endif %}
+{%- if enable_public_ingress and enable_internal_ingress %} and{% endif %}
+{%- if enable_internal_ingress %} `{{ app_slug }}.{{ internal_domain }}`{% endif %},
 {% if secrets_backend == 'none' %}no secret backend{% else %}the {{ secrets_backend }} secret backend{% endif %},
 {% if enable_servicemonitor %}metrics scraping{% else %}no metrics scraping{% endif %},
 {% if enable_hpa %}an HPA{% else %}a fixed {{ replica_count }} replica{{ 's' if replica_count > 1 else '' }}{% endif %},
@@ -126,7 +129,8 @@ Secret **values** never go in git. `kubernetes/flux/externalsecret.yaml`
 references the `ClusterSecretStore` `{{ secrets_backend }}-{{ app_slug }}`, which
 the operator creates.
 {%- if secrets_backend == 'onepassword' %}
-Items live in the shared vault prefixed with the slug, so `remoteRef.key` is
+Items live in this tenant's own vault, `{{ onepassword_vault }}`. The store
+reads that vault and no other. Titles carry the slug, so `remoteRef.key` is
 `"{{ app_slug }}: <Item>"` and `remoteRef.property` is the field.
 {%- else %}
 Each masked CI/CD variable on this project maps across as a `remoteRef.key`.

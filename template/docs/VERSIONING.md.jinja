@@ -40,22 +40,30 @@ the environment variables the Deployment reads. The file layout of this repo is
 not an API — it is yours to change.
 
 **The image tag is what deploys, not the git tag.**
-{%- if enable_image_build and ci_shape == 'github' %} The CI build pushes
-`ghcr.io/<owner>/<repo>:<short-sha>` from the vendored workflow's own literals,
-{% if registry_host != 'ghcr.io' %}never `{{ registry_host }}`, {% endif %}and
-{% elif enable_image_build and ci_shape != 'none' %} The CI build pushes
-{% if not (registry_host.split(':')[0] == git_host or registry_host.split(':')[0].endswith('.' ~ git_host)) %}`$CI_REGISTRY_IMAGE:<short-sha>` — this project's GitLab
-registry, not `{{ registry_host }}`{% else %}`{{ registry_host }}/{{ git_namespace | lower }}/{{ app_slug }}:<short-sha>`{% endif %}, and
-{% elif enable_image_build %} With no pipeline, you build
-`{{ registry_host }}/{{ git_namespace | lower }}/{{ app_slug }}` yourself (`task build`
-builds it locally) and push the tag, and
-{% else %} {% endif %}`kubernetes/flux/deployment.yaml` points at a tag you
-choose. A release tag is a label on the commit — a marker for the notes and for
-rollback; it does not by itself change what is running. Point `image:` at the
-digest or the tag the released commit produced. Image tags here are literal:
-the O3 wiring's `postBuild` substitutes only from the cluster's `cluster-config`
-ConfigMap, so a `${var}` resolves to a cluster value or fails the reconcile,
-never to a tag you choose.
+{%- if enable_image_build and ci_shape == 'github' %}
+The CI build pushes `ghcr.io/<owner>/<repo>:<short-sha>` from the vendored
+workflow's own literals{% if registry_host != 'ghcr.io' %}, never to `{{ registry_host }}`{% endif %}.
+{%- elif enable_image_build and ci_shape != 'none' %}
+{%- if not (registry_host.split(':')[0] == git_host or registry_host.split(':')[0].endswith('.' ~ git_host)) %}
+The CI build pushes `$CI_REGISTRY_IMAGE:<short-sha>` to this project's GitLab
+registry, not to `{{ registry_host }}`.
+{%- else %}
+The CI build pushes
+`{{ registry_host }}/{{ git_namespace | lower }}/{{ app_slug }}:<short-sha>`.
+{%- endif %}
+{%- elif enable_image_build %}
+With no pipeline, you build
+`{{ registry_host }}/{{ git_namespace | lower }}/{{ app_slug }}` with
+`task build` and push the tag yourself.
+{%- endif %}
+`kubernetes/flux/deployment.yaml` points at a tag you choose. A release tag is a
+label on the commit. It marks the notes and the rollback point, and it changes
+nothing that is running. Point `image:` at the digest or the tag the released
+commit produced.
+
+Image tags here are literal. The O3 wiring's `postBuild` substitutes only from
+the cluster's `cluster-config` ConfigMap, so a `${var}` resolves to a cluster
+value or fails the reconcile. It never resolves to a tag you choose.
 {%- if ci_shape == 'gitlab_selfhosted' %}
 
 ## The library pin

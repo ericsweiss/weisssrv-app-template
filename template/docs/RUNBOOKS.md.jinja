@@ -1,0 +1,62 @@
+# Runbooks
+
+Every alert in `kubernetes/flux/prometheusrule.yaml`{% if database == 'postgres' and secrets_backend == 'onepassword' %} and
+`kubernetes/db/prometheusrule.yaml`{% endif %} links its section here through its
+`runbook_url`. Platform alerts, and the platform side of the causes below, live
+in the [cluster runbooks]({{ runbook_url }}). Every command here only reads. A
+fix ships as a {{ change_request }}, never a `kubectl apply`.
+
+## AppDown
+
+Deployment `{{ app_slug }}` has had no available replica for 10m.
+
+```bash
+kubectl -n {{ app_namespace }} get deploy {{ app_slug }}
+kubectl -n {{ app_namespace }} describe deploy {{ app_slug }}
+kubectl -n {{ app_namespace }} get events --sort-by=.lastTimestamp
+kubectl -n {{ app_namespace }} logs deploy/{{ app_slug }}
+```
+
+A crash loop or a failing readiness probe is the app.
+{%- if secrets_backend != 'none' %}
+`CreateContainerConfigError` means the Secret has not synced, so check
+`kubectl -n {{ app_namespace }} get externalsecret`.
+{%- endif %}
+`ImagePullBackOff` means the image reference or the pull credential, so check
+`image:` in kubernetes/flux/deployment.yaml
+{%- if secrets_backend != 'none' and enable_registry_pull_secret %} and
+`kubectl -n {{ app_namespace }} get externalsecret {{ app_slug }}-registry`
+{%- endif %}.
+`Pending` is a platform problem: [cluster runbooks]({{ runbook_url }}).
+
+## AppAbsent
+
+Prometheus has had no kube-state-metrics series for Deployment `{{ app_slug }}`
+for 15m, so the Deployment is gone or nothing reports it.
+
+```bash
+kubectl -n {{ app_namespace }} get deploy
+flux get kustomizations -n flux-system {{ app_slug }}
+```
+
+A missing Deployment means Flux pruned it or never applied it, so fix the
+Kustomization. When the Deployment exists, kube-state-metrics or Prometheus is
+down, which is a platform problem: [cluster runbooks]({{ runbook_url }}).
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+
+## DatabaseAbsent
+
+No instance of the `{{ app_slug }}-db` CloudNativePG cluster has had its
+exporter scraped for 15m. The database is down, its pod is unschedulable, or
+the PodMonitor or the scrape policy is broken.
+
+```bash
+kubectl -n {{ app_namespace }} get cluster {{ app_slug }}-db
+kubectl -n {{ app_namespace }} get pods -l cnpg.io/cluster={{ app_slug }}-db
+flux get kustomizations -n flux-system {{ app_slug }}-db
+```
+
+A running instance with no scrape points at `kubernetes/db/podmonitor.yaml` or
+`kubernetes/db/networkpolicy.yaml`. A stopped or unschedulable instance is the
+[cluster's CloudNativePG runbook]({{ db_runbook_url }}).
+{%- endif %}

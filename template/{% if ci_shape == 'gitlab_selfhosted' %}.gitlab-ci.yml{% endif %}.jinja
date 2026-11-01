@@ -68,8 +68,8 @@ include:
         - "**/*.yml"
 
   # -- flux-lint: kustomize build + kubeconform (SIMPLE mode) ----------------
-  # substitute: false — a tenant pins literal tags, so nothing needs envsubst.
-  # kustomize_path is the dir this mode builds.
+  # Built unsubstituted. Flux substitutes cluster-config at reconcile, usually
+  # strictly, so escape a literal dollar-brace as `$${var}`.
   - project: {{ lib_project }}
     ref: $[[ inputs.lib_ref ]]
     file: /ci/validate/flux-lint.yml
@@ -81,8 +81,8 @@ include:
       cluster_dir: "kubernetes/flux"
       k8s_version: "{{ k8s_version }}"
       # The same catalog commit Taskfile.yml's CRD_CATALOG_REF pins, so this job
-      # and `task flux-lint` accept the same CR schemas. tests/test_render.py
-      # holds the two equal.
+      # and `task flux-lint` accept the same CR schemas. tests/test_render.py in
+      # the app template holds the two equal.
       crd_catalog_ref: "ad3b08c5045129d7bb1eeffd8e61719b2c8dd1e2"
       changes:
         - "kubernetes/**/*"

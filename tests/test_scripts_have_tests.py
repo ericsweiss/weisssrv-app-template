@@ -13,35 +13,24 @@ from pathlib import Path
 
 import pytest
 import render_app
-import yaml
 
 REPO_ROOT = render_app.REPO_ROOT
 TESTS = Path(__file__).resolve().parent
 SCRIPT_ROOTS = (REPO_ROOT / "scripts", REPO_ROOT / "template" / "scripts")
-MANIFEST = REPO_ROOT / "scripts" / "vendored-manifest.yml"
 
 # Scripts that ship without a suite on purpose: repo-relative path -> reason.
 # An explicit dict, not a filter, so an exemption is a visible edit a reviewer sees.
 EXEMPT: dict[str, str] = {}
 
 
-def vendored_paths(manifest: Path = MANIFEST) -> set[str]:
-    """Consumer paths the manifest registers, vendored and forked alike.
-
-    A template/ consumer path carries the jinja conditional that is part of the
-    real filename, so these compare against the tree without rewriting.
-    """
-    config = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
-    paths = set()
-    for section in ("vendored", "forked"):
-        for entry in config.get(section) or []:
-            paths.add(entry if isinstance(entry, str) else entry["consumer"])
-    return paths
+def _is_script_path(path: str) -> bool:
+    """A manifest consumer path names a script once it is rendered."""
+    return render_app.rendered_name(path).endswith((".py", ".sh"))
 
 
 def collect(roots, exempt, vendored, base: Path = REPO_ROOT) -> list[Path]:
-    """Shipped scripts under `roots`: executable, or .py/.sh (a vendored copy
-    ships mode 644). __pycache__ is generated, not shipped."""
+    """Shipped scripts under `roots`: executable, or .py/.sh once a conditional
+    name's jinja tags are dropped. __pycache__ is generated, not shipped."""
     found = []
     for root in roots:
         for path in sorted(Path(root).rglob("*")):
@@ -50,35 +39,45 @@ def collect(roots, exempt, vendored, base: Path = REPO_ROOT) -> list[Path]:
             rel = path.relative_to(base).as_posix()
             if rel in exempt or rel in vendored:
                 continue
-            if os.access(path, os.X_OK) or path.suffix in (".py", ".sh"):
+            if os.access(path, os.X_OK) or _is_script_path(path.name):
                 found.append(path)
     return found
 
 
-VENDORED = vendored_paths()
+# Consumer paths the manifest registers, vendored and forked alike. A template/
+# path carries the jinja conditional that is part of the real filename.
+VENDORED = set(render_app.consumer_paths())
 ALL_SCRIPTS = collect(SCRIPT_ROOTS, {}, set())
 SHIPPED = collect(SCRIPT_ROOTS, EXEMPT, VENDORED)
 
 
-def suites_naming(name: str) -> list[Path]:
-    """Suites in tests/ that name `name` and define at least one test."""
+def suites_naming(name: str, tests: Path = TESTS) -> list[Path]:
+    """Suites in `tests` that name `name` as a whole filename and define a test."""
+    spelled = re.compile(r"(?<![\w.-])" + re.escape(name) + r"(?![\w-])")
     naming = []
-    for suite in sorted(TESTS.glob("test_*.py")):
+    for suite in sorted(tests.glob("test_*.py")):
         body = suite.read_text(encoding="utf-8")
-        if name in body and re.search(r"^\s*def test_", body, re.M):
+        if spelled.search(body) and re.search(r"^\s*def test_", body, re.M):
             naming.append(suite)
     return naming
 
 
 def test_the_walk_sees_the_scripts_this_repo_ships():
-    """Guard the guard: a bad walk would make every assertion below vacuous."""
-    assert len(ALL_SCRIPTS) >= 6
+    """Guard the guard: a bad walk would make every assertion below vacuous.
+    Every script the manifest registers under a script root must be walked."""
+    walked = {path.relative_to(REPO_ROOT).as_posix() for path in ALL_SCRIPTS}
+    roots = tuple(root.relative_to(REPO_ROOT).as_posix() + "/" for root in SCRIPT_ROOTS)
+    registered = {
+        path for path in VENDORED if path.startswith(roots) and _is_script_path(path)
+    }
+    assert registered, "the manifest registers no script under a script root"
+    assert registered <= walked, f"the walk missed: {sorted(registered - walked)}"
 
 
 def test_the_manifest_subtraction_is_a_real_subtraction():
     """Guard the guard: a manifest that registered nothing would send every
-    library copy through the coverage check and fail on all of them. Every
-    script here is a registered copy today, so SHIPPED is legitimately empty."""
+    library copy through the coverage check and fail on all of them. While
+    every script is a registered copy, SHIPPED is empty."""
     assert len(SHIPPED) < len(ALL_SCRIPTS), "the manifest subtracted no script at all"
 
 
@@ -88,7 +87,7 @@ def test_every_vendored_script_path_exists():
     missing = [
         path
         for path in sorted(VENDORED)
-        if path.endswith((".py", ".sh")) and not (REPO_ROOT / path).exists()
+        if _is_script_path(path) and not (REPO_ROOT / path).exists()
     ]
     assert not missing, (
         "vendored-manifest.yml names scripts that do not exist: " + ", ".join(missing)
@@ -101,7 +100,7 @@ def test_every_shipped_script_is_exercised():
     uncovered = [
         script.relative_to(REPO_ROOT).as_posix()
         for script in SHIPPED
-        if not suites_naming(script.name)
+        if not suites_naming(render_app.rendered_name(script.name))
     ]
     assert not uncovered, (
         f"named by no suite in tests/: {', '.join(uncovered)} — add one, or name "
@@ -128,6 +127,30 @@ def test_an_uncovered_script_is_reported(tmp_path):
     (tmp_path / "notes.md").write_text("")
     assert [p.name for p in collect([tmp_path], {}, set(), base=tmp_path)] == [probe]
     assert not suites_naming(probe)
+
+
+def test_a_conditional_script_name_is_collected(tmp_path):
+    """A template script gated by a jinja path is not executable and its raw
+    suffix is the closing tag, so the name is judged with the tags dropped."""
+    name = "{% if ci_shape == 'github' %}gate.py{% endif %}"
+    (tmp_path / name).write_text("")
+    (tmp_path / "{% if ci_shape == 'github' %}notes.md{% endif %}").write_text("")
+    assert [p.name for p in collect([tmp_path], {}, set(), base=tmp_path)] == [name]
+
+
+def test_a_conditional_script_is_covered_by_its_rendered_name(tmp_path):
+    """A suite spells a conditional script by the name it renders to, so that
+    name is the one the coverage lookup searches for."""
+    name = "{% if ci_shape == 'github' %}gate.py{% endif %}"
+    (tmp_path / "test_gate.py").write_text("def test_it():\n    run('gate.py')\n")
+    assert suites_naming(render_app.rendered_name(name), tests=tmp_path)
+    assert not suites_naming(name, tests=tmp_path)
+
+
+def test_a_longer_filename_does_not_count_as_naming(tmp_path):
+    """Coverage needs the whole filename, not a substring of a longer one."""
+    (tmp_path / "test_other.py").write_text("def test_it():\n    run('my-gate.py')\n")
+    assert not suites_naming("gate.py", tests=tmp_path)
 
 
 def test_an_exemption_is_an_explicit_edit(tmp_path):

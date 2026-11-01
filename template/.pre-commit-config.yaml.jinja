@@ -79,10 +79,12 @@ repos:
 {%- endif %}
       - id: doc-links
         name: doc links
-        entry: python3 scripts/check-doc-links.py
+        # The same environment `task doc-links` sets, so both scan the same paths.
+        # Every commit: the path pass fails a doc whose cited file is renamed.
+        entry: env CHECK_DOC_LINKS_PATHS=1 CHECK_DOC_LINKS_IGNORE= python3 scripts/check-doc-links.py
         language: system
         pass_filenames: false
-        files: \.md$
+        always_run: true
       - id: comment-length
         name: comment length
         # The gate walks the tree itself and reads every file type it knows, so

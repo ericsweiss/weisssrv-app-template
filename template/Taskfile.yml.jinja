@@ -223,7 +223,7 @@ tasks:
       - flux get kustomization {% raw %}{{.KUSTOMIZATION}}{% endraw %}
 
   flux:reconcile:
-    desc: Force an immediate reconcile of the Kustomization (needs KUBECONFIG).
+    desc: Force an immediate reconcile. Needs an operator kubeconfig, not the read-only tenant one.
     cmds:
       - flux reconcile kustomization {% raw %}{{.KUSTOMIZATION}}{% endraw %} --with-source
 {%- if secrets_backend != 'none' %}

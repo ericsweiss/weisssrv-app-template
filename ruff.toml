@@ -1,9 +1,9 @@
 # Forked from weisssrv-lib lint/ruff.toml: header comments only, the rule
-# selection is the library's. Dropped at the repo root so local ruff and the
-# python-lint CI job resolve one profile by discovery.
+# selection is the library's. Dropped at the repo root so every ruff run, local
+# or CI, resolves one profile by discovery.
 target-version = "py39"
 
 [lint]
-# Correctness rules only: pyflakes, the error-level pycodestyle subsets, W and
-# bugbear. Formatting-only rules stay out; the family has no formatter.
+# Pyflakes, bugbear, W and the error-level pycodestyle subsets. The family
+# runs no formatter, so the E1-E3/E5 layout rules stay out.
 select = ["E4", "E7", "E9", "F", "W", "B"]

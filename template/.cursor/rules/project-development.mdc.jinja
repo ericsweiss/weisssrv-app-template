@@ -7,12 +7,11 @@ alwaysApply: true
 # Project development
 
 Before making any change in this repo, read and follow
-`.claude/skills/project-development/SKILL.md` — the authoritative workflow for
-developing and shipping this service onto its k3s cluster. `CLAUDE.md` carries
-the standing rules and the doc index.
+`.claude/skills/project-development/SKILL.md`. It is the workflow for developing
+and shipping this service onto its k3s cluster. `CLAUDE.md` carries the standing
+rules and the doc index.
 
-The rules that must hold in every change, restated here because they are the
-ones that cost real damage:
+Every change holds to these:
 
 - Flux owns all Kubernetes state under `kubernetes/flux/`. Never `kubectl apply`
   or `helm upgrade` to deploy — preview with `kustomize build kubernetes/flux`

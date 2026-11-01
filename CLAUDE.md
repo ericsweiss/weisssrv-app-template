@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code (and other agents) working in **weisssrv-app-template**,
+Guidance for Claude Code and other agents working in **weisssrv-app-template**,
 the copier template that generates tenant repositories for a weisssrv-shaped k3s
 cluster.
 
@@ -16,7 +16,9 @@ file under `template/`, the four seams, and what the render suite holds.
 
 ## Hard rules
 
-- **Never push to `main`.** Branch + merge request, even for one-liners.
+- **Never push to `main`.** Branch + merge request, even for one-liners. Keep
+  the branch local until the merge request is ready.
+- **No AI attribution** in commits, merge requests, code or docs.
 - **Never commit secrets.** The rendered repos hold `ExternalSecret` references
   only, and so does every fixture and doc here.
 - **Never hardcode site identity in `template/`.** Domains, registry hosts, node
@@ -26,12 +28,10 @@ file under `template/`, the four seams, and what the render suite holds.
   conditional path, its line in `kustomization.yaml`, and whatever else it
   implies (a paired Certificate, a NetworkPolicy, an `imagePullSecrets:` entry).
   Add the render assertion in the same change.
-- **Never edit a vendored copy.** `scripts/*.py`, `template/scripts/*.py` and
-  the `ci.yml`, `release.yml` and `build-image.yml` workflows under
-  `template/.github/workflows/` are byte-identical to weisssrv-lib, and
-  `scripts/vendored-manifest.yml` here records every copy and every declared
-  fork. Fix upstream and re-vendor; a local edit is reverted by the next
-  re-vendor and fails the gate.
+- **Never edit a vendored copy.** `scripts/vendored-manifest.yml` is the
+  inventory: every byte-identical weisssrv-lib copy in this repo and in
+  `template/`, and every declared fork. Fix upstream and re-vendor; a local
+  edit is reverted by the next re-vendor and fails the gate.
 - **`copier.yml` is API.** Renaming or removing a question breaks every
   generated repo's `copier update` — that is a MAJOR
   ([`docs/VERSIONING.md`](docs/VERSIONING.md)).

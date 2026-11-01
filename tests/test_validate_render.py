@@ -188,6 +188,63 @@ def test_a_job_that_extends_is_out_of_scope(tmp_path, capsys) -> None:
     assert _check(_pipeline(tmp_path), lib, capsys) == ""
 
 
+def test_a_pages_job_has_its_stage_checked(tmp_path, capsys) -> None:
+    """`pages` is GitLab's Pages job, not a global keyword."""
+    lib = _library(tmp_path, "---\npages:\n  stage: publish\n  script: [echo]\n")
+    problems = _check(_pipeline(tmp_path), lib, capsys)
+    assert "job 'pages' resolves to stage 'publish'" in problems
+
+
+def _set_include(root: Path, **fields) -> Path:
+    """Overwrite fields of the fixture pipeline's one include."""
+    ci = yaml.safe_load((root / ".gitlab-ci.yml").read_text())
+    ci["include"][0].update(fields)
+    (root / ".gitlab-ci.yml").write_text(yaml.safe_dump(ci, sort_keys=False))
+    return root
+
+
+def test_every_file_of_a_list_valued_include_is_inspected(tmp_path, capsys) -> None:
+    lib = _library(tmp_path, "---\na-job:\n  stage: verify\n  script: [echo]\n", rel="/ci/a.yml")
+    _library(tmp_path, "---\nb-job:\n  stage: publish\n  script: [echo]\n", rel="/ci/b.yml")
+    root = _set_include(_pipeline(tmp_path), file=["/ci/a.yml", "/ci/b.yml", "/ci/absent.yml"])
+    problems = _check(root, lib, capsys)
+    assert "ci/a.yml: job 'a-job' resolves to stage 'verify'" in problems
+    assert "ci/b.yml: job 'b-job' resolves to stage 'publish'" in problems
+    assert "ci/absent.yml is not in the library checkout" in problems
+
+
+def test_another_projects_include_is_not_read_from_the_library(tmp_path, capsys) -> None:
+    """Only the library's includes are read out of the library checkout; with
+    none left to inspect the gate says it examined nothing."""
+    lib = _library(tmp_path, HEADERED)
+    root = _pipeline(tmp_path, rel="/ci/other/absent.yml")
+    failures = validate_render.check_include_contract(root, lib, lib_project="seaworks/other")
+    out = capsys.readouterr().out
+    assert failures == ["include contract"]
+    assert "not in the library checkout" not in out
+    assert "examined nothing" in out
+
+
+def test_a_case_variant_library_path_is_inspected(tmp_path, capsys) -> None:
+    """GitLab project paths are case-insensitive, so this is the library."""
+    lib = _library(tmp_path, HEADERED)
+    root = _set_include(_pipeline(tmp_path, passed={"stage": "verify"}), project=LIB_PROJECT.upper())
+    failures = validate_render.check_include_contract(root, lib, lib_project=LIB_PROJECT)
+    assert failures == ["include contract"]
+    assert "resolves to stage 'verify'" in capsys.readouterr().out
+
+
+def test_a_pipeline_with_no_project_include_examined_nothing(tmp_path, capsys) -> None:
+    lib = _library(tmp_path, HEADERED)
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / ".gitlab-ci.yml").write_text(
+        yaml.safe_dump({"stages": ["lint"], "include": [{"local": "/ci/x.yml"}]})
+    )
+    assert validate_render.check_include_contract(root, lib) == ["include contract"]
+    assert "examined nothing" in capsys.readouterr().out
+
+
 def test_a_missing_template_is_reported(tmp_path, capsys) -> None:
     lib = _library(tmp_path, HEADERED)
     problems = _check(_pipeline(tmp_path, rel="/ci/lint/absent.yml"), lib, capsys)
@@ -322,7 +379,15 @@ def test_a_copies_gate_with_no_pinned_ref_is_reported(tmp_path, capsys) -> None:
     assert "pins no library ref" in capsys.readouterr().out
 
 
-def test_a_commit_carrying_several_tags_is_accepted(tmp_path, capsys) -> None:
+@pytest.fixture
+def isolated_git(tmp_path, monkeypatch) -> None:
+    """git with no user or system config, that never walks above tmp_path."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "no-gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+
+
+def test_a_commit_carrying_several_tags_is_accepted(tmp_path, capsys, isolated_git) -> None:
     """The only test that runs the real `git tag --points-at`. A release commit
     may carry more than one tag, and git orders them by refname, so comparing
     against a single one reds a checkout that IS at the pinned ref."""
@@ -339,7 +404,7 @@ def test_a_commit_carrying_several_tags_is_accepted(tmp_path, capsys) -> None:
     assert validate_render.check_include_contract(_pipeline(tmp_path), lib, LIB_REF) == []
 
 
-def test_a_library_git_cannot_read_is_reported(tmp_path, capsys) -> None:
+def test_a_library_git_cannot_read_is_reported(tmp_path, capsys, isolated_git) -> None:
     """A git failure is not 'the checkout is at no tag': the gate has verified
     nothing and must say so."""
     lib = _library(tmp_path, HEADERED)
@@ -405,11 +470,38 @@ def test_a_repo_with_no_pipeline_of_its_own_is_not_a_failure(tmp_path, monkeypat
     assert validate_render.check_own_include_contract(tmp_path / "lib") == []
 
 
-def test_a_taskfile_with_no_catalog_ref_is_rejected(tmp_path) -> None:
-    """An unpinned catalog silently changes what has a schema."""
+def test_the_self_check_skips_an_unrelated_project(tmp_path, monkeypatch) -> None:
+    """The self-check scopes to its own `LIB_PROJECT`, so another project's
+    include is never read out of the library checkout."""
+    root = tmp_path / "self"
+    root.mkdir()
+    (root / ".gitlab-ci.yml").write_text(
+        f"spec:\n  inputs:\n    lib_ref:\n      default: {LIB_REF}\n---\n"
+        + yaml.safe_dump(
+            {
+                "stages": ["lint"],
+                "variables": {"LIB_PROJECT": LIB_PROJECT},
+                "include": [
+                    {"project": LIB_PROJECT, "ref": LIB_REF, "file": TEMPLATE_FILE},
+                    {"project": "seaworks/ci-templates", "ref": LIB_REF, "file": "/ci/x.yml"},
+                ],
+            },
+            sort_keys=False,
+        )
+    )
+    monkeypatch.setattr(validate_render.render_app, "REPO_ROOT", root)
+    _stub_git(monkeypatch, [LIB_REF])
+    assert validate_render.check_own_include_contract(_library(tmp_path, HEADERED)) == []
+
+
+def test_a_taskfile_with_no_catalog_ref_is_an_operator_error(tmp_path, capsys) -> None:
+    """An unpinned catalog silently changes what has a schema. It exits 2, the
+    operator-error code, not 1, the gate-failure one."""
     (tmp_path / "Taskfile.yml").write_text("version: '3'\nvars: {}\n")
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as excinfo:
         validate_render._catalog(tmp_path)
+    assert excinfo.value.code == 2
+    assert "sets no CRD_CATALOG_REF" in capsys.readouterr().err
 
 
 def test_the_catalog_url_embeds_the_pinned_ref(tmp_path) -> None:
@@ -462,13 +554,8 @@ def test_a_db_build_without_the_dump_cronjob_fails_the_dump_gate(tmp_path) -> No
 
 
 def test_a_patched_time_zone_in_the_build_fails_the_dump_gate(tmp_path) -> None:
-    """A kustomize patch can replace the zone, so the gate reads the built
-    output: a valid zone in the source file must not hide a patched one."""
-    db = tmp_path / "kubernetes" / "db"
-    db.mkdir(parents=True)
-    (db / "cronjob-pg-dump.yaml").write_text(
-        "apiVersion: batch/v1\nkind: CronJob\nspec:\n  timeZone: Etc/UTC\n"
-    )
+    """A kustomize patch can replace the zone, so the gate judges the built
+    output it is handed. The source file is never read."""
     runner = validate_render.Runner(tmp_path)
     validate_render._check_dump_timezone(runner, _dump_cronjob("Mars/Olympus_Mons"))
     assert runner.failures == ["dump timezone"]
@@ -520,7 +607,9 @@ def test_no_skipped_resource_passes() -> None:
 def test_an_empty_build_fails(capsys) -> None:
     """kubeconform exits 0 on empty input, so a build that rendered nothing
     would otherwise report a clean gate."""
-    summary = "Summary: 0 resource found parsing stdin - Valid: 0, Invalid: 0, Errors: 0, Skipped: 0"
+    summary = KUBECONFORM_SUMMARY.replace("1 resource", "0 resource").replace(
+        "Valid: 1", "Valid: 0"
+    )
     assert validate_render._kubeconform_skips(summary) == ["kubeconform skips"]
     assert "no resources" in capsys.readouterr().out
 
@@ -540,11 +629,6 @@ def test_a_missing_summary_fails(summary, capsys) -> None:
     assert "skip count is unknown" in capsys.readouterr().out
 
 
-# --------------------------------------------------------------------------
-# The harness: Runner.gate's accounting and main()'s exit code
-# --------------------------------------------------------------------------
-
-
 def test_a_failing_gate_is_recorded_and_printed(tmp_path, capsys) -> None:
     """Every gate is accounted through Runner.gate, and main() turns the tally
     into the exit code: a lost failure greens a broken render."""
@@ -561,28 +645,33 @@ def test_a_passing_gate_is_not_recorded(tmp_path, capsys) -> None:
     assert f"{'probe':<{validate_render.LABEL_WIDTH}} ok" in capsys.readouterr().out
 
 
-# The kubeconform summary the skip check reads: one resource validated, none
-# skipped, so the stubbed run adds no failure of its own.
-_SUMMARY = "1 resource found, Valid: 1, Invalid: 0, Errors: 0, Skipped: 0"
+STUB_ANSWERS = {"k8s_version": "1.36.0", "lib_project": "x/y", "app_namespace": "ns"}
 
 
-def test_validate_runs_every_gate(tmp_path, monkeypatch) -> None:
-    """validate() is the only place a render meets the real toolchain, and
-    nothing else asserts its gate list: a dropped gate must fail here."""
-    labels: list[str] = []
+@pytest.fixture
+def stubbed_validate(monkeypatch):
+    """-> (gate name -> command, per-name output overrides) for a validate()
+    run with every gate recorded instead of executed."""
+    commands: dict[str, tuple] = {}
+    outputs: dict[str, str] = {}
 
     def record(self, name, *command, stdin=None):
-        labels.append(name)
-        return _SUMMARY
+        commands[name] = command
+        return outputs.get(name, KUBECONFORM_SUMMARY)
 
     monkeypatch.setattr(validate_render.Runner, "gate", record)
     monkeypatch.setattr(validate_render, "_make_git_tree", lambda root: None)
     monkeypatch.setattr(validate_render, "_catalog", lambda root: "catalog")
     monkeypatch.setattr(validate_render, "_onboarding_wiring", lambda root: "---\n")
-    answers = {"k8s_version": "1.36.0", "lib_project": "x/y", "app_namespace": "ns"}
-    validate_render.validate(tmp_path, answers)
-    # tmp_path carries no .gitlab-ci.yml, so "library pins" is out of scope.
-    assert set(labels) == {
+    return commands, outputs
+
+
+def test_validate_runs_every_gate(tmp_path, stubbed_validate) -> None:
+    """validate() is the only place a render meets the real toolchain, and
+    nothing else asserts its gate list: a dropped gate must fail here."""
+    commands, _ = stubbed_validate
+    validate_render.validate(tmp_path, STUB_ANSWERS)
+    base = {
         "yamllint",
         "kustomize build",
         "kubeconform",
@@ -593,32 +682,27 @@ def test_validate_runs_every_gate(tmp_path, monkeypatch) -> None:
         "scrape wiring",
         "kustomization",
     }
+    assert set(commands) == base
+    commands.clear()
+    (tmp_path / ".gitlab-ci.yml").write_text("stages: [lint]\n")
+    validate_render.validate(tmp_path, STUB_ANSWERS)
+    assert set(commands) == base | {"library pins"}
+    assert commands["library pins"][-3:] == ("scripts/check-lib-pins.py", "--project", "x/y")
 
 
-def test_validate_builds_and_gates_the_database_tree(tmp_path, monkeypatch) -> None:
+def test_validate_builds_and_gates_the_database_tree(tmp_path, stubbed_validate) -> None:
     """kubernetes/db is reconciled by its own Kustomization, so the flux build
     never reaches it: a render carrying the tree gets its own build and gates."""
-    labels: list[str] = []
-
-    def record(self, name, *command, stdin=None):
-        labels.append(name)
-        # The zone is read from the build, never from the source file.
-        if name == "kustomize build db":
-            return _dump_cronjob("Mars/Olympus_Mons")
-        return _SUMMARY
-
-    monkeypatch.setattr(validate_render.Runner, "gate", record)
-    monkeypatch.setattr(validate_render, "_make_git_tree", lambda root: None)
-    monkeypatch.setattr(validate_render, "_catalog", lambda root: "catalog")
-    monkeypatch.setattr(validate_render, "_onboarding_wiring", lambda root: "---\n")
+    commands, outputs = stubbed_validate
+    # The zone is read from the build, never from the source file.
+    outputs["kustomize build db"] = _dump_cronjob("Mars/Olympus_Mons")
     db = tmp_path / "kubernetes" / "db"
     db.mkdir(parents=True)
     (db / "cluster.yaml").write_text("---\n")
     (db / "cronjob-pg-dump.yaml").write_text(
         "apiVersion: batch/v1\nkind: CronJob\nspec:\n  timeZone: Etc/UTC\n"
     )
-    answers = {"k8s_version": "1.36.0", "lib_project": "x/y", "app_namespace": "ns"}
-    assert validate_render.validate(tmp_path, answers) == ["dump timezone"]
+    assert validate_render.validate(tmp_path, STUB_ANSWERS) == ["dump timezone"]
     assert {
         "kustomize build db",
         "kubeconform db",
@@ -626,7 +710,7 @@ def test_validate_builds_and_gates_the_database_tree(tmp_path, monkeypatch) -> N
         "kustomization db",
         "cnpg clusters",
         "pvc storageclass",
-    } <= set(labels)
+    } <= set(commands)
 
 
 def _stub_main(monkeypatch, tmp_path: Path, failures: list[str]) -> None:
@@ -649,3 +733,65 @@ def test_main_passes_when_every_gate_passed(tmp_path, capsys, monkeypatch) -> No
     _stub_main(monkeypatch, tmp_path, [])
     assert validate_render.main() == 0
     assert "every gate passed" in capsys.readouterr().out
+
+
+def _stub_library_gates(monkeypatch, tmp_path: Path, *data: str) -> tuple[dict, Path]:
+    """-> (gate name -> arguments it received, library path) for a --lib-path
+    main() run. Each checkout verdict carries its own ref, so a swapped verdict
+    reaches the wrong gate visibly."""
+    _stub_main(monkeypatch, tmp_path, [])
+    (tmp_path / ".gitlab-ci.yml").write_text("stages: [lint]\n")
+    lib = tmp_path / "lib"
+    argv = ["validate_render.py", "--lib-path", str(lib)]
+    for pair in data:
+        argv += ["--data", pair]
+    monkeypatch.setattr(sys, "argv", argv)
+    calls: dict[str, tuple] = {}
+    monkeypatch.setattr(validate_render, "_own_lib_ref", lambda: "v0.0.1")
+    monkeypatch.setattr(
+        validate_render, "_report_checkout", lambda label, path, ref, allow: (True, [ref])
+    )
+
+    def copies(path, ref):
+        calls["copies"] = (path, ref)
+        return ["registered copies"]
+
+    def render_contract(root, path, ref, allow, checkout=None, lib_project=None):
+        calls["render"] = (ref, lib_project, checkout)
+        return []
+
+    def own_contract(path, allow, checkout=None):
+        calls["own"] = (path, checkout)
+        return ["own include contract"]
+
+    monkeypatch.setattr(validate_render, "check_registered_copies", copies)
+    monkeypatch.setattr(validate_render, "check_include_contract", render_contract)
+    monkeypatch.setattr(validate_render, "check_own_include_contract", own_contract)
+    return calls, lib
+
+
+def test_main_with_a_library_runs_its_gates_at_the_pinned_refs(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """--lib-path adds the copies gate and both include-contract gates, each
+    fed the ref, the verdict and the library project its pipeline pins."""
+    calls, lib = _stub_library_gates(monkeypatch, tmp_path, "lib_project=seaworks/brinemoor-lib")
+    render_ref = yaml.safe_load(validate_render.render_app.ANSWERS.read_text())["lib_ref"]
+    assert validate_render.main() == 1
+    assert calls["copies"] == (lib, "v0.0.1")
+    assert calls["render"] == (render_ref, "seaworks/brinemoor-lib", (True, [render_ref]))
+    assert calls["own"] == (lib, (True, ["v0.0.1"]))
+    assert "2 gate(s) failed: registered copies, own include contract" in capsys.readouterr().out
+
+
+def test_main_with_a_library_and_no_answered_lib_ref_fails_the_render_contract(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """With no render ref the render's pins cannot be verified at all, so the
+    gate fails rather than reading the checkout at whatever ref it holds."""
+    calls, _ = _stub_library_gates(monkeypatch, tmp_path, "lib_ref=")
+    assert validate_render.main() == 1
+    out = capsys.readouterr().out
+    assert "render" not in calls
+    assert "lib_ref is unset in the answers" in out
+    assert "include contract" in out.rsplit("gate(s) failed:", 1)[-1]

@@ -82,8 +82,8 @@ include:
       tags: []
       image: python:3.14-slim
       # `scripts` is this repository's own vendored tooling. Under
-      # template/scripts ruff sees the four plain-named files; the two with a
-      # Jinja path for a filename are linted in each render that ships them.
+      # template/scripts ruff sees the plain-named files; the ones with a Jinja
+      # path for a filename are linted in each render that ships them.
       targets: "scripts tests template/scripts"
       changes:
         - "scripts/**/*.py"
@@ -218,10 +218,9 @@ validate-rendered-app:
     - python3 scripts/ci-fetch-tools.py kubeconform kustomize
     - |
       set -eo pipefail
-      # Clone the library at copier.yml's lib_ref default; the fixtures are held
-      # to the same tag by tests/test_copier_config.py.
-      LIB_REF=$(python -c "import yaml; print(yaml.safe_load(open('copier.yml'))['lib_ref']['default'])")
-      git clone --depth 1 --branch "$LIB_REF" \
+      # The library at the pipeline's own pin, which tests/test_copier_config.py
+      # holds equal to the lib_ref answer default.
+      git clone --depth 1 --branch "$WEISSSRV_LIB_REF" \
         "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${LIB_PROJECT}.git" \
         "$LIB_CHECKOUT"
   script:
@@ -239,8 +238,8 @@ validate-rendered-app:
       python3 tests/validate_render.py --answers tests/answers-unlike.yml
       --data enable_image_build=true
     # The contrast fixture with every component on: the bare-key remoteRef arm,
-    # the forward-auth middleware, and the seven manifests no other
-    # unlike-answers render produces.
+    # the forward-auth middleware, and the manifests no other unlike-answers
+    # render produces.
     - >-
       python3 tests/validate_render.py --answers tests/answers-unlike.yml
       --data enable_servicemonitor=true --data enable_internal_ingress=true
@@ -287,6 +286,11 @@ validate-rendered-app:
     - >-
       python3 tests/validate_render.py --lib-path "$LIB_CHECKOUT"
       --data secrets_backend=none --data enable_registry_pull_secret=false
+    # The public route off: the internal route is the only one, and SSO goes
+    # with the public route it gates.
+    - >-
+      python3 tests/validate_render.py --lib-path "$LIB_CHECKOUT"
+      --data enable_public_ingress=false --data enable_sso=false
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never

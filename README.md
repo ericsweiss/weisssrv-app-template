@@ -1,5 +1,10 @@
 # weisssrv-app-template
 
+> **Note**: the canonical source for this repository is
+> [git.ericsweiss.com](https://git.ericsweiss.com/eric/weisssrv-app-template).
+> GitHub is a read-only mirror updated by push mirroring. Issues and merge
+> requests go to the GitLab instance.
+
 A **copier template** for services that deploy to a weisssrv-shaped homelab k3s
 cluster. Answer the questions and you get a repository with, on day one:
 
@@ -23,8 +28,11 @@ normal flow.
 
 ```bash
 pipx install 'copier>=9.15.0'   # or: uv tool install 'copier>=9.15.0'
-copier copy https://git.ericsweiss.com/eric/weisssrv-app-template my-service
+copier copy https://github.com/ericsweiss/weisssrv-app-template.git my-service
 ```
+
+The command uses the public GitHub mirror. The canonical project on
+`git.ericsweiss.com` serves the same tags but needs an account on that instance.
 
 Then `cd my-service`, `git init`, commit, and follow the generated README.
 Later, `copier update` replays your answers against a newer template tag, so a
@@ -70,6 +78,7 @@ together — the three kinds of file, the seams, and what the render suite holds
 ## Working on the template
 
 ```bash
+pre-commit install                 # once: gitleaks, YAML and whitespace hooks on every commit
 python3 -m pytest tests            # schema + the renders and their invariants
 python3 tests/render_app.py --out /tmp/render   # eyeball a render
 WEISSSRV_SCHEMA_NETWORK=1 python3 -m pytest tests   # also fetch CRD schemas

@@ -54,24 +54,38 @@ def _write(tmp_path: Path, excepts: list[str]) -> Path:
     return directory
 
 
+def _assert_drift_reported(result: subprocess.CompletedProcess, finding: str) -> None:
+    """Exit 1 is also what an uncaught exception returns, so the finding itself
+    must name the policy: only then did the gate judge the list."""
+    output = result.stdout + result.stderr
+    assert result.returncode == 1, output
+    assert "Traceback" not in output, output
+    assert "drifted from the canonical sets" in output, output
+    assert "NetworkPolicy allow-egress-public" in output, output
+    assert finding in output, output
+
+
 @pytest.mark.parametrize("canonical", CANONICAL_LISTS, ids=CANONICAL_IDS)
 def test_the_canonical_fence_passes(tmp_path, canonical):
-    assert _run(_write(tmp_path, canonical)).returncode == 0
+    result = _run(_write(tmp_path, canonical))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "drifted" not in result.stdout + result.stderr
 
 
 def test_an_emptied_except_list_fails(tmp_path):
     """The edit that most directly re-opens the LAN."""
     assert all(CANONICAL_LISTS), "the gate exposed an empty canonical list"
-    result = _run(_write(tmp_path, []))
-    assert result.returncode == 1, result.stdout + result.stderr
+    _assert_drift_reported(_run(_write(tmp_path, [])), "with no except-list")
 
 
 @pytest.mark.parametrize("canonical", CANONICAL_LISTS, ids=CANONICAL_IDS)
 def test_a_shortened_except_list_fails(tmp_path, canonical):
     """Dropping the metadata address alone is enough to fail it."""
     assert "169.254.0.0/16" in canonical
-    result = _run(_write(tmp_path, [c for c in canonical if c != "169.254.0.0/16"]))
-    assert result.returncode == 1, result.stdout + result.stderr
+    _assert_drift_reported(
+        _run(_write(tmp_path, [c for c in canonical if c != "169.254.0.0/16"])),
+        "non-canonical except-list",
+    )
 
 
 def test_a_directory_with_no_policies_is_an_error(tmp_path):
