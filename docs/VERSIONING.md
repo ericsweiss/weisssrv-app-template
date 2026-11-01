@@ -94,11 +94,6 @@ files that drift separately.
 A `forked` entry's `reason:` must name a difference the file actually contains,
 so the next re-vendor reconciles against the real divergence.
 
-Every gate under `template/scripts/` is a registered library copy. The
-library's `scripts/check-scrape-netpol.py` checks the scrape invariant at
-namespace level over a cluster corpus; `check-scrape-wiring.py`, the copy a
-tenant gets, resolves it per port.
-
 ## Which library release a template release is validated against
 
 `lib_ref` is an answer, so a generated repo can pin any library tag it likes.

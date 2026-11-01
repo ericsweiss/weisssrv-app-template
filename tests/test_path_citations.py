@@ -61,53 +61,43 @@ def vendored() -> frozenset[str]:
     return render_app.vendored_render_paths()
 
 
-def test_shaped_render_cites_only_its_own_files(rendered_a, vendored):
-    assert citations_missing_targets(rendered_a, vendored) == []
+@pytest.mark.parametrize("render", ["rendered_a", "rendered_unlike"])
+def test_the_render_cites_only_its_own_files(request, render, vendored):
+    assert citations_missing_targets(request.getfixturevalue(render), vendored) == []
 
 
-def test_unlike_render_cites_only_its_own_files(rendered_unlike, vendored):
-    assert citations_missing_targets(rendered_unlike, vendored) == []
-
-
-def test_a_citation_of_an_unrendered_file_is_caught(tmp_path):
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "ONBOARDING.md").write_text(
-        "Read docs/ONBOARDING.md, then scripts/no-such-gate.py.\n", encoding="utf-8"
-    )
+@pytest.mark.parametrize(
+    "name, text, cited",
+    [
+        (
+            "docs/ONBOARDING.md",
+            "Read docs/ONBOARDING.md, then scripts/no-such-gate.py.\n",
+            ["scripts/no-such-gate.py"],
+        ),
+        ("note.md", "See docs/CI-SHAPES.md in the app template.\n", []),
+        ("gate.py", "# Mirrors docs/CI-SHAPES.md\n#      in the app template.\n", []),
+        # One blank comment line more than the wrapped case.
+        (
+            "gate.py",
+            "# Mirrors docs/CI-SHAPES.md\n#\n#      in the app template.\n",
+            ["docs/CI-SHAPES.md"],
+        ),
+        (
+            "note.md",
+            "See docs/runbooks/restore.md and scripts/lib/helper.py.\n",
+            ["docs/runbooks/restore.md", "scripts/lib/helper.py"],
+        ),
+    ],
+    ids=["unrendered", "qualified", "wrapped-qualifier", "qualifier-too-far", "subdirectory"],
+)
+def test_a_citation_is_held_to_the_render(tmp_path, name, text, cited):
+    path = tmp_path / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
     problems = citations_missing_targets(tmp_path)
-    assert len(problems) == 1, problems
-    assert "scripts/no-such-gate.py" in problems[0]
-
-
-def test_the_app_template_qualifier_is_accepted(tmp_path):
-    (tmp_path / "note.md").write_text(
-        "See docs/CI-SHAPES.md in the app template.\n", encoding="utf-8"
-    )
-    assert citations_missing_targets(tmp_path) == []
-
-
-def test_a_qualifier_wrapped_onto_the_next_comment_line_is_accepted(tmp_path):
-    (tmp_path / "gate.py").write_text(
-        "# Mirrors docs/CI-SHAPES.md\n#      in the app template.\n", encoding="utf-8"
-    )
-    assert citations_missing_targets(tmp_path) == []
-
-
-def test_a_qualifier_two_lines_down_does_not_excuse_a_citation(tmp_path):
-    """Differs from the wrapped-qualifier case only by one blank comment line."""
-    (tmp_path / "gate.py").write_text(
-        "# Mirrors docs/CI-SHAPES.md\n#\n#      in the app template.\n", encoding="utf-8"
-    )
-    assert len(citations_missing_targets(tmp_path)) == 1
-
-
-def test_a_citation_in_a_subdirectory_is_held_to_the_render(tmp_path):
-    (tmp_path / "note.md").write_text(
-        "See docs/runbooks/restore.md and scripts/lib/helper.py.\n", encoding="utf-8"
-    )
-    problems = citations_missing_targets(tmp_path)
-    assert len(problems) == 2, problems
-    assert "docs/runbooks/restore.md" in problems[0]
+    assert len(problems) == len(cited), problems
+    for problem, target in zip(problems, cited, strict=True):
+        assert target in problem
 
 
 def test_the_vendored_exemption_covers_copies_only(vendored):

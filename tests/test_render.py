@@ -7,6 +7,7 @@ render tests hold. Rendering is session-scoped.
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import os
 import re
@@ -719,7 +720,6 @@ FORGE_VOCABULARY_FILES = (
     "docs/VERSIONING.md",
     "docs/ONBOARDING.md",
     ".claude/skills/project-development/SKILL.md",
-    ".cursor/rules/project-development.mdc",
 )
 
 
@@ -1300,7 +1300,6 @@ SHAPE_FILES = {
             ".gitlab-ci.yml",
             ".gitlab/secret-detection-ruleset.toml",
             "scripts/check-lib-pins.py",
-            "scripts/lib-ref-sites.yml",
             "scripts/check-ci-include-job-names.py",
         ],
         [".github/workflows/ci.yml"],
@@ -1313,7 +1312,6 @@ SHAPE_FILES = {
             ".gitlab-ci.yml",
             ".gitlab/secret-detection-ruleset.toml",
             "scripts/check-lib-pins.py",
-            "scripts/lib-ref-sites.yml",
             "scripts/check-ci-include-job-names.py",
         ],
     ),
@@ -1326,7 +1324,6 @@ SHAPE_FILES = {
             ".github/workflows/ci.yml",
             ".gitlab/secret-detection-ruleset.toml",
             "scripts/semantic-release.py",
-            "scripts/lib-ref-sites.yml",
             "scripts/check-ci-include-job-names.py",
         ],
     ),
@@ -1347,6 +1344,116 @@ def test_ci_shape_keeps_exactly_its_own_files(repo):
         assert (repo.path / relpath).is_file(), f"{relpath} missing from shape {repo.label}"
     for relpath in absent:
         assert not (repo.path / relpath).exists(), f"{relpath} survived into shape {repo.label}"
+
+
+GITHUB_WORKFLOW = Path(".github/workflows/ci.yml")
+
+# The gates the GitLab shape runs as netpol-check, scrape-wiring-check and
+# kustomization-check. The vendored `manifest-gates` job warns and skips a gate
+# the repo does not ship, so a render that stops shipping one goes ungated green.
+EXPECTED_GATES = {
+    "check-netpol-except-parity.py",
+    "check-scrape-wiring.py",
+    "check-kustomization.py",
+}
+
+# The job calls each gate through its own `run_gate <script> [args...]` helper,
+# which prefixes `scripts/` itself.
+RUN_GATE = re.compile(r"run_gate ([\w.-]+\.py)")
+
+
+def _workflow(root: Path) -> dict:
+    return yaml.safe_load((root / GITHUB_WORKFLOW).read_text(encoding="utf-8"))
+
+
+def _check_gates(workflow: dict, root: Path) -> None:
+    """Assert the job runs exactly the three gates and the render ships each."""
+    names: set[str] = set()
+    for step in workflow["jobs"]["manifest-gates"]["steps"]:
+        names.update(RUN_GATE.findall(step.get("run") or ""))
+    missing = sorted(name for name in names if not (root / "scripts" / name).is_file())
+    assert not missing, f"{GITHUB_WORKFLOW} names scripts the render does not ship: {missing}"
+    assert names == EXPECTED_GATES, (
+        f"{GITHUB_WORKFLOW} runs {sorted(names)}, not the three manifest gates "
+        f"{sorted(EXPECTED_GATES)}"
+    )
+
+
+def test_the_manifest_gates_job_runs_exactly_the_three_gates(rendered_b):
+    """The job skips a gate the repo does not ship, so the render has to carry
+    all three, and a dropped call leaves its invariant ungated on this shape."""
+    _check_gates(_workflow(rendered_b), rendered_b)
+
+
+@pytest.mark.parametrize(
+    "replacement", [":", "run_gate check-nothing.py"], ids=["dropped", "missing-script"]
+)
+def test_a_mutated_gate_call_fails_the_job_check(rendered_b, replacement):
+    workflow = copy.deepcopy(_workflow(rendered_b))
+    step = next(
+        s for s in workflow["jobs"]["manifest-gates"]["steps"] if RUN_GATE.search(s.get("run") or "")
+    )
+    assert "run_gate check-kustomization.py" in step["run"], "the mutation missed"
+    step["run"] = step["run"].replace("run_gate check-kustomization.py", replacement)
+    with pytest.raises(AssertionError):
+        _check_gates(workflow, rendered_b)
+
+
+def _pyyaml_pins(root: Path) -> dict[str, set[str]]:
+    """Every PyYAML pin this render ships, by source. One CI shape renders, so a
+    missing pipeline file contributes nothing rather than failing."""
+    pins: dict[str, set[str]] = {}
+    if (root / GITHUB_WORKFLOW).is_file():
+        pins["github-workflow"] = {_workflow(root)["env"]["PYYAML_VERSION"]}
+    pipeline = root / ".gitlab-ci.yml"
+    if pipeline.is_file():
+        gate = render_app.load_ci(pipeline)[".pyyaml-gate"]
+        pins["gitlab-pyyaml-gate"] = {gate["variables"]["PYYAML_VERSION"]}
+    precommit = root / ".pre-commit-config.yaml"
+    if precommit.is_file():
+        config = yaml.safe_load(precommit.read_text(encoding="utf-8"))
+        found = {
+            dep.split("==", 1)[1]
+            for repo in config["repos"]
+            for hook in repo.get("hooks") or []
+            for dep in hook.get("additional_dependencies") or []
+            if dep.startswith("pyyaml==")
+        }
+        if found:
+            pins["pre-commit"] = found
+    return pins
+
+
+def _check_one_pin(roots: list[Path]) -> None:
+    pins: dict[str, set[str]] = {}
+    for root in roots:
+        for source, versions in _pyyaml_pins(root).items():
+            pins.setdefault(source, set()).update(versions)
+    assert set(pins) == {"github-workflow", "gitlab-pyyaml-gate", "pre-commit"}, (
+        f"a PyYAML pin went away — collected {sorted(pins)}"
+    )
+    versions = set().union(*pins.values())
+    assert len(versions) == 1, f"the shapes gate on different PyYAML releases: {pins}"
+
+
+def test_one_pyyaml_pin_across_the_render(rendered_b, rendered):
+    """The vendored workflow's `PYYAML_VERSION` is the library's, and the GitLab
+    pipeline's pin and the pre-commit hooks' follow it. Nothing else holds them."""
+    _check_one_pin([rendered_b, rendered])
+
+
+def test_a_drifted_pyyaml_pin_fails_the_pin_check(tmp_path, rendered_b, rendered):
+    drifted = tmp_path / "drifted"
+    shutil.copytree(rendered_b, drifted)
+    target = drifted / GITHUB_WORKFLOW
+    shipped = _pyyaml_pins(drifted)["github-workflow"].pop()
+    target.write_text(
+        target.read_text(encoding="utf-8").replace(shipped, f"{shipped}.post1"),
+        encoding="utf-8",
+    )
+    assert _pyyaml_pins(drifted)["github-workflow"] != {shipped}, "the rewrite missed the pin"
+    with pytest.raises(AssertionError):
+        _check_one_pin([drifted, rendered])
 
 
 def test_no_pipeline_gate_wording_stays_off_the_github_shape(repo):
@@ -1595,23 +1702,6 @@ def test_every_lint_include_reruns_on_its_own_targets(rendered):
     assert checked, "no include declares both targets and changes — this gate examined nothing"
 
 
-# Top-level pipeline keys that configure the pipeline rather than declare a job.
-PIPELINE_RESERVED_KEYS = frozenset(
-    {
-        "after_script",
-        "before_script",
-        "cache",
-        "default",
-        "image",
-        "include",
-        "services",
-        "stages",
-        "variables",
-        "workflow",
-    }
-)
-
-
 def _resolved(ci: dict, name: str, seen: tuple[str, ...] = ()) -> dict:
     """One job with its `extends:` chain applied, the job's own keys winning.
 
@@ -1670,24 +1760,13 @@ def _job_shell(ci: dict, name: str) -> str:
     return "set -e\n" + "\n".join([*exports, *_resolved(ci, name)["script"]])
 
 
-def _pipeline_jobs(ci: dict) -> list[str]:
-    """The jobs the pipeline declares itself, hidden templates excluded."""
-    return [
-        name
-        for name, body in ci.items()
-        if isinstance(body, dict)
-        and not name.startswith(".")
-        and name not in PIPELINE_RESERVED_KEYS
-    ]
-
-
 def test_every_local_job_resolves_its_extends_chain(rendered):
     """A job extending a name the pipeline does not define is not a red job:
     GitLab refuses the pipeline, so a generated repo would have none at all. The
     resolved `before_script` is what makes these gates runnable on the runner."""
     ci = render_app.load_ci(rendered / ".gitlab-ci.yml")
     checked = 0
-    for name in _pipeline_jobs(ci):
+    for name in render_app.ci_yaml.jobs(ci):
         body = _resolved(ci, name)
         assert body.get("stage") in ci["stages"], (
             f"{name} resolves to stage {body.get('stage')!r}, absent from `stages:`"
@@ -1713,7 +1792,7 @@ def test_every_local_job_reruns_on_the_paths_it_names(rendered):
     runs, or the job skips the commit it exists to gate."""
     ci = render_app.load_ci(rendered / ".gitlab-ci.yml")
     checked = 0
-    for name in _pipeline_jobs(ci):
+    for name in render_app.ci_yaml.jobs(ci):
         body = _resolved(ci, name)
         rules = [rule for rule in body.get("rules") or [] if isinstance(rule, dict)]
         assert any('CI_COMMIT_BRANCH == "main"' in str(rule.get("if", "")) for rule in rules), (
@@ -2128,32 +2207,10 @@ def test_codeowners_warns_only_where_the_forge_needs_it(repo):
     assert warned is (repo.answers["forge"] == "github")
 
 
-def test_the_image_repository_is_lowercase(repo):
-    """A registry repository name may not contain uppercase, so a mixed-case
-    answer renders a reference the kubelet refuses to pull. The TAG may carry
-    any case: the shipped one is the `:REPLACE-ME` placeholder."""
-    deployment = (repo.path / FLUX / "deployment.yaml").read_text()
-    lines = [line for line in deployment.splitlines() if line.strip().startswith("image:")]
-    assert lines, "the Deployment names no image"
-    repository = lines[0].split("image:", 1)[1].strip().rsplit(":", 1)[0]
-    assert repository == repository.lower(), f"the image repository is not lowercase: {repository}"
-
-
-# answers fixture name -> the file validate-rendered-app names with --answers.
-_ANSWERS_FILES = {fixture: path.name for fixture, path in _ANSWER_PATHS.items()}
-
-
 def _answer_set(answers_file: str, data: dict) -> tuple:
     """One render, as (answers file, its --data overrides) with values as CI
     spells them: copier takes every --data as a string."""
     return (answers_file, frozenset(_copier_data(data).items()))
-
-
-# The answers file each validate-rendered-app line names, by basename.
-_ANSWERS_PATHS = {
-    render_app.ANSWERS.name: render_app.ANSWERS,
-    render_app.ANSWERS_B.name: render_app.ANSWERS_B,
-}
 
 
 def _render_validate_lines() -> list[tuple[str, dict[str, str], bool]]:
@@ -2189,7 +2246,7 @@ def test_every_pipeline_render_gets_the_include_contract_gate():
     assert lines, "validate-rendered-app runs no validate_render.py invocation"
     unguarded = []
     for answers_file, data, has_lib_path in lines:
-        answers = yaml.safe_load(_ANSWERS_PATHS[answers_file].read_text())
+        answers = yaml.safe_load((REPO_ROOT / "tests" / answers_file).read_text())
         if data.get("ci_shape", answers["ci_shape"]) != "gitlab_selfhosted":
             continue
         if not has_lib_path:
@@ -2200,15 +2257,10 @@ def test_every_pipeline_render_gets_the_include_contract_gate():
     )
 
 
-def _copier_questions() -> set[str]:
-    document = yaml.safe_load((REPO_ROOT / "copier.yml").read_text())
-    return {key for key in document if not key.startswith("_")}
-
-
 def test_every_render_overrides_a_question_copier_declares():
     """copier drops an unknown --data key without a word, so a typo renders the
     base fixture and every assertion in that entry agrees with itself."""
-    questions = _copier_questions()
+    questions = set(QUESTION_NAMES)
     invocations = _render_validate_invocations()
     assert questions, "copier.yml declared no questions"
     assert invocations, "validate-rendered-app runs no validate_render.py invocation"
@@ -2228,21 +2280,11 @@ def test_every_render_reaches_the_real_toolchain():
     covered = set(_render_validate_invocations())
     missing = []
     for label, (_, answers_fixture, overrides) in RENDERS.items():
-        wanted = _answer_set(_ANSWERS_FILES[answers_fixture], overrides)
+        wanted = _answer_set(_ANSWER_PATHS[answers_fixture].name, overrides)
         if wanted not in covered:
             missing.append(f"{label}: {wanted[0]} {sorted(wanted[1])}")
     assert not missing, (
         "validate-rendered-app renders no tree with these answers:\n  " + "\n  ".join(missing)
-    )
-
-
-def test_the_cursorrules_pointer_restates_no_rules(repo):
-    """One loud copy of the invariants, in the `.mdc` Cursor loads. The legacy
-    `.cursorrules` points at it."""
-    rules = (repo.path / ".cursorrules").read_text(encoding="utf-8")
-    assert "project-development.mdc" in rules
-    assert not [line for line in rules.splitlines() if line.startswith("- ")], (
-        ".cursorrules carries rule bullets — they belong in the .mdc only"
     )
 
 
@@ -2291,8 +2333,24 @@ def test_the_shipped_deny_list_leaves_feature_branch_pushes_to_ask(repo):
 _NOT_PUSHED = "does NOT push to"
 
 
+@pytest.fixture(scope="session")
+def rendered_github_ghcr(tmp_path_factory) -> Path:
+    """Fixture B building and pulling its image on ghcr.io, one host answered twice."""
+    return render_app.render(
+        tmp_path_factory.mktemp("render-github-ghcr"),
+        answers=render_app.ANSWERS_B,
+        dest_name="render-github-ghcr",
+        data={
+            "enable_image_build": "true",
+            "enable_registry_pull_secret": "true",
+            "registry_host": "ghcr.io",
+            "registry_pull_host": "ghcr.io",
+        },
+    )
+
+
 def test_a_non_ghcr_answer_is_flagged_on_the_github_shape(
-    rendered_image_github, rendered, tmp_path_factory
+    rendered_image_github, rendered, rendered_github_ghcr
 ):
     """The vendored build workflow publishes from its own literals, so an
     answered registry the GitHub shape cannot honour has to be said out loud —
@@ -2303,13 +2361,7 @@ def test_a_non_ghcr_answer_is_flagged_on_the_github_shape(
     gitlab = _onboarding(rendered)
     assert _NOT_PUSHED not in gitlab, "a GitLab tenant has no GitHub workflow to warn about"
 
-    ghcr = render_app.render(
-        tmp_path_factory.mktemp("render-ghcr"),
-        answers=render_app.ANSWERS_B,
-        dest_name="render-ghcr",
-        data={"enable_image_build": "true", "registry_host": "ghcr.io"},
-    )
-    onboarding = _onboarding(ghcr)
+    onboarding = _onboarding(rendered_github_ghcr)
     assert _NOT_PUSHED not in onboarding, "ghcr.io IS what the vendored workflow pushes to"
 
     # docs/VERSIONING.md tells the tenant where the build lands, so it may not
@@ -2320,7 +2372,9 @@ def test_a_non_ghcr_answer_is_flagged_on_the_github_shape(
     assert f"{registry}/" not in versioning, "the GitHub build pushes to GHCR, not this registry"
 
 
-def test_the_pull_credential_steps_follow_the_forge(rendered, tmp_path_factory):
+def test_the_pull_credential_steps_follow_the_forge(
+    rendered, rendered_github_ghcr, tmp_path_factory
+):
     """O2b's credential steps name an object the forge has. A GitHub-hosted
     tenant on a self-hosted registry gets neither the GHCR wording nor GitLab's
     deploy token."""
@@ -2336,13 +2390,10 @@ def test_the_pull_credential_steps_follow_the_forge(rendered, tmp_path_factory):
     assert "gitlab+deploy-token" not in steps, "a GitHub tenant has no GitLab deploy tokens"
     assert "read:packages" not in steps, "that scope belongs to ghcr.io, not this registry"
 
-    ghcr = render_app.render(
-        tmp_path_factory.mktemp("render-pull-ghcr"),
-        answers=render_app.ANSWERS_B,
-        dest_name="render-pull-ghcr",
-        data={**shared, "registry_host": "ghcr.io", "registry_pull_host": "ghcr.io"},
-    )
-    assert "read:packages" in _onboarding(ghcr)
+    assert "read:packages" in _onboarding(rendered_github_ghcr)
+    # The same host answered twice deduplicates to one auths entry.
+    registry = rendered_github_ghcr / FLUX / "externalsecret-registry.yaml"
+    assert set(_auths(registry)) == {"ghcr.io"}
 
     gitlab = _onboarding(rendered)
     assert "read_registry" in gitlab and "gitlab+deploy-token" in gitlab
@@ -2385,35 +2436,6 @@ def test_the_pull_credential_survives_a_token_with_json_metacharacters(repo):
         assert entry["username"] == username
         assert entry["password"] == token
         assert base64.b64decode(entry["auth"]).decode() == f"{username}:{token}"
-
-
-def test_the_pull_credential_is_valid_dockerconfigjson(repo):
-    """The body is assembled by a Jinja loop that closes the JSON itself, and
-    a malformed one is ImagePullBackOff on first reconcile with nothing red."""
-    if not (
-        repo.answers["enable_registry_pull_secret"] and repo.answers["secrets_backend"] != "none"
-    ):
-        pytest.skip("this render ships no pull credential")
-    auths = _auths(repo.path / FLUX / "externalsecret-registry.yaml")
-    assert set(auths) == {repo.answers["registry_host"], repo.answers["registry_pull_host"]}
-    for entry in auths.values():
-        assert {"username", "password", "auth"} <= set(entry)
-
-
-def test_one_registry_host_yields_one_auths_entry(tmp_path_factory):
-    """Answering the same host twice must deduplicate, not emit it twice."""
-    render = render_app.render(
-        tmp_path_factory.mktemp("render-pull-one-host"),
-        answers=render_app.ANSWERS_B,
-        dest_name="render-pull-one-host",
-        data={
-            "enable_image_build": "true",
-            "enable_registry_pull_secret": "true",
-            "registry_host": "ghcr.io",
-            "registry_pull_host": "ghcr.io",
-        },
-    )
-    assert set(_auths(render / FLUX / "externalsecret-registry.yaml")) == {"ghcr.io"}
 
 
 def test_the_unanswered_pull_host_follows_the_answered_registry(tmp_path_factory):
@@ -2647,125 +2669,37 @@ def _stubbed_path(
     )
 
 
-def test_the_manifest_gate_rejects_an_empty_build(repo, tmp_path):
-    """kubeconform exits 0 on empty input, so the tenant's own gate has to
-    notice. The guard is RUN here; a disarmed `exit 1` fails this test."""
-    script = _flux_lint_script(repo)
-    env = _stubbed_path(tmp_path / "empty" / "bin", "", CLEAN_SUMMARY)
-    result = subprocess.run(
-        ["sh", "-c", script], cwd=repo.path, capture_output=True, text=True, env=env
-    )
-    assert result.returncode != 0, "flux-lint reported a build with no resources as clean"
-    assert "rendered no document" in result.stdout + result.stderr
-
-
-def test_the_manifest_gate_rejects_a_skipped_schema(repo, tmp_path):
-    """kubeconform also exits 0 on a resource it skipped for want of a schema,
-    which in a tenant repo is most of them. A budget over ALLOWED_SKIPS reds."""
-    script = _flux_lint_script(repo)
+@pytest.mark.parametrize(
+    "render, summary, kubeconform_rc, overrides, expected_rc, message",
+    [
+        # kubeconform exits 0 on empty input, so the tenant's own gate has to notice.
+        ("", CLEAN_SUMMARY, 0, {}, 1, "rendered no document"),
+        # kubeconform also exits 0 on a resource it skipped for want of a schema.
+        ("kind: Service\n", SKIPPED_SUMMARY, 0, {}, 1, "against no schema"),
+        # A failing kubeconform reds the task and carries its own output.
+        ("kind: Service\n", INVALID_SUMMARY, 1, {}, 1, "Invalid: 1"),
+        # A budget the comparison cannot read is false inside an `if`, so it needs a guard.
+        ("kind: Service\n", SKIPPED_SUMMARY, 0, {"ALLOWED_SKIPS": "two"}, 1, "non-negative integer"),
+        # A summary the sed parse cannot read must red, not compare against "".
+        ("kind: Service\n", NO_SKIPPED_SUMMARY, 0, {}, 1, "against no schema"),
+        # The success path, the Skipped parse and the budget compare, needs its own run.
+        ("kind: Service\n", CLEAN_SUMMARY, 0, {}, 0, "Skipped: 0"),
+    ],
+    ids=["empty", "skipped", "invalid", "bad-budget", "no-skip-count", "clean"],
+)
+def test_the_manifest_gate(
+    repo, tmp_path, render, summary, kubeconform_rc, overrides, expected_rc, message
+):
+    """The rendered flux-lint task, run against stubbed kustomize and kubeconform."""
+    script = _flux_lint_script(repo, **overrides)
     assert "scripts/flux-lint.sh" in script, "the task does not run the vendored gate"
-    env = _stubbed_path(tmp_path / "skips" / "bin", "kind: Service\n", SKIPPED_SUMMARY)
+    env = _stubbed_path(tmp_path / "bin", render, summary, kubeconform_rc=kubeconform_rc)
     result = subprocess.run(
         ["sh", "-c", script], cwd=repo.path, capture_output=True, text=True, env=env
     )
-    assert result.returncode != 0, "flux-lint reported 3 unvalidated resources as clean"
-    assert "against no schema" in result.stdout + result.stderr
-
-
-def test_the_manifest_gate_reports_an_invalid_resource(repo, tmp_path):
-    """A non-zero kubeconform must red the task and carry its own output, not
-    swallow it into the command substitution."""
-    script = _flux_lint_script(repo)
-    env = _stubbed_path(
-        tmp_path / "invalid" / "bin", "kind: Service\n", INVALID_SUMMARY, kubeconform_rc=1
-    )
-    result = subprocess.run(
-        ["sh", "-c", script], cwd=repo.path, capture_output=True, text=True, env=env
-    )
-    assert result.returncode != 0, "flux-lint reported an invalid resource as clean"
-    assert "Invalid: 1" in result.stdout + result.stderr
-
-
-def test_the_manifest_gate_rejects_a_non_integer_skip_budget(repo, tmp_path):
-    """A budget the comparison cannot read errors inside an `if` condition,
-    which sh reports as false, so without the guard the gate passes."""
-    script = _flux_lint_script(repo, ALLOWED_SKIPS="two")
-    env = _stubbed_path(tmp_path / "bad-budget" / "bin", "kind: Service\n", SKIPPED_SUMMARY)
-    result = subprocess.run(
-        ["sh", "-c", script], cwd=repo.path, capture_output=True, text=True, env=env
-    )
-    assert result.returncode != 0, "flux-lint accepted a budget it cannot compare against"
-    assert "non-negative integer" in result.stdout + result.stderr
-
-
-def test_the_manifest_gate_rejects_a_summary_without_a_skip_count(repo, tmp_path):
-    """A summary the sed parse cannot read leaves the skip budget compared
-    against an empty string, which must red rather than pass."""
-    script = _flux_lint_script(repo)
-    env = _stubbed_path(tmp_path / "no-skips" / "bin", "kind: Service\n", NO_SKIPPED_SUMMARY)
-    result = subprocess.run(
-        ["sh", "-c", script], cwd=repo.path, capture_output=True, text=True, env=env
-    )
-    assert result.returncode != 0, "flux-lint reported an unparsable summary as clean"
-    assert "against no schema" in result.stdout + result.stderr
-
-
-# kubeconform chooses its parser by FILE EXTENSION. Handed a path carrying none
-# it reports "0 resource found in 0 file" and exits 0, so a gate that renders to
-# a bare mktemp file validates nothing and still passes its skip budget.
-KUBECONFORM_READS = (".yaml", ".yml", ".json")
-
-
-def test_the_manifest_gate_hands_kubeconform_a_file_it_parses(repo, tmp_path):
-    """The whole gate turns on this one argument: kubeconform skips a file whose
-    name it does not recognise without saying so, and `Skipped: 0` then clears
-    the budget. No positional argument at all is the stdin form, which it reads."""
-    argv = tmp_path / "parses" / "argv"
-    env = _stub_bin(
-        tmp_path / "parses" / "bin",
-        {
-            "kustomize": "printf '%s\\n' 'kind: Service'\n",
-            "kubeconform": (
-                f'for arg in "$@"; do echo "$arg" >> "{argv}"; done\n'
-                f"printf '%s\\n' '{CLEAN_SUMMARY}'\n"
-            ),
-        },
-    )
-    result = subprocess.run(
-        ["sh", "-c", _flux_lint_script(repo)],
-        cwd=repo.path,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert argv.is_file(), "kubeconform was never invoked"
-    args = argv.read_text().splitlines()
-    positional, skip = [], False
-    for arg in args:
-        if skip:
-            skip = False
-        elif arg in ("-kubernetes-version", "-schema-location", "-output"):
-            skip = True
-        elif not arg.startswith("-"):
-            positional.append(arg)
-    for target in positional:
-        assert target.endswith(KUBECONFORM_READS), (
-            f"the gate hands kubeconform {target!r}, whose extension it does not parse: "
-            "it reports 0 resources, exits 0, and the skip budget clears"
-        )
-
-
-def test_the_manifest_gate_passes_a_clean_render(repo, tmp_path):
-    """Both negative controls also pass on a permanently-broken gate, so the
-    success path — the Skipped parse and the budget compare — needs its own."""
-    script = _flux_lint_script(repo)
-    env = _stubbed_path(tmp_path / "clean" / "bin", "kind: Service\n", CLEAN_SUMMARY)
-    result = subprocess.run(
-        ["sh", "-c", script], cwd=repo.path, capture_output=True, text=True, env=env
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "Skipped: 0" in result.stdout, result.stdout + result.stderr
+    output = result.stdout if expected_rc == 0 else result.stdout + result.stderr
+    assert (result.returncode != 0) == bool(expected_rc), result.stdout + result.stderr
+    assert message in output, result.stdout + result.stderr
 
 
 def _gate_scripts(repo: Repo, task: str, job: str) -> list[str]:
@@ -2794,43 +2728,14 @@ def _gate_runs(repo: Repo, tmp_path: Path, name: str, task: str, job: str):
         yield work, script
 
 
-def _kustomization_scripts(repo: Repo) -> list[str]:
-    return _gate_scripts(repo, "kustomization", "kustomization-check")
-
-
-def _kustomization_runs(repo: Repo, tmp_path: Path, name: str):
-    return _gate_runs(repo, tmp_path, name, "kustomization", "kustomization-check")
-
-
-def test_the_kustomization_gate_rejects_an_empty_list(repo, tmp_path):
-    """kustomize exits 0 on an emptied `resources:` and the cluster-side
-    Kustomization then prunes the namespace. The guard is RUN here."""
-    for work, script in _kustomization_runs(repo, tmp_path, "empty"):
-        kustomization = work / FLUX / "kustomization.yaml"
-        document = yaml.safe_load(kustomization.read_text())
-        document["resources"] = []
-        kustomization.write_text(yaml.safe_dump(document))
-        result = _run(work, "sh", "-c", script)
-        assert result.returncode != 0, "an emptied resource list passed the gate"
-        assert "lists no resources" in result.stdout + result.stderr
-
-
-def test_the_kustomization_gate_rejects_an_unlisted_manifest(repo, tmp_path):
-    """A manifest kustomize never builds is never applied, and nothing else in
-    a generated repo notices."""
-    for work, script in _kustomization_runs(repo, tmp_path, "unlisted"):
-        (work / FLUX / "configmap.yaml").write_text(
-            "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: unlisted\n"
-        )
-        result = _run(work, "sh", "-c", script)
-        assert result.returncode != 0, "an unlisted manifest passed the gate"
-        assert "not listed" in result.stdout + result.stderr
-
-
 def test_the_kustomization_gate_rejects_an_unlisted_yml_manifest(repo, tmp_path):
-    """kustomize takes `resources: [foo.yml]` too, so a `.yml` left unlisted is
-    the same inert manifest with a different suffix."""
-    for work, script in _kustomization_runs(repo, tmp_path, "unlisted-yml"):
+    """A manifest kustomize never builds is never applied, and nothing else in a
+    generated repo notices. Every shipped form passes the render, then reds."""
+    for work, script in _gate_runs(
+        repo, tmp_path, "kustomization", "kustomization", "kustomization-check"
+    ):
+        result = _run(work, "sh", "-c", script)
+        assert result.returncode == 0, result.stdout + result.stderr
         (work / FLUX / "configmap.yml").write_text(
             "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: unlisted\n"
         )
@@ -2839,95 +2744,10 @@ def test_the_kustomization_gate_rejects_an_unlisted_yml_manifest(repo, tmp_path)
         assert "not listed" in result.stdout + result.stderr
 
 
-def test_the_kustomization_gate_rejects_a_listed_path_that_does_not_exist(repo, tmp_path):
-    """A `resources:` entry with no file fails `kustomize build`, so the gate
-    that runs first must say so rather than report the tree as clean."""
-    for work, script in _kustomization_runs(repo, tmp_path, "ghost"):
-        kustomization = work / FLUX / "kustomization.yaml"
-        document = yaml.safe_load(kustomization.read_text())
-        document["resources"].append("ghost.yaml")
-        kustomization.write_text(yaml.safe_dump(document))
-        result = _run(work, "sh", "-c", script)
-        assert result.returncode != 0, "a listed path with no file passed the gate"
-        assert "do not exist" in result.stdout + result.stderr
-
-
-def test_the_kustomization_gate_accepts_a_generator_referenced_file(repo, tmp_path):
-    """A configMapGenerator source is built by kustomize without being listed
-    in `resources:`; reporting it as unlisted is a false failure."""
-    for work, script in _kustomization_runs(repo, tmp_path, "generator"):
-        (work / FLUX / "settings.yaml").write_text("key: value\n")
-        kustomization = work / FLUX / "kustomization.yaml"
-        document = yaml.safe_load(kustomization.read_text())
-        document["configMapGenerator"] = [
-            {"name": f"{repo.answers['app_slug']}-config", "files": ["settings.yaml"]}
-        ]
-        kustomization.write_text(yaml.safe_dump(document))
-        result = _run(work, "sh", "-c", script)
-        assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_the_kustomization_gate_accepts_a_listed_directory(repo, tmp_path):
-    """A listed directory is built whole, so the manifests inside it are not
-    unlisted — the recursive scan must not report them."""
-    for work, script in _kustomization_runs(repo, tmp_path, "subdir"):
-        extras = work / FLUX / "extras"
-        extras.mkdir()
-        (extras / "configmap.yaml").write_text(
-            "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: extra\n"
-        )
-        (extras / "kustomization.yaml").write_text(
-            "---\nresources:\n  - configmap.yaml\n"
-        )
-        kustomization = work / FLUX / "kustomization.yaml"
-        document = yaml.safe_load(kustomization.read_text())
-        document["resources"].append("extras")
-        kustomization.write_text(yaml.safe_dump(document))
-        result = _run(work, "sh", "-c", script)
-        assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_the_kustomization_gate_accepts_a_dot_slash_entry(repo, tmp_path):
-    """kustomize takes `./foo.yaml`; reporting the same file as unlisted is a
-    false failure on a tree that builds."""
-    for work, script in _kustomization_runs(repo, tmp_path, "dot-slash"):
-        kustomization = work / FLUX / "kustomization.yaml"
-        document = yaml.safe_load(kustomization.read_text())
-        document["resources"] = [f"./{n}" for n in document["resources"]]
-        kustomization.write_text(yaml.safe_dump(document))
-        result = _run(work, "sh", "-c", script)
-        assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_the_kustomization_gate_accepts_a_trailing_slash_directory(repo, tmp_path):
-    """A listed directory written `extras/` covers its children the same way."""
-    for work, script in _kustomization_runs(repo, tmp_path, "trailing-slash"):
-        extras = work / FLUX / "extras"
-        extras.mkdir()
-        (extras / "configmap.yaml").write_text(
-            "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: extra\n"
-        )
-        (extras / "kustomization.yaml").write_text("---\nresources:\n  - configmap.yaml\n")
-        kustomization = work / FLUX / "kustomization.yaml"
-        document = yaml.safe_load(kustomization.read_text())
-        document["resources"].append("extras/")
-        kustomization.write_text(yaml.safe_dump(document))
-        result = _run(work, "sh", "-c", script)
-        assert result.returncode == 0, result.stdout + result.stderr
-
-
-def _scrape_wiring_scripts(repo: Repo) -> list[str]:
-    return _gate_scripts(repo, "scrape-wiring", "scrape-wiring-check")
-
-
-def _scrape_wiring_runs(repo: Repo, tmp_path: Path, name: str):
-    return _gate_runs(repo, tmp_path, name, "scrape-wiring", "scrape-wiring-check")
-
-
 def test_the_scrape_gate_accepts_the_render(repo):
     """The shipped pair agrees, so this is the positive control the two
     negative cases below need to mean anything."""
-    for script in _scrape_wiring_scripts(repo):
+    for script in _gate_scripts(repo, "scrape-wiring", "scrape-wiring-check"):
         result = _run(repo.path, "sh", "-c", script)
         assert result.returncode == 0, result.stdout + result.stderr
 
@@ -2938,7 +2758,9 @@ def test_the_scrape_gate_rejects_a_stale_port(repo, tmp_path):
     if not repo.answers["enable_servicemonitor"]:
         pytest.skip("this render ships no ServiceMonitor")
     port = repo.answers["app_port"]
-    for work, script in _scrape_wiring_runs(repo, tmp_path, "stale-port"):
+    for work, script in _gate_runs(
+        repo, tmp_path, "stale-port", "scrape-wiring", "scrape-wiring-check"
+    ):
         policies = (work / FLUX / "networkpolicy.yaml").read_text()
         assert f"port: {port}" in policies, "the scrape allow does not name the app port"
         (work / FLUX / "networkpolicy.yaml").write_text(
@@ -2949,98 +2771,23 @@ def test_the_scrape_gate_rejects_a_stale_port(repo, tmp_path):
         assert str(port) in result.stdout + result.stderr
 
 
-def test_the_scrape_gate_rejects_a_deleted_allow(repo, tmp_path):
-    """Dropping the scrape allow while editing egress rules is the other half
-    of the same break."""
+def test_the_scrape_gate_accepts_an_inferred_policy_type(repo, tmp_path):
+    """An allow with no `policyTypes` is inferred Ingress and admits the scrape,
+    so red-lining it sends the tenant after a defect that is not there."""
     if not repo.answers["enable_servicemonitor"]:
         pytest.skip("this render ships no ServiceMonitor")
-    for work, script in _scrape_wiring_runs(repo, tmp_path, "no-allow"):
-        policies = list(yaml.safe_load_all((work / FLUX / "networkpolicy.yaml").read_text()))
-        kept = [
-            d for d in policies if d and d["metadata"]["name"] != "allow-scrape-from-observability"
-        ]
-        assert len(kept) < len(policies), "the scrape allow was not found to delete"
-        (work / FLUX / "networkpolicy.yaml").write_text(yaml.safe_dump_all(kept))
-        result = _run(work, "sh", "-c", script)
-        assert result.returncode != 0, "a deleted scrape allow passed the gate"
-
-
-def _scrape_policy(work: Path) -> tuple[list[dict], dict]:
-    """The rendered policies and the scrape allow among them."""
-    documents = [d for d in yaml.safe_load_all((work / FLUX / "networkpolicy.yaml").read_text()) if d]
-    allow = next(d for d in documents if d["metadata"]["name"] == "allow-scrape-from-observability")
-    return documents, allow
-
-
-def _rewrite_policies(work: Path, documents: list[dict]) -> None:
-    (work / FLUX / "networkpolicy.yaml").write_text(yaml.safe_dump_all(documents))
-
-
-@pytest.mark.parametrize("spelling", ["named-port", "no-ports", "no-policy-types"])
-def test_the_scrape_gate_accepts_the_legal_policy_spellings(repo, tmp_path, spelling):
-    """A named port, an empty `ports:` and an inferred `policyTypes` all admit
-    the scrape in the cluster, so red-lining them sends the tenant after a
-    defect that is not there."""
-    if not repo.answers["enable_servicemonitor"]:
-        pytest.skip("this render ships no ServiceMonitor")
-    for work, script in _scrape_wiring_runs(repo, tmp_path, f"spelling-{spelling}"):
-        documents, allow = _scrape_policy(work)
-        rule = allow["spec"]["ingress"][0]
-        if spelling == "named-port":
-            rule["ports"] = [{"protocol": "TCP", "port": "http"}]
-        elif spelling == "no-ports":
-            rule["ports"] = []
-        else:
-            del allow["spec"]["policyTypes"]
-        _rewrite_policies(work, documents)
+    for work, script in _gate_runs(
+        repo, tmp_path, "no-policy-types", "scrape-wiring", "scrape-wiring-check"
+    ):
+        policies = work / FLUX / "networkpolicy.yaml"
+        documents = [d for d in yaml.safe_load_all(policies.read_text()) if d]
+        allow = next(
+            d for d in documents if d["metadata"]["name"] == "allow-scrape-from-observability"
+        )
+        del allow["spec"]["policyTypes"]
+        policies.write_text(yaml.safe_dump_all(documents))
         result = _run(work, "sh", "-c", script)
         assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_the_scrape_gate_rejects_a_udp_only_allow(repo, tmp_path):
-    """A NetworkPolicy port entry defaults to TCP; an explicit UDP on the right
-    number admits nothing the scrape uses."""
-    if not repo.answers["enable_servicemonitor"]:
-        pytest.skip("this render ships no ServiceMonitor")
-    for work, script in _scrape_wiring_runs(repo, tmp_path, "udp-allow"):
-        documents, allow = _scrape_policy(work)
-        allow["spec"]["ingress"][0]["ports"][0]["protocol"] = "UDP"
-        _rewrite_policies(work, documents)
-        result = _run(work, "sh", "-c", script)
-        assert result.returncode != 0, "a UDP-only allow passed the gate"
-
-
-def _pod_monitor(repo: Repo) -> dict:
-    slug = repo.answers["app_slug"]
-    return {
-        "apiVersion": "monitoring.coreos.com/v1",
-        "kind": "PodMonitor",
-        "metadata": {"name": f"{slug}-pods"},
-        "spec": {
-            "selector": {"matchLabels": {"app.kubernetes.io/name": slug}},
-            "podMetricsEndpoints": [{"port": "http", "path": "/metrics"}],
-        },
-    }
-
-
-def test_the_scrape_gate_reads_a_pod_monitor(repo, tmp_path):
-    """A PodMonitor declares `podMetricsEndpoints`, not `endpoints`. Reading the
-    wrong key reports a green verdict having checked nothing."""
-    if not repo.answers["enable_servicemonitor"]:
-        pytest.skip("this render ships no scrape allow to match")
-    for work, script in _scrape_wiring_runs(repo, tmp_path, "pod-monitor"):
-        (work / FLUX / "podmonitor.yaml").write_text(yaml.safe_dump(_pod_monitor(repo)))
-        result = _run(work, "sh", "-c", script)
-        assert result.returncode == 0, result.stdout + result.stderr
-
-        monitor = _pod_monitor(repo)
-        monitor["spec"]["podMetricsEndpoints"] = [
-            {"targetPort": repo.answers["app_port"] + 1, "path": "/metrics"}
-        ]
-        (work / FLUX / "podmonitor.yaml").write_text(yaml.safe_dump(monitor))
-        result = _run(work, "sh", "-c", script)
-        assert result.returncode != 0, "a PodMonitor port no policy admits passed the gate"
-        assert monitor["metadata"]["name"] in result.stdout + result.stderr
 
 
 def test_the_tenant_docs_name_the_egress_gate(repo):

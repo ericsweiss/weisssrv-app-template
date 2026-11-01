@@ -80,7 +80,7 @@ is an example, not a value you can accept by pressing enter.
 | `git_host` | derived from `forge`: `github.com` on GitHub, `git.{{ external_domain }}` otherwise | The forge this repo lives on: the library include host, the AI-review URL, the repo URL in the operator's wiring. |
 | `git_namespace` | — | The group/user path that owns the repo. Also the middle segment of the image path. |
 | `runbooks_page` | computed, never asked | This repo's `docs/RUNBOOKS.md` as its forge serves the file. Each alert links its own section of it. Empty on `other`, where each alert links `runbook_url`, or `db_runbook_url` for `DatabaseAbsent`. |
-| `privileged_runner_tag` | — | Runner tag for the image build, the one job that needs a privileged runner. Asked only for the GitLab shape with a build. Name a privileged runner registered to this repo's group or project, never the cluster's own platform runner: the build runs as root with Docker-in-Docker. With no such runner, turn `enable_image_build` off and build with rootless BuildKit or kaniko on the shared runner in a job of your own. |
+| `privileged_runner_tag` | — | Runner tag for the image build. Asked only for the GitLab shape with a build. Name the tag of the privileged runner your cluster operator enabled on this project (weisssrv: infrastructure), or answer `enable_image_build` false. |
 | `ci_cpu_selector` | `{{ node_label_domain }}/cpu=modern` | Node selector pinning the CPU-sensitive jobs — secret detection always, the image build when it exists — to a modern CPU. Asked for the whole GitLab shape, because the library defaults it to its own cluster's label domain and a selector no node carries leaves the job Pending. Required, and must match the runner's `node_selector_overwrite_allowed` regex `^[a-z0-9.-]+/cpu=(modern\|legacy)$`: the pipeline always passes the input, and an empty value fails that regex at pod creation rather than skipping the pin. |
 | `k8s_version` | `1.37.1` | The Kubernetes minor kubeconform validates against, in the pipeline and `Taskfile.yml`. |
 
@@ -129,7 +129,7 @@ component is wired and a disabled one leaves nothing behind. There is no
 
 | Answer | Default | What it drives |
 |---|---|---|
-| `lib_ref` | `v0.23.0` | The tag the generated pipeline declares in its `spec:` header and every `include:` reads. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
+| `lib_ref` | `copier.yml`'s default | The tag the generated pipeline declares in its `spec:` header and every `include:` reads. A release tag, never a branch: the generated repo's own `check-lib-pins.py` enforces the shape on the first pipeline. |
 | `lib_project` | `eric/weisssrv-lib` | The library's project path. `include: project:` resolves instance-locally, so the library must live on the same GitLab as the repo. |
 
 ---
@@ -253,8 +253,7 @@ Nothing stops you — it is your repository. Three things to know:
 
 Every helper script under `template/scripts/` is a **byte-identical copy** of a
 [`eric/weisssrv-lib`](https://git.ericsweiss.com/eric/weisssrv-lib) file, so the
-copy is what executes. On the GitLab shape, `lib-ref-sites.yml` beside them
-is site data, not a copy. Some are run by the library's job templates from those
+copy is what executes. Some are run by the library's job templates from those
 paths. The three manifest gates are run by the generated repo's pipeline and by
 `task lint`, and `flux-lint.sh` by both at once — the `flux-lint` include runs
 the repo's own copy. `check-netpol-except-parity.py` imports `gate_common.py`,
@@ -272,22 +271,4 @@ Every generated repo carries `check-comment-length.py`, `check-doc-links.py`,
 | `ci_shape: none` | nothing further; `task lint` and the pre-commit hooks are the whole gate |
 | `database: postgres` with the 1Password backend | `check-cnpg-clusters.py` and `check-pvc-storageclass.py`, plus `ci-fetch-tools.py` on the GitLab shape |
 
-This repository owns the copy relationship in `scripts/vendored-manifest.yml`
-and the library's `check-vendored-copies.py` gates it — fix a bug upstream and
-re-vendor, never in the copy, which the next re-vendor reverts.
-
-The lint profiles are **forks** of library files rather than copies: the same
-rules with per-repo paths. They come in two sets, registered separately because
-they drift separately —
-
-- at the root, what this template lints **itself** with: `ruff.toml`,
-  `.gitleaks.toml`, `lint/yamllint-relaxed.yml`, `.editorconfig`,
-  `.pre-commit-config.yaml` and `.gitlab/secret-detection-ruleset.toml`;
-- under `template/`, what a generated repo gets: `template/ruff.toml`,
-  `template/.gitleaks.toml`, `template/lint/yamllint-relaxed.yml`,
-  `template/.editorconfig`, `template/.pre-commit-config.yaml.jinja` and the
-  rendered `.gitlab/secret-detection-ruleset.toml`.
-
-The registry records each as a fork and pins the library-side blob it was last
-reconciled against, so an upstream change is surfaced rather than silently
-ignored.
+[VERSIONING.md § Vendored copies](VERSIONING.md#vendored-copies) holds the copy contract.

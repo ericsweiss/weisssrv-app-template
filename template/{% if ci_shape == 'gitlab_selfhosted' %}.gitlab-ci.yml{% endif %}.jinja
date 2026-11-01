@@ -211,8 +211,7 @@ include:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
 # The library-pin gate: the header's lib_ref default must be a release tag, and
-# every include above plus the variable must read that input. It also holds the
-# refs scripts/lib-ref-sites.yml names equal to it.
+# every include above plus the variable must read that input.
 lib-pin-check:
   extends: .pyyaml-gate
   script:
@@ -222,9 +221,6 @@ lib-pin-check:
       changes:
         - ".gitlab-ci.yml"
         - "scripts/check-lib-pins.py"
-        - "scripts/lib-ref-sites.yml"
-        - "Taskfile.yml"
-        - "docs/ARCHITECTURE.md"
     - if: '$CI_COMMIT_BRANCH == "main"'
 
 # Every optional `needs:` must name a job some include creates: GitLab ignores

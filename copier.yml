@@ -67,9 +67,8 @@ _message_after_update: |
 app_slug:
   type: str
   help: >-
-    Name of this service. It is the repository name, the Flux Kustomization
-    name, the hostname's first label and every manifest's `metadata.name`, so
-    it must be a DNS label.
+    Name of this service: the repository name, every `metadata.name` and the
+    hostname's first label. It must be a DNS label.
   placeholder: "recipe-box"
   validator: >-
     {% if not (app_slug | regex_search('^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$')) %}
@@ -79,10 +78,7 @@ app_slug:
 
 app_namespace:
   type: str
-  help: >-
-    Kubernetes namespace this repo deploys into. The operator creates it and
-    scopes the Flux service account to it; a manifest targeting any other
-    namespace fails to apply. Defaults to the slug, which is the convention.
+  help: Kubernetes namespace this repo deploys into. Defaults to the slug.
   default: "{{ app_slug }}"
   # Mirrors the platform namespaces weisssrv-cluster-template ships; the
   # cluster's tenant-wiring gate is the authoritative collision check.
@@ -105,10 +101,7 @@ app_namespace:
 
 app_port:
   type: int
-  help: >-
-    TCP port the container listens on. Wired through the Deployment's
-    containerPort, the Service, the IngressRoute backend and both NetworkPolicy
-    ingress rules at once.
+  help: TCP port the container listens on, 1024 or higher.
   default: 8080
   validator: >-
     {% if app_port | int < 1 or app_port | int > 65535 %}
@@ -122,11 +115,8 @@ app_port:
 replica_count:
   type: int
   help: >-
-    Deployment replicas. 2 gives rolling updates without downtime and is what
-    the PodDisruptionBudget assumes; at 1 the PDB is not generated, because
-    `minAvailable: 1` on a single replica blocks every voluntary eviction and a
-    node can then never drain. Ignored when enable_hpa is true (the HPA owns
-    the replica count).
+    Deployment replicas. At 1 no PodDisruptionBudget renders, and enable_hpa
+    overrides it.
   default: 2
   validator: >-
     {% if replica_count | int < 1 %}
@@ -136,10 +126,8 @@ replica_count:
 copyright_holder:
   type: str
   help: >-
-    Name on the MIT LICENSE this template renders into the repository — you, or
-    the organisation that owns the service's code. This template's own licence
-    covers the template, not what it generates, so the holder is answered rather
-    than inherited; the year is filled in at render time.
+    Name on the generated MIT LICENSE: you, or the organisation that owns the
+    code.
   placeholder: "Your Name or Organisation"
   validator: >-
     {% if not copyright_holder.strip() %}
@@ -153,9 +141,7 @@ copyright_holder:
 
 external_domain:
   type: str
-  help: >-
-    Zone for the public hostname (<slug>.<domain>) and the external-dns target
-    annotation that provisions its record.
+  help: Zone for the public hostname <slug>.<domain>.
   placeholder: "example.com"
   validator: >-
     {% if not (external_domain | regex_search('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$')) %}
@@ -165,15 +151,8 @@ external_domain:
 internal_domain:
   type: str
   help: >-
-    Zone for the LAN/tailnet hostname (<slug>.<domain>), used when
-    enable_internal_ingress is true. Must differ from external_domain, and its
-    FIRST LABEL must differ too: the two Certificates are told apart only by
-    domain and their TLS Secrets only by that first label, so a collision puts
-    two cert-manager Certificates on one Secret (duplicate Let's Encrypt orders
-    against the 5/week limit) and two IngressRoutes on one Host().
-    When enable_internal_ingress is on it must also be a public zone the
-    cluster's ClusterIssuer can solve over DNS-01, or the internal certificate
-    never issues.
+    Zone for the LAN/tailnet hostname <slug>.<domain>. It and its first label
+    must differ from external_domain's.
   placeholder: "lan.example.com"
   validator: >-
     {% if not (internal_domain | regex_search('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$')) %}
@@ -191,10 +170,7 @@ internal_domain:
 
 node_label_domain:
   type: str
-  help: >-
-    Prefix of the cluster's node labels (<prefix>/nas, <prefix>/cpu). The
-    Deployment's soft NAS-avoidance affinity and the CI build's CPU selector
-    name it.
+  help: Prefix of the cluster's node labels, as in <prefix>/cpu.
   default: "{{ internal_domain }}"
   validator: >-
     {% if not (node_label_domain | regex_search('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$')) %}
@@ -209,12 +185,8 @@ node_label_domain:
 ci_shape:
   type: str
   help: >-
-    Which pipeline this repo gets. Flux deploys the repo in ALL THREE — the
-    shape decides only what CHECKS a change and where the image is built, never
-    what applies to the cluster. `gitlab_selfhosted` is the only shape that
-    consumes the shared CI library; `github` vendors equivalent Actions
-    workflows; `none` ships no pipeline, leaving `task lint` and the pre-commit
-    hooks as the whole gate. docs/CI-SHAPES.md has the parity table.
+    Which pipeline checks this repo. Flux deploys it in all three;
+    docs/CI-SHAPES.md compares them.
   default: gitlab_selfhosted
   choices:
     Self-hosted GitLab (shared library includes): gitlab_selfhosted
@@ -225,11 +197,8 @@ ci_shape:
 forge:
   type: str
   help: >-
-    Where this repository lives. It decides the word the generated docs use for
-    a reviewed change, and whether the GitLab issue and merge-request templates
-    render — never which pipeline ships, which is `ci_shape`. A repo with no
-    pipeline still lives on a forge. `other` ships no GitLab issue or
-    merge-request templates and is asked for that word outright.
+    Where this repository lives. It sets the docs' word for a reviewed change
+    and the issue templates, never the pipeline.
   default: "{% if ci_shape == 'github' %}github{% else %}gitlab{% endif %}"
   choices:
     GitLab: gitlab
@@ -244,11 +213,7 @@ forge:
 
 registry_host:
   type: str
-  help: >-
-    Container registry the Deployment's `image:` names. The GitHub workflow
-    publishes to `ghcr.io/<owner>/<repo>` from its own literals and the GitLab
-    build job publishes to `$CI_REGISTRY_IMAGE`, so an off-forge answer needs
-    the build pointed at it by hand (docs/CI-SHAPES.md).
+  help: Container registry the Deployment's `image:` names.
   default: "{% if forge == 'github' %}ghcr.io{% else %}registry.git.{{ external_domain }}{% endif %}"
   validator: >-
     {% if not (registry_host | regex_search('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}(:[0-9]{1,5})?$')) %}
@@ -259,12 +224,8 @@ registry_host:
 runbook_url:
   type: str
   help: >-
-    The cluster repository's day-two runbooks page, `docs/RUNBOOKS.md` in a
-    cluster generated by weisssrv-cluster-template. On a GitLab or GitHub forge
-    every alert links its own section of this repo's docs/RUNBOOKS.md, and that
-    page links here for the platform side of each cause. On `other` every alert
-    links here. No default: only the cluster repo knows where that page lives,
-    and a guessed one is a 404 read at 3am.
+    URL of the cluster repository's day-two runbooks page, which every alert's
+    runbook links.
   placeholder: "https://git.example.com/homelab/cluster/-/blob/main/docs/RUNBOOKS.md"
   validator: >-
     {% if not (runbook_url | regex_search('^https?://[^\\s]+$')) %}
@@ -284,9 +245,7 @@ runbook_url:
 change_request:
   type: str
   when: "{{ forge == 'other' }}"
-  help: >-
-    Your forge's word for a reviewed change. It is substituted into every
-    generated doc and agent file.
+  help: Your forge's word for a reviewed change, used in every generated doc.
   default: "{% if forge == 'github' %}pull request{% elif forge == 'gitlab' %}merge request{% else %}change request{% endif %}"
   validator: >-
     {% if not change_request.strip() %}
@@ -300,17 +259,13 @@ change_request:
 enable_image_build:
   type: bool
   help: >-
-    This repo builds its own container image: a placeholder Dockerfile to
-    replace, and the pipeline job that builds and pushes it. Turn it off for a
-    service that runs an upstream image.
+    Build this repo's own container image. Answer false for a service that runs
+    an upstream image.
   default: true
 
 git_host:
   type: str
-  help: >-
-    Hostname of the forge this repo lives on. Under `gitlab_selfhosted` it is
-    also where the CI library is included from and where the AI-review job
-    points; on a GitHub-hosted repo it is github.com.
+  help: Hostname of the forge this repo lives on.
   default: "{% if forge == 'github' %}github.com{% else %}git.{{ external_domain }}{% endif %}"
   validator: >-
     {% if not (git_host | regex_search('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$')) %}
@@ -321,10 +276,8 @@ git_host:
 git_namespace:
   type: str
   help: >-
-    Group, subgroup or user path that owns this repository on git_host, without
-    the repository name. It is the middle segment of the image path
-    (<registry_host>/<git_namespace>/<app_slug>, lowercased there) and the repo
-    URL the operator puts in the Flux GitRepository.
+    Group or user path that owns this repository on git_host, without the
+    repository name.
   placeholder: "homelab"
   validator: >-
     {% if not (git_namespace | regex_search('^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$')) %}
@@ -347,12 +300,8 @@ privileged_runner_tag:
   type: str
   when: "{{ ci_shape == 'gitlab_selfhosted' and enable_image_build }}"
   help: >-
-    Runner tag for the image build, the one job that needs a privileged runner:
-    it runs as root with Docker-in-Docker, which the shared runner cannot start.
-    Name a privileged runner registered to this repo's group or project, never
-    the cluster's own platform runner. With no such runner, answer
-    enable_image_build false and build with rootless BuildKit or kaniko on the
-    shared runner in a job of your own.
+    Name the tag of the privileged runner your cluster operator enabled on this
+    project (weisssrv: infrastructure), or answer enable_image_build false.
   placeholder: "tenant-build"
   validator: >-
     {% if not privileged_runner_tag.strip() %}
@@ -364,11 +313,8 @@ ci_cpu_selector:
   type: str
   when: "{{ ci_shape == 'gitlab_selfhosted' }}"
   help: >-
-    Node selector (label=value) pinning secret detection and the image build to
-    a modern CPU. It must match the runner's node_selector_overwrite_allowed
-    regex `^[a-z0-9.-]+/cpu=(modern|legacy)$` and name a label a node carries.
-    A selector no node carries leaves the job Pending. It is required, and an
-    empty value fails the runner's regex.
+    Node selector, label=value, that pins secret detection and the image build
+    to a modern CPU. A node must carry it, or the job stays Pending.
   default: "{{ node_label_domain }}/cpu=modern"
   validator: >-
     {% if not (ci_cpu_selector | regex_search('^[a-z0-9.-]+/cpu=(modern|legacy)$')) %}
@@ -379,11 +325,7 @@ ci_cpu_selector:
 
 k8s_version:
   type: str
-  help: >-
-    Kubernetes minor the manifests are schema-validated against by kubeconform.
-    Under `gitlab_selfhosted` it reaches both the pipeline and Taskfile.yml from
-    this answer; under `github` the vendored workflow carries the library's own
-    literal, which you edit by hand if your cluster differs (docs/CI-SHAPES.md).
+  help: Kubernetes version kubeconform validates the manifests against.
   default: "1.37.1"
   validator: >-
     {% if not (k8s_version | regex_search('^[0-9]+\\.[0-9]+\\.[0-9]+$')) %}
@@ -398,12 +340,8 @@ k8s_version:
 secrets_backend:
   type: str
   help: >-
-    Where the app's secret VALUES live. The repo only ever holds an
-    ExternalSecret referencing the ClusterSecretStore the operator provisions,
-    so this must match what they wire (docs/ONBOARDING.md, step O1).
-    `onepassword` reads items from the tenant's own vault; `gitlab` reads the
-    project's masked CI/CD variables — the backend for a collaborator with no
-    vault access. `none` generates no secret surface at all.
+    Where the app's secret values live. It must match the store the operator
+    provisions (docs/ONBOARDING.md, O1).
   default: onepassword
   choices:
     1Password (the tenant's own vault): onepassword
@@ -413,12 +351,7 @@ secrets_backend:
 onepassword_vault:
   type: str
   when: "{{ secrets_backend == 'onepassword' }}"
-  help: >-
-    Name of this tenant's own 1Password vault, which holds only this app's
-    items. It must equal app_namespace: the cluster's tenant-wiring gate accepts
-    a tenant store only on the vault named after its namespace. The operator
-    creates it, grants it to the cluster's Connect server and issues a token
-    scoped to it alone (docs/ONBOARDING.md, step O1).
+  help: This tenant's own 1Password vault. It must equal app_namespace.
   default: "{{ app_namespace }}"
   validator: >-
     {% if onepassword_vault != app_namespace %}
@@ -430,9 +363,8 @@ secret_item:
   type: str
   when: "{{ secrets_backend == 'onepassword' }}"
   help: >-
-    Title of the 1Password item this app's secrets live in, WITHOUT the slug
-    prefix. Titles carry the slug so they stay unambiguous in `op item list`.
-    The rendered `remoteRef.key` is "<slug>: <this>".
+    Title of the 1Password item holding this app's secrets, without the slug
+    prefix.
   default: "App Secrets"
   validator: >-
     {% if not secret_item.strip() %}
@@ -447,12 +379,7 @@ secret_item:
 gitlab_api_url:
   type: str
   when: "{{ secrets_backend == 'gitlab' }}"
-  help: >-
-    Base URL of the GitLab instance holding the CI/CD variables. It defaults to
-    the forge this repo lives on, which is right whenever they are the same
-    instance — but they need not be: `forge: github` defaults git_host to
-    github.com, and a GitLab secret store pointed there fails every fetch. The
-    ESO provider's own default is https://gitlab.com, so this is never omitted.
+  help: Base URL of the GitLab instance holding the CI/CD variables.
   default: "https://{{ git_host }}"
   validator: >-
     {% if gitlab_api_url | regex_search('^http://') %}
@@ -474,28 +401,22 @@ gitlab_api_url:
 enable_servicemonitor:
   type: bool
   help: >-
-    Scrape this app's /metrics with the platform Prometheus. OFF by default,
-    because a ServiceMonitor pointed at an endpoint that does not exist yet
-    scrapes `up == 0` and trips the platform's TargetDown alert in the
-    OPERATOR's Alertmanager — for every new tenant. Turn it on in the change
-    that adds the metrics endpoint.
+    Scrape this app's /metrics with the platform Prometheus. Turn it on in the
+    change that adds the endpoint.
   default: false
 
 enable_public_ingress:
   type: bool
   help: >-
-    Publish <slug>.<external_domain> on the internet through the public
-    ingress. Renders the IngressRoute and its Certificate together. Answer
-    false for an app reachable only on the LAN/tailnet.
+    Publish <slug>.<external_domain> on the internet. Answer false for a
+    LAN/tailnet-only app.
   default: true
 
 enable_internal_ingress:
   type: bool
   help: >-
-    Publish <slug>.<internal_domain> on the LAN/tailnet, behind the
-    platform's LAN-only middleware. Renders the second IngressRoute and its
-    Certificate together — one without the other serves from a TLS Secret that
-    never exists. Needs one operator step (an internal DNS record).
+    Publish <slug>.<internal_domain> on the LAN/tailnet. It needs one operator
+    DNS step.
   default: false
   validator: >-
     {% if not enable_public_ingress and not enable_internal_ingress %}
@@ -509,9 +430,8 @@ internal_vip:
   type: str
   when: "{{ enable_internal_ingress }}"
   help: >-
-    Address the operator points the internal hostname at (the cluster's
-    LAN-only ingress VIP). Recorded in docs/ONBOARDING.md's DNS step; nothing
-    in kubernetes/ dials it.
+    Address the operator points the internal hostname at: the cluster's LAN-only
+    ingress VIP.
   placeholder: "192.168.1.101"
   validator: >-
     {% if not (internal_vip | regex_search('^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$')) %}
@@ -521,32 +441,23 @@ internal_vip:
 enable_hpa:
   type: bool
   help: >-
-    Horizontal Pod Autoscaler on CPU. When on, the Deployment ships no
-    `replicas:` (Flux server-side apply would otherwise fight the HPA over it)
-    and any VPA is made memory-only, so the two never both drive CPU.
-    Utilisation is relative to the container's `requests.cpu`, which ships as a
-    placeholder, so set a real request with the image or the HPA runs at
-    maxReplicas.
+    CPU Horizontal Pod Autoscaler. Set a real requests.cpu with the image, or it
+    runs at maxReplicas.
   default: false
 
 enable_vpa:
   type: bool
   help: >-
-    Vertical Pod Autoscaler recommending and applying resource requests. Needs
-    the VPA CRD plus the recommender, the admission controller and a
-    metrics-server in the cluster (docs/CONSUMING.md lists what the platform
-    must provide). Turn it off for a workload whose requests are hand-tuned.
+    Vertical Pod Autoscaler on the Deployment. Answer false for hand-tuned
+    requests.
   default: true
 
 enable_registry_pull_secret:
   type: bool
   when: "{{ secrets_backend != 'none' }}"
   help: >-
-    Pull credential for a PRIVATE image registry: an ExternalSecret rendering a
-    dockerconfigjson Secret, plus the Deployment's imagePullSecrets. Both forges
-    publish privately by default, and a GHCR package's visibility does not
-    follow the repo's. A repo that builds its own image normally needs this. It
-    is asked only when a secrets_backend is set, since it reads from the store.
+    Pull credential for a private image registry. A repo that builds its own
+    image normally needs it.
   # The backend term repeats `when:` because a skipped question's default is
   # still evaluated, and registry_pull_host's `when:` reads it with no backend
   # guard. Not gated on the forge: the chain is forge-neutral.
@@ -556,13 +467,8 @@ registry_pull_host:
   type: str
   when: "{{ enable_registry_pull_secret }}"
   help: >-
-    Second registry hostname keyed into the pull credential. It defaults to
-    registry_host, the single-name case; a cluster that resolves or rewrites
-    the registry to an internal name answers that name here. The Deployment
-    `image:` always names registry_host — nothing rewrites it. Both names are
-    keyed into the credential, deduplicated when they are equal, because the
-    kubelet matches a pull secret against the literal host in the image
-    reference.
+    Second registry hostname keyed into the pull credential. Change it only when
+    nodes resolve the registry to another name.
   default: "{{ registry_host }}"
   validator: >-
     {% if not (registry_pull_host | regex_search('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}(:[0-9]{1,5})?$')) %}
@@ -573,13 +479,8 @@ registry_pull_host:
 enable_sso:
   type: bool
   help: >-
-    Put the public route behind the platform's Authentik forward-auth
-    middleware. The middleware reference alone authenticates nothing: the
-    operator must also create the proxy provider, application, group and policy
-    binding, and add the provider to the embedded outpost (docs/ONBOARDING.md,
-    step O8). Applies to the PUBLIC route only. <slug>.<internal_domain> stays
-    unauthenticated behind the LAN/tailnet source filter unless the operator
-    creates a second proxy provider for it.
+    Put the public route behind the platform's Authentik forward-auth. The
+    operator creates the Authentik objects (docs/ONBOARDING.md, O8).
   default: false
   validator: >-
     {% if enable_sso and not enable_public_ingress %}
@@ -590,11 +491,9 @@ database:
   type: str
   when: "{{ secrets_backend == 'onepassword' }}"
   help: >-
-    A CloudNativePG PostgreSQL cluster in kubernetes/db, reconciled by its own
-    tenant Kustomization: one instance, WAL archiving and nightly base backups
-    to an S3-compatible bucket, three login roles delivered as file-mounted
-    Secrets, and a nightly pg_dump. Needs the cluster's CloudNativePG module
-    and its tenant-local StorageClass (docs/ONBOARDING.md, O6b).
+    A CloudNativePG PostgreSQL cluster in kubernetes/db with WAL archiving and
+    nightly backups. It needs the cluster's CloudNativePG module
+    (docs/ONBOARDING.md, O6b).
   default: none
   choices:
     No database: none
@@ -643,9 +542,7 @@ db_storage_size:
   type: str
   when: "{{ database == 'postgres' }}"
   help: >-
-    The instance claim's size, requested from the cluster's tenant-local
-    StorageClass. The provisioner does not enforce it; the namespace's
-    ResourceQuota counts it, and the class cannot grow it later.
+    Size of the database volume claim. The StorageClass cannot grow it later.
   default: 20Gi
   validator: >-
     {% if not (db_storage_size | regex_search('^[1-9][0-9]*Gi$')) %}
@@ -656,9 +553,8 @@ db_backup_bucket:
   type: str
   when: "{{ database == 'postgres' }}"
   help: >-
-    The S3 bucket dedicated to this app's WAL archive and base backups. Bucket
-    names are global on B2 and S3, so prefix it with the cluster's name, as the
-    operator creates it: <cluster>-cnpg-<slug>.
+    S3 bucket for this app's WAL archive and base backups, named
+    <cluster>-cnpg-<slug>.
   placeholder: "<cluster>-cnpg-{{ app_slug }}"
   validator: >-
     {% if not (db_backup_bucket | regex_search('^[a-z0-9][a-z0-9-]{4,61}[a-z0-9]$')) %}
@@ -669,10 +565,7 @@ db_backup_bucket:
 db_backup_endpoint:
   type: str
   when: "{{ database == 'postgres' }}"
-  help: >-
-    The bucket's S3 endpoint URL, scheme included and no path. A public object
-    store endpoint only (the database egress policy excludes private and
-    cluster addresses).
+  help: The bucket's public S3 endpoint URL, https:// with no path.
   placeholder: https://s3.us-west-004.backblazeb2.com
   validator: >-
     {% if not (db_backup_endpoint | regex_search('^https://[A-Za-z0-9.-]+(:443)?$')) %}
@@ -689,8 +582,8 @@ db_backup_item:
   type: str
   when: "{{ database == 'postgres' }}"
   help: >-
-    1Password item title, rendered as "<slug>: <item>", whose access-key-id and
-    secret-access-key fields hold the bucket-scoped key.
+    1Password item title whose access-key-id and secret-access-key fields hold
+    the bucket key.
   default: CNPG Backup
   validator: >-
     {% if not (db_backup_item | regex_search('^[^"\\\\\\x00-\\x1f\\x7f\\s]([^"\\\\\\x00-\\x1f\\x7f]*[^"\\\\\\x00-\\x1f\\x7f\\s])?$')) %}
@@ -702,8 +595,8 @@ db_roles_item:
   type: str
   when: "{{ database == 'postgres' }}"
   help: >-
-    1Password item title, rendered as "<slug>: <item>", whose migrate-password,
-    app-password and ro-password fields hold the three role passwords.
+    1Password item title whose migrate-password, app-password and ro-password
+    fields hold the role passwords.
   default: Database
   validator: >-
     {% if not (db_roles_item | regex_search('^[^"\\\\\\x00-\\x1f\\x7f\\s]([^"\\\\\\x00-\\x1f\\x7f]*[^"\\\\\\x00-\\x1f\\x7f\\s])?$')) %}
@@ -714,10 +607,7 @@ db_roles_item:
 db_apiserver_cidrs:
   type: str
   when: "{{ database == 'postgres' }}"
-  help: >-
-    Comma-separated /32s of the cluster's API server nodes. The instance manager
-    talks to the API, and kube-proxy rewrites the Service address before policy
-    applies, so the egress rule must name the node addresses.
+  help: Comma-separated /32s of the cluster's API server nodes.
   placeholder: 192.168.1.222/32,192.168.1.223/32
   validator: >-
     {% if not (db_apiserver_cidrs | regex_search('^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/32(,((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/32)*$')) %}
@@ -728,9 +618,7 @@ db_apiserver_cidrs:
 db_dump_timezone:
   type: str
   when: "{{ database == 'postgres' }}"
-  help: >-
-    The IANA time zone the nightly pg_dump schedule (02:45) runs in. Checked
-    here for shape only; the render gate checks the zone exists.
+  help: IANA time zone of the nightly 02:45 pg_dump.
   default: Etc/UTC
   validator: >-
     {% if not (db_dump_timezone | regex_search('^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$')) %}
@@ -742,9 +630,8 @@ db_runbook_url:
   type: str
   when: "{{ database == 'postgres' and secrets_backend == 'onepassword' }}"
   help: >-
-    The cluster repository's CloudNativePG runbook, which the DatabaseAbsent
-    section of this repo's docs/RUNBOOKS.md links. On `other` the alert links it
-    directly. No default, for the same reason runbook_url has none.
+    URL of the cluster repository's CloudNativePG runbook, which DatabaseAbsent
+    links.
   placeholder: "https://git.example.com/homelab/cluster/-/blob/main/docs/postgres.md#postgres-down"
   validator: >-
     {% if not (db_runbook_url | regex_search('^https?://[^\\s]+$')) %}
@@ -762,10 +649,8 @@ lib_ref:
   type: str
   when: "{{ ci_shape == 'gitlab_selfhosted' }}"
   help: >-
-    weisssrv-lib ref the generated pipeline declares, and every `include:` in
-    it reads. Use a RELEASE TAG (vX.Y.Z): the library's include contract is
-    explicit that a branch is never a valid pin, and a branch deleted after
-    merge takes every include with it.
+    weisssrv-lib release tag, vX.Y.Z, that the pipeline's includes read. Never a
+    branch.
   default: "v0.23.0"
   validator: >-
     {% if not (lib_ref | regex_search('^v\\d+\\.\\d+\\.\\d+$')) %}
@@ -777,10 +662,7 @@ lib_ref:
 lib_project:
   type: str
   when: "{{ ci_shape == 'gitlab_selfhosted' }}"
-  help: >-
-    GitLab project PATH of weisssrv-lib on the instance this pipeline runs on.
-    `include: project:` resolves instance-locally, so the library must live on
-    the same GitLab as this repo.
+  help: GitLab path of weisssrv-lib, on the same instance as this repo.
   default: "eric/weisssrv-lib"
   validator: >-
     {% if not (lib_project | regex_search('^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)+$')) %}

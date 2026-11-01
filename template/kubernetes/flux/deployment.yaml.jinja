@@ -92,19 +92,15 @@ spec:
                 - ALL
           # Adjust to your app's health endpoints. The liveness grace on a slow
           # boot is ~55s; anything slower needs a startupProbe.
-{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+{%- set db = database == 'postgres' and secrets_backend == 'onepassword' %}
           readinessProbe:
+{%- if db %}
             # Ready only when the database answers and the schema is current;
             # liveness stays on / so a database outage never restart-loops the pod.
-            httpGet:
-              path: /readyz
-              port: http
-{%- else %}
-          readinessProbe:
-            httpGet:
-              path: /
-              port: http
 {%- endif %}
+            httpGet:
+              path: {{ '/readyz' if db else '/' }}
+              port: http
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:

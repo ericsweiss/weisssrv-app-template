@@ -1,7 +1,7 @@
 ---
-# The consumer side of the vendored-copy contract: what this repo copies from
-# weisssrv-lib, and where each copy lives. Entry forms, the `forked:` rules and
-# the `template/` path prefix are in docs/VERSIONING.md, Vendored copies.
+# What this repo copies from weisssrv-lib and where each copy lives; entry forms
+# are in docs/VERSIONING.md, Vendored copies. Jinja consumer paths stay one
+# quoted line: a folded scalar rebuilds the filename only if the wrap hits a space.
 
 vendored:
   # The root copies are what this repo lints and, where it has the tree for
@@ -52,8 +52,6 @@ vendored:
     consumer: "template/scripts/{% if ci_shape == 'gitlab_selfhosted' %}check-ci-include-job-names.py{% endif %}"
   - lib: scripts/check-lib-pins.py
     consumer: "template/scripts/{% if ci_shape == 'gitlab_selfhosted' %}check-lib-pins.py{% endif %}"
-  # One line, quoted: a folded scalar reconstructs the literal filename only if
-  # the wrap lands on a space.
   - lib: scripts/ci_yaml.py
     consumer: "template/scripts/{% if ci_shape == 'gitlab_selfhosted' %}ci_yaml.py{% endif %}"
   - lib: scripts/semantic-release.py
@@ -62,11 +60,7 @@ vendored:
   # built-in, and a tenant whose LAN sits outside it copies this and edits it.
   - lib: examples/netpol-except.example.yaml
     consumer: template/examples/netpol-except.example.yaml
-  # The copier invocation every suite and tests/validate_render.py renders through.
   - tests/copier_render.py
-  # The check-lib-pins suite is canonical in the library: a consumer that
-  # vendors the script vendors its tests and adds only its own smoke test.
-  - tests/test_check_lib_pins.py
   # No directory walk reaches these two: the walks cover scripts/ trees only.
   - lib: lint/gitattributes
     consumer: .gitattributes
@@ -91,16 +85,10 @@ forked:
     consumer: .gitleaks.toml
     reason: Allowlist paths and fixture anchors are per-repo.
     reconciled_sha256: a70051101f8045b94172594a0a89c5cf7e17aa6ad56c184843ffc5eac29891ec
-  # The root ruleset, the one this template's OWN pipeline loads. A separate
-  # file from the tenant copy below and it drifts separately, so both are
-  # registered — the same split the scripts and lint profiles get.
   - lib: lint/secret-detection-ruleset.toml
     consumer: .gitlab/secret-detection-ruleset.toml
     reason: The ruleset description string; the passthrough is the library's.
     reconciled_sha256: 778c939138d015867a1d0e42846994bd03a127c1ded1616eee7136b7e2ecfc75
-  # One line, quoted, however long: a folded scalar reconstructs the literal
-  # filename only if the wrap lands on a space, so re-wrapping it silently
-  # produces a different path.
   - lib: lint/secret-detection-ruleset.toml
     consumer: "template/{% if forge == 'gitlab' %}.gitlab{% endif %}/{% if ci_shape == 'gitlab_selfhosted' %}secret-detection-ruleset.toml{% endif %}"
     reason: The ruleset description string; the passthrough is the library's.
@@ -132,9 +120,6 @@ forked:
       comment-length check, so a tenant with no pipeline still runs them. The
       header also drops the library's copy instruction.
     reconciled_sha256: f7e2dff0acee6c4787e1d89311fa72e5d089b13681ed9cd94e8b92bdcada519c
-  # Tenant-side lint profiles, the same split as the scripts above: the root
-  # copies lint this repo, these ship to a generated tenant. Both halves are
-  # registered.
   - lib: lint/ruff.toml
     consumer: template/ruff.toml
     reason: Header comments only; the rule selection is the library's.

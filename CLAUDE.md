@@ -46,17 +46,9 @@ file under `template/`, the four seams, and what the render suite holds.
   `validator`). Copier fills the answer map in question order, so a forward
   reference is undefined interactively and defined in `--data` mode — a check
   that reads as enforcement and enforces nothing. A test holds this.
-- A conditional path (`{% if enable_x %}file.yaml{% endif %}.jinja`) naming an
-  undeclared answer fails the render: `_envops.undefined: jinja2.StrictUndefined`
-  raises and copier prints the offending path. Declare the answer in `copier.yml`
-  first; `test_conditional_paths_name_declared_questions` names the path without
-  needing a render.
 - Both answer fixtures must answer **every** question, including ones their own
   answers make copier skip: `--defaults` otherwise falls back silently.
-- Site identity — the app's names AND the cluster's — carries a `placeholder:`
-  and no `default:`. A default there is accepted by pressing enter, and the
-  resulting repo is green everywhere and wrong at runtime. Derived defaults are
-  fine: they compose from an answer already given and name no site of their own.
+- Site identity takes no default: [`docs/CONSUMING.md` § The answers](docs/CONSUMING.md#the-answers).
 - A Markdown file under `template/` that links to a **rendered** sibling
   (`CLAUDE.md`, not `CLAUDE.md.jinja`) needs the `.jinja` suffix itself, or this
   repo's own `lint-docs-links` resolves the link here, where the target does not

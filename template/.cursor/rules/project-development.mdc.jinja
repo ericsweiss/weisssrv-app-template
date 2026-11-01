@@ -1,23 +1,12 @@
 ---
-description: Always follow the tenant project-development skill.
+description: Tenant entry point — read CLAUDE.md and the project-development skill before any change in this repo.
 globs:
 alwaysApply: true
 ---
 
-# Project development
+Read `CLAUDE.md` first. It holds the standing rules and the doc index.
 
-Before making any change in this repo, read and follow
-`.claude/skills/project-development/SKILL.md`. It is the workflow for developing
-and shipping this service onto its k3s cluster. `CLAUDE.md` carries the standing
-rules and the doc index.
+Before any change, read `.claude/skills/project-development/SKILL.md`. It holds
+the workflow for developing and shipping this service.
 
-Every change holds to these:
-
-- Flux owns all Kubernetes state under `kubernetes/flux/`. Never `kubectl apply`
-  or `helm upgrade` to deploy — preview with `kustomize build kubernetes/flux`
-  and deploy by merging.
-- Never push to `main`; branch → {{ change_request }}, always.
-- Never commit secrets — reference them from `ExternalSecret` manifests.
-- Containers stay non-root with a read-only root filesystem; no `latest` tags.
-- Stay within this repo's single namespace.
-- Run `task lint` before opening a {{ change_request }}.
+Nothing is restated here.

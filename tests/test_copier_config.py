@@ -40,8 +40,7 @@ CLUSTER_NO_DEFAULT = (
     "db_backup_bucket",
     "db_apiserver_cidrs",
     "db_runbook_url",
-    # The build runner is the site's own, and a defaulted tag hands every
-    # tenant's root Docker-in-Docker build to the platform's privileged runner.
+    # The build runner is the one the operator enabled on this project: a site fact.
     "privileged_runner_tag",
 )
 
@@ -236,67 +235,6 @@ def _validator_message(name: str, **context) -> str:
     return env.from_string(QUESTIONS[name]["validator"]).render(**context).strip()
 
 
-@pytest.mark.parametrize(
-    "internal,external,rejected",
-    [
-        ("esweiss.com", "ericsweiss.com", False),
-        # Identical zones: both IngressRoutes claim one Host().
-        ("example.com", "example.com", True),
-        # Different zones, same first label: `<slug>-esweiss-tls` twice, so two
-        # Certificates contend for one Secret and burn the duplicate-cert limit.
-        ("esweiss.io", "esweiss.com", True),
-    ],
-)
-def test_internal_domain_rejects_a_colliding_pair(internal, external, rejected):
-    message = _validator_message(
-        "internal_domain", internal_domain=internal, external_domain=external
-    )
-    assert bool(message) is rejected, message or "accepted, but should not be"
-
-
-@pytest.mark.parametrize(
-    "slug,rejected",
-    [
-        ("recipe-box", False),
-        ("Recipe_Box", True),
-        ("9lives", True),
-        ("trailing-", True),
-    ],
-)
-def test_app_slug_must_be_a_dns_label(slug, rejected):
-    assert bool(_validator_message("app_slug", app_slug=slug)) is rejected
-
-
-@pytest.mark.parametrize("port,rejected", [(8080, False), (80, True), (70000, True)])
-def test_app_port_rejects_ports_the_pod_cannot_bind(port, rejected):
-    """The pod runs as UID 65532 with every capability dropped, so a port under
-    1024 binds only where the runtime sets net.ipv4.ip_unprivileged_port_start
-    to 0."""
-    assert bool(_validator_message("app_port", app_port=port)) is rejected
-
-
-# The ports the CloudNativePG instance pods listen on: PostgreSQL, the instance
-# manager's status endpoint, and the metrics exporter.
-DB_POD_PORTS = (5432, 8000, 9187)
-
-
-@pytest.mark.parametrize(
-    "database,port,rejected",
-    [
-        ("postgres", 8080, False),
-        *[("postgres", port, True) for port in DB_POD_PORTS],
-        *[("none", port, False) for port in DB_POD_PORTS],
-    ],
-)
-def test_database_rejects_an_app_port_the_db_pods_listen_on(database, port, rejected):
-    """The app's allows keep off the db pods, which share its name label, by one
-    component term; a distinct app_port keeps a db port out of them regardless."""
-    message = _validator_message("database", database=database, app_port=port)
-    assert bool(message) is rejected, message or "accepted, but should not be"
-    if rejected:
-        assert "app_port" in message and str(port) in message, message
-
-
 def test_copier_rejects_a_db_port_as_app_port(tmp_path):
     """The database validator is wired on a choice question, end to end."""
     src = render_app.copy_source(tmp_path)
@@ -316,24 +254,6 @@ def test_copier_rejects_a_db_port_as_app_port(tmp_path):
         "the render failed for some other reason:\n" + result.stdout + result.stderr
     )
     assert not (tmp_path / "out" / "kubernetes").exists(), "a rejected render wrote manifests"
-
-
-@pytest.mark.parametrize(
-    "vault,rejected",
-    [
-        ("recipes-ns", False),
-        # The slug, the cluster's vault, or an empty answer: the cluster's
-        # tenant-wiring gate rejects any store vault but the namespace.
-        ("recipe-box", True),
-        ("Homelab", True),
-        ("", True),
-    ],
-)
-def test_onepassword_vault_must_equal_the_namespace(vault, rejected):
-    message = _validator_message(
-        "onepassword_vault", onepassword_vault=vault, app_namespace="recipes-ns"
-    )
-    assert bool(message) is rejected, message or "accepted, but should not be"
 
 
 def test_no_prompt_describes_a_shared_vault():
@@ -387,22 +307,61 @@ def test_the_answer_reference_row_matches_the_computed_words():
     assert not missing, "the change_request row names no word for: " + ", ".join(missing)
 
 
-@pytest.mark.parametrize("ref,rejected", [("v0.7.4", False), ("main", True), ("0.6.2", True)])
-def test_lib_ref_takes_release_tags_only(ref, rejected):
-    assert bool(_validator_message("lib_ref", lib_ref=ref)) is rejected
+# The ports the CloudNativePG instance pods listen on: PostgreSQL, the instance
+# manager's status endpoint, and the metrics exporter.
+DB_POD_PORTS = (5432, 8000, 9187)
 
-
-@pytest.mark.parametrize("version,rejected", [("1.36.0", False), ("1.36", True), ("", True)])
-def test_k8s_version_must_be_full(version, rejected):
-    """kubeconform's -kubernetes-version takes X.Y.Z; a bare minor is rejected
-    at run time, several minutes into the first pipeline."""
-    assert bool(_validator_message("k8s_version", k8s_version=version)) is rejected
-
-
-# One accept and one reject per validator no test above exercises. These
-# questions all carry a default, so no other test reaches them. `context`
-# supplies only the answers the validator itself reads.
+# At least one accept and one reject per validator. `context` supplies only the
+# answers the validator itself reads; a fifth element is a substring the
+# rejection message must contain.
 VALIDATOR_CASES = [
+    ("app_slug", "recipe-box", None, {}),
+    ("app_slug", "Recipe_Box", "not a DNS label", {}),
+    ("app_slug", "9lives", "a DNS label starts with a letter", {}),
+    ("app_slug", "trailing-", "a DNS label ends with a letter or digit", {}),
+    ("app_port", 8080, None, {}),
+    ("app_port", 80, "UID 65532 with every capability dropped cannot bind it", {}),
+    ("app_port", 70000, "no TCP port", {}),
+    ("database", "postgres", None, {"app_port": 8080}),
+    *[
+        ("database", "postgres", "the app's allows would reach a db port", {"app_port": port},
+         f"app_port {port}")
+        for port in DB_POD_PORTS
+    ],
+    *[("database", "none", None, {"app_port": port}) for port in DB_POD_PORTS],
+    ("internal_domain", "esweiss.com", None, {"external_domain": "ericsweiss.com"}),
+    (
+        "internal_domain",
+        "example.com",
+        "both IngressRoutes claim one Host()",
+        {"external_domain": "example.com"},
+    ),
+    (
+        "internal_domain",
+        "esweiss.io",
+        "a shared first label puts two Certificates on one TLS Secret",
+        {"external_domain": "esweiss.com"},
+    ),
+    ("onepassword_vault", "recipes-ns", None, {"app_namespace": "recipes-ns"}),
+    (
+        "onepassword_vault",
+        "recipe-box",
+        "the tenant-wiring gate accepts only the namespace's vault",
+        {"app_namespace": "recipes-ns"},
+    ),
+    (
+        "onepassword_vault",
+        "Homelab",
+        "the tenant-wiring gate accepts only the namespace's vault",
+        {"app_namespace": "recipes-ns"},
+    ),
+    ("onepassword_vault", "", "an empty vault names no store", {"app_namespace": "recipes-ns"}),
+    ("lib_ref", "v0.7.4", None, {}),
+    ("lib_ref", "main", "a branch is never a valid pin", {}),
+    ("lib_ref", "0.6.2", "a release tag carries the v", {}),
+    ("k8s_version", "1.36.0", None, {}),
+    ("k8s_version", "1.36", "kubeconform's -kubernetes-version takes X.Y.Z", {}),
+    ("k8s_version", "", "kubeconform's -kubernetes-version takes X.Y.Z", {}),
     ("app_namespace", "recipe-box", None, {}),
     ("app_namespace", "Recipe_Box", "not a DNS label", {}),
     (
@@ -646,7 +605,6 @@ VALIDATOR_CASES = [
     ids=[f"{case[0]}-{case[1]}" for case in VALIDATOR_CASES],
 )
 def test_validator_accepts_and_rejects(case):
-    """A case may carry a fifth element: a substring the rejection message must contain."""
     name, answer, why, context = case[:4]
     expected = case[4] if len(case) > 4 else None
     message = _validator_message(name, **{name: answer}, **context)
@@ -660,18 +618,6 @@ def test_validator_accepts_and_rejects(case):
             )
 
 
-# Validators covered by a dedicated test above, keyed to that test.
-DEDICATED_VALIDATOR_TESTS = {
-    "app_slug": "test_app_slug_must_be_a_dns_label",
-    "app_port": "test_app_port_rejects_ports_the_pod_cannot_bind",
-    "database": "test_database_rejects_an_app_port_the_db_pods_listen_on",
-    "internal_domain": "test_internal_domain_rejects_a_colliding_pair",
-    "onepassword_vault": "test_onepassword_vault_must_equal_the_namespace",
-    "lib_ref": "test_lib_ref_takes_release_tags_only",
-    "k8s_version": "test_k8s_version_must_be_full",
-}
-
-
 def test_every_validator_is_exercised():
     """Every validator declared in copier.yml has a test case."""
     declared = {
@@ -679,7 +625,7 @@ def test_every_validator_is_exercised():
         for name, question in QUESTIONS.items()
         if isinstance(question, dict) and "validator" in question
     }
-    covered = {case[0] for case in VALIDATOR_CASES} | set(DEDICATED_VALIDATOR_TESTS)
+    covered = {case[0] for case in VALIDATOR_CASES}
     assert not declared - covered, (
         "copier.yml validators no test exercises: " + ", ".join(sorted(declared - covered))
     )
@@ -912,28 +858,16 @@ def test_conditional_paths_name_declared_questions():
 _TAG_LITERAL = re.compile(r"\bv\d+\.\d+\.\d+\b")
 
 
-def test_docs_quote_only_the_current_library_tag():
-    """Every library tag quoted in the docs equals the `lib_ref` default.
-
-    Nothing else ties the docs to that default.
-    """
-    want = CONFIG["lib_ref"]["default"]
-    stale = []
-    found = 0
-    for path in [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").glob("*.md"))]:
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            for tag in _TAG_LITERAL.findall(line):
-                found += 1
-                if tag != want:
-                    stale.append(f"{path.relative_to(REPO_ROOT)}:{lineno} {tag}")
-    # Non-vacuity: the docs are expected to advertise the default at least
-    # once (docs/CONSUMING.md's answer table); zero literals means the scan
-    # lost its subject, not that nothing drifted.
-    assert found, "no library tag literal found in the docs — the guard has no subject"
-    assert not stale, (
-        f"docs quote a library tag other than copier.yml's lib_ref default ({want}):\n  "
-        + "\n  ".join(stale)
-    )
+def test_docs_quote_no_library_tag():
+    """The library tag has one owner, copier.yml, which the pin gate holds to
+    the pipeline header. A tag quoted in a doc is a copy nothing keeps current."""
+    quoted = [
+        f"{path.relative_to(REPO_ROOT)}:{lineno} {tag}"
+        for path in [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").glob("*.md"))]
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        for tag in _TAG_LITERAL.findall(line)
+    ]
+    assert not quoted, "docs quote a library tag; name copier.yml's default instead:\n  " + "\n  ".join(quoted)
 
 
 # --------------------------------------------------------------------------

@@ -47,8 +47,7 @@ metrics — are `copier update` with the answer flipped, not hand-assembly.
 - **Register every new manifest** in `kubernetes/flux/kustomization.yaml`.
 - **Never edit the vendored copies in place.** Every script under `scripts/`{% if ci_shape == 'github' %}
   and every workflow under `.github/workflows/`{% endif %} is a byte-identical
-  library copy, and a re-vendor overwrites a local edit.{% if ci_shape == 'gitlab_selfhosted' %}
-  `scripts/lib-ref-sites.yml` is this repo's own data, not a copy.{% endif %}
+  library copy, and a re-vendor overwrites a local edit.
 - **Run `task lint` before opening a {{ change_request }}.**
 
 ## Comments

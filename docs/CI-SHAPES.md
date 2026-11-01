@@ -5,7 +5,7 @@ outside `kubernetes/`. Three values:
 
 | `ci_shape` | Pipeline | Ships |
 |---|---|---|
-| `gitlab_selfhosted` (default) | self-hosted GitLab, jobs included from `eric/weisssrv-lib` at a pinned tag | `.gitlab-ci.yml`, `.gitlab/secret-detection-ruleset.toml`, `scripts/check-lib-pins.py` with `scripts/lib-ref-sites.yml`, `scripts/check-ci-include-job-names.py`, `scripts/semantic-release.py` |
+| `gitlab_selfhosted` (default) | self-hosted GitLab, jobs included from `eric/weisssrv-lib` at a pinned tag | `.gitlab-ci.yml`, `.gitlab/secret-detection-ruleset.toml`, `scripts/check-lib-pins.py`, `scripts/check-ci-include-job-names.py`, `scripts/semantic-release.py` |
 | `github` | GitHub Actions, workflows vendored from the same library | `.github/workflows/{ci,release}.yml` — plus `build-image.yml` when `enable_image_build` is on — and `scripts/semantic-release.py` |
 | `none` | none | neither pipeline; `scripts/check-comment-length.py`, `scripts/check-doc-links.py`, `scripts/check-kustomization.py`, `scripts/check-netpol-except-parity.py`, `scripts/check-scrape-wiring.py` and `scripts/flux-lint.sh` still ship, and `task lint` plus the pre-commit hooks are the whole gate |
 
@@ -40,7 +40,7 @@ including the deploy-notes prompt about new secrets and cluster-side wiring.
 | Markdown link check | `lint-docs-links` (library template) | `lint-docs-links` job | `task doc-links` and the pre-commit hook |
 | Comment convention (`check-comment-length.py`) | `comment-length` (library template), plus `task comment-length` locally | `comment-length` job, plus `task comment-length` locally | `task comment-length` |
 | Secret scanning | GitLab Secret Detection (gitleaks under the hood), findings block | gitleaks directly, same `.gitleaks.toml`, findings block | pre-commit gitleaks hook |
-| Library pin gate | `lib-pin-check`, plus `task lib-pins` locally — the pins and `scripts/lib-ref-sites.yml`'s sites against the declared `lib_ref` | n/a — no includes to pin | n/a |
+| Library pin gate | `lib-pin-check`, plus `task lib-pins` locally — every include and the variable against the declared `lib_ref` | n/a — no includes to pin | n/a |
 | Optional-need gate (`check-ci-include-job-names.py`) | `ci-job-names-check`, plus `task ci-job-names` locally | n/a — a workflow `needs:` names a job in the same file | n/a |
 | Egress fence (`check-netpol-except-parity.py`) | `netpol-check`, plus `task netpol` locally | `ci.yml`'s `manifest-gates` job, plus `task netpol` locally | `task netpol` |
 | Scrape wiring (`check-scrape-wiring.py`) | `scrape-wiring-check`, plus `task scrape-wiring` locally | `ci.yml`'s `manifest-gates` job — `--namespace-from-tree`, not `--namespace`, so a monitor scoped with `matchNames` reds it — plus `task scrape-wiring` locally | `task scrape-wiring` |
@@ -87,11 +87,6 @@ announces its skip when there is none.
   copies with literal versions and sha256s — a library bump is a manual
   re-vendor of `ci.yml`, `release.yml`, `build-image.yml` and the vendored
   `scripts/` helpers.
-- **The manifest gates gate the tag on both pipeline shapes.** On the GitLab
-  shape `netpol-check`, `scrape-wiring-check` and `kustomization-check` sit in
-  `stage: lint`, ahead of `stage: release`. On GitHub the three run as the
-  vendored `ci.yml`'s `manifest-gates` job, and `release.yml` triggers on `ci`
-  completing, so a red gate stops the tag there too.
 - **`k8s_version`.** The vendored `ci.yml` cannot take a copier answer, so it
   reads repository variable `K8S_VERSION` and falls back to the library's own
   literal. A cluster on a different Kubernetes minor sets that variable;

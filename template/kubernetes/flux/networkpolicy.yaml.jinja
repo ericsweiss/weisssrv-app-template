@@ -1,3 +1,12 @@
+{%- set not_db %}
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+    # The database and dump pods share the name label; kubernetes/db opens theirs.
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values: [db]
+{%- endif %}
+{%- endset -%}
 ---
 # Fail-closed baseline: deny all ingress and egress, then open only what the
 # app needs below.
@@ -22,13 +31,7 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: {{ app_slug }}
-{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
-    # The database and dump pods share the name label; kubernetes/db opens theirs.
-    matchExpressions:
-      - key: app.kubernetes.io/component
-        operator: NotIn
-        values: [db]
-{%- endif %}
+{{- not_db }}
   policyTypes:
     - Ingress
   ingress:
@@ -51,13 +54,7 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: {{ app_slug }}
-{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
-    # The database and dump pods share the name label; kubernetes/db opens theirs.
-    matchExpressions:
-      - key: app.kubernetes.io/component
-        operator: NotIn
-        values: [db]
-{%- endif %}
+{{- not_db }}
   policyTypes:
     - Ingress
   ingress:
@@ -80,13 +77,7 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: {{ app_slug }}
-{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
-    # The database and dump pods share the name label; kubernetes/db opens theirs.
-    matchExpressions:
-      - key: app.kubernetes.io/component
-        operator: NotIn
-        values: [db]
-{%- endif %}
+{{- not_db }}
   policyTypes:
     - Egress
   egress:

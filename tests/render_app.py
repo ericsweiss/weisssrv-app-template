@@ -25,50 +25,9 @@ VENDORED_MANIFEST = REPO_ROOT / "scripts" / "vendored-manifest.yml"
 _EXTRA_IGNORE = (".tmp", ".bin")
 
 
-class CILoader(yaml.SafeLoader):
-    """GitLab CI YAML carries `!reference [...]`, which SafeLoader rejects.
-
-    A SafeLoader subclass: the added constructor degrades ANY unknown tag to its
-    plain sequence value (or None), so no object is ever constructed.
-    """
-
-
-CILoader.add_multi_constructor(
-    "",
-    lambda loader, suffix, node: (
-        loader.construct_sequence(node, deep=True)
-        if isinstance(node, yaml.SequenceNode)
-        else None
-    ),
-)
-
-
-def load_ci(path: Path) -> dict:
-    return parse_ci(path.read_text())
-
-
-def parse_ci(text: str) -> dict:
-    """The jobs document of pipeline YAML already in memory.
-
-    GitLab's inputs syntax makes a pipeline file two documents, `spec:` then the
-    jobs, so the last mapping is the one a caller wants.
-    """
-    documents = [d for d in yaml.load_all(text, Loader=CILoader) if isinstance(d, dict)]
-    return documents[-1] if documents else {}
-
-
 def declared_lib_ref(path: Path, input_name: str = "lib_ref") -> str | None:
-    """The library tag a pipeline declares: `spec.inputs.<input_name>.default`.
-
-    The single source every `ref:` below it reads, because an input interpolates
-    before `include:` resolves and a variable does not exist there yet.
-    """
-    documents = [
-        d for d in yaml.load_all(path.read_text(), Loader=CILoader) if isinstance(d, dict)
-    ]
-    header = next((d for d in documents if "spec" in d), None)
-    inputs = ((header or {}).get("spec") or {}).get("inputs") or {}
-    entry = inputs.get(input_name)
+    """The library tag a pipeline declares: `spec.inputs.<input_name>.default`."""
+    entry = ci_yaml.spec_inputs(path.read_text()).get(input_name)
     return entry.get("default") if isinstance(entry, dict) else None
 
 
@@ -79,6 +38,12 @@ def load_gate(name: str, directory: str):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+# The pipeline parser this repo vendors from the library.
+ci_yaml = load_gate("ci_yaml.py", "scripts")
+CILoader = ci_yaml.CILoader
+load_ci = ci_yaml.load_ci
 
 
 def rendered_name(consumer: str) -> str:

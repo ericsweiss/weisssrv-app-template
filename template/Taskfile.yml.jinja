@@ -197,7 +197,7 @@ tasks:
     preconditions:
       - *needs_pyyaml
       - sh: test -d "$WEISSSRV_LIB_PATH"
-        msg: "set WEISSSRV_LIB_PATH to a {{ lib_project }} checkout at {{ lib_ref }}"
+        msg: "set WEISSSRV_LIB_PATH to a {{ lib_project }} checkout at the tag `python3 scripts/check-lib-pins.py --print` prints"
     cmds:
       - >-
         python3 scripts/check-ci-include-job-names.py --require-optional-needs

@@ -309,7 +309,7 @@ ingress:
 {%- if ci_shape == 'gitlab_selfhosted' %}
 - `ci-job-names` resolves every `needs: optional: true` in `.gitlab-ci.yml`
   against the jobs the includes create, so it needs `WEISSSRV_LIB_PATH` pointed
-  at a `{{ lib_project }}` checkout at `{{ lib_ref }}`. GitLab ignores a need
+  at a `{{ lib_project }}` checkout at the pipeline's declared `lib_ref`. GitLab ignores a need
   naming no job, so a renamed library job stops blocking the review in silence.
   The `ci-job-names-check` job runs the same script on a pipeline-file change.
 {%- endif %}

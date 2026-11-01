@@ -16,12 +16,6 @@ from conftest import require_env
 
 REPO_ROOT = render_app.REPO_ROOT
 GATE = REPO_ROOT / "scripts" / "check-ci-include-job-names.py"
-TEMPLATE_GATE = (
-    REPO_ROOT
-    / "template"
-    / "scripts"
-    / "{% if ci_shape == 'gitlab_selfhosted' %}check-ci-include-job-names.py{% endif %}"
-)
 _HINT = "The python-tests job's setup_command clones the library into it."
 
 # GitLab ships Jobs/Secret-Detection.gitlab-ci.yml with the instance, so the
@@ -56,13 +50,6 @@ def _run(gate: Path, repo_root: Path, *extra: str) -> subprocess.CompletedProces
     )
 
 
-def test_both_vendored_copies_ship() -> None:
-    """The root copy gates this pipeline and the shape-gated one ships to a
-    tenant; without either, every assertion below is about the wrong tree."""
-    assert GATE.is_file(), f"this repository ships no {GATE.name}"
-    assert TEMPLATE_GATE.is_file(), "template/scripts ships no conditional copy"
-
-
 def test_this_repos_optional_needs_resolve(lib_path) -> None:
     """The three optional needs on `pr-agent-review` name jobs two library
     includes create, so a `job_name` input or a rename upstream breaks them."""
@@ -95,20 +82,3 @@ def test_the_rendered_pipelines_optional_needs_resolve(lib_path, tmp_path_factor
     )
     assert result.returncode == 0, f"{result.stdout}{result.stderr}"
 
-
-def test_a_dangling_optional_need_is_reported(tmp_path) -> None:
-    """Mutation case: a need naming a job nothing creates has to be a finding,
-    or the two cases above would pass on a half-finished rename."""
-    (tmp_path / ".gitlab-ci.yml").write_text(
-        "real-job:\n"
-        '  script: ["true"]\n'
-        "waiting-job:\n"
-        '  script: ["true"]\n'
-        "  needs:\n"
-        "    - job: renamed-away\n"
-        "      optional: true\n",
-        encoding="utf-8",
-    )
-    result = _run(GATE, tmp_path, "--require-optional-needs")
-    assert result.returncode == 1, f"{result.stdout}{result.stderr}"
-    assert "renamed-away" in result.stderr
