@@ -73,9 +73,9 @@ jobs:
       - name: Lint
         run: yamllint -c lint/yamllint-relaxed.yml .
 
-  # --- flux-lint: kustomize build + kubeconform of the tenant manifests -----
-  # The same two commands the GitLab flux-lint job runs in SIMPLE mode: a tenant
-  # pins literal image tags, so there is nothing to envsubst.
+  # --- flux-lint: scripts/flux-lint.sh in simple mode over the manifests ------
+  # The program the GitLab flux-lint job runs: kustomize build, the cluster_*
+  # substitution scan and kubeconform, with the empty-render and Skipped floors.
   flux-lint:
     name: flux-lint
     runs-on: ubuntu-latest
@@ -103,45 +103,15 @@ jobs:
       - name: Render + validate
         run: |
           set -euo pipefail
-          # Platform CRDs validate against the datreeio catalog, core kinds
-          # against kubeconform's bundled schemas; -ignore-missing-schemas keeps
-          # a CRD with no published schema from failing the gate.
-          CATALOG="https://raw.githubusercontent.com/datreeio/CRDs-catalog/${CRD_CATALOG_REF}/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
           if [ -z "$K8S_VERSION_OVERRIDE" ]; then
             echo "::warning title=K8S_VERSION not set::Validating against Kubernetes $K8S_VERSION, the library fallback. Set repository variable K8S_VERSION to this cluster's minor."
           fi
-          kustomize build "$MANIFEST_ROOT" > "$RUNNER_TEMP/rendered.yaml"
-          # CRITICAL: an emptied `resources:` list renders nothing and both
-          # tools exit 0 on it, while a cluster-side Kustomization with
-          # `prune: true` then deletes every object this repo applied.
-          if ! grep -q '^kind:' "$RUNNER_TEMP/rendered.yaml"; then
-            echo "ERROR: kustomize build $MANIFEST_ROOT rendered no document — check for an emptied or mistyped resources: list"
-            exit 1
-          fi
-          # 2>&1: per-resource failures go to stderr, which the capture would
-          # otherwise swallow on the failing path.
-          if ! summary=$(kubeconform -strict -ignore-missing-schemas \
-              -kubernetes-version "$K8S_VERSION" \
-              -schema-location default \
-              -schema-location "$CATALOG" \
-              -summary "$RUNNER_TEMP/rendered.yaml" 2>&1); then
-            printf '%s\n' "$summary"
-            exit 1
-          fi
-          printf '%s\n' "$summary"
-          # CRITICAL: -ignore-missing-schemas exits 0 on a resource it could not
-          # schema-validate, so an unreachable catalog degrades the run to core
-          # kinds in silence. A summary with no Skipped: field is that signature.
-          case "$ALLOWED_SKIPS" in
-            ''|*[!0-9]*) echo "ERROR: ALLOWED_SKIPS must be a non-negative integer, got '$ALLOWED_SKIPS'"; exit 1 ;;
-          esac
-          skipped=$(printf '%s\n' "$summary" | sed -n 's/.*Skipped: \([0-9][0-9]*\).*/\1/p')
-          if [ -z "$skipped" ] || [ "$skipped" -gt "$ALLOWED_SKIPS" ]; then
-            echo "ERROR: kubeconform validated ${skipped:-?} resource(s) against no schema (ALLOWED_SKIPS=$ALLOWED_SKIPS)"
-            echo "The catalog at $CRD_CATALOG_REF moved or was unreachable, or the kind has no published schema."
-            echo "Add a -schema-location for it, or raise repository variable ALLOWED_SKIPS."
-            exit 1
-          fi
+          [ -f scripts/flux-lint.sh ] || { echo "ERROR: scripts/flux-lint.sh not found — vendor weisssrv-lib's scripts/flux-lint.sh (scripts/vendorable-paths.yml)"; exit 1; }
+          bash scripts/flux-lint.sh --mode simple \
+            --kustomize-path "$MANIFEST_ROOT" \
+            --allowed-skips "$ALLOWED_SKIPS" \
+            --k8s-version "$K8S_VERSION" \
+            --crd-catalog-ref "$CRD_CATALOG_REF"
 
   # --- manifest-gates: the repo's own gate scripts over its manifests -------
   # The GitLab shape gives every gate a job template; this is their counterpart.

@@ -61,15 +61,13 @@ to the include's `crd_catalog_ref` and to `db-manifest-check`, so all three read
 one schema set.
 
 The empty-build guard, the skipped-schema guard and the integer check on the
-skip budget live in the vendored `scripts/flux-lint.sh`, which `task flux-lint`
-and the GitLab `flux-lint` job both run. The GitHub shape's vendored `ci.yml`
-repeats them inline, and the library's own tests exercise both copies.
+skip budget live in the vendored `scripts/flux-lint.sh`, which `task flux-lint`,
+the GitLab `flux-lint` job and the GitHub shape's vendored `ci.yml` all run.
 
 `scripts/flux-lint.sh` also fails a build that carries a `${...}` key outside
 cluster-config's `cluster_*` set, because the tenant Kustomization substitutes
 strictly and one unknown key fails the whole reconcile. Write a literal as
-`$${var}`. The GitHub `ci.yml` does not run this scan, so on that shape
-`task flux-lint` is where it runs.
+`$${var}`.
 
 Both pipelined shapes drive the **same** vendored `scripts/semantic-release.py`
 with `--platform {gitlab,github}`, so there is one implementation to audit

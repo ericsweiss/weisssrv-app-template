@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Assert every kustomization lists every manifest beside it, names no missing
-path, lists no empty manifest and renders something: an unlisted file ships
-nothing, an emptied list prunes. Exit 0 clean, 1 violation, 2 operator error.
+path but the two gotk files `flux bootstrap` writes, lists no empty manifest and
+renders something. Exit 0 clean, 1 violation, 2 operator error.
 """
 
 from __future__ import annotations
@@ -34,6 +34,9 @@ CONTENT_KEYS = RESOURCE_KEYS + (
     "transformers", "images", "labels", "commonLabels", "commonAnnotations",
     "replicas", "openapi", "crds", "configurations",
 )
+# `flux bootstrap` writes these two files, so a kustomization whose resources
+# name both is a bootstrap directory and may name them before they exist.
+FLUX_BOOTSTRAP_FILES = frozenset({"gotk-components.yaml", "gotk-sync.yaml"})
 
 
 class GateError(Exception):
@@ -201,7 +204,11 @@ class Run:
 
         problems = []
         referenced = referenced_paths(doc)
-        missing = sorted(f"{base / name}" for name in referenced if not (base / name).exists())
+        resources = {normalize(n) for n in doc.get("resources") or [] if isinstance(n, str)}
+        absent_ok = FLUX_BOOTSTRAP_FILES if FLUX_BOOTSTRAP_FILES <= resources else set()
+        missing = sorted(
+            f"{base / name}" for name in referenced - absent_ok if not (base / name).exists()
+        )
         if missing:
             problems.append(f"kustomization.yaml names paths that do not exist: {missing}")
         empty = sorted(

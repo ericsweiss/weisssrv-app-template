@@ -1,6 +1,6 @@
 ---
-# The shared yamllint profile: yamllint's `relaxed` with line-length off,
-# document-start back on as a warning, and the comments and octal-values
+# The shared yamllint profile: yamllint's `relaxed` with line-length
+# off, document-start back on as a warning, and the comments and octal-values
 # settings ansible-lint requires of a yamllint config it loads.
 
 # Keep it off a repo-root `.yamllint`: ansible-lint discovers one there and

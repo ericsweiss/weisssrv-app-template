@@ -276,9 +276,6 @@ ingress:
 {%- endif %}
   `task flux-lint` also fails on a malformed `${` and on a `${...}` key outside
   cluster-config's `cluster_*` set. Write a literal as `$${var}`.
-{%- if ci_shape == 'github' %}
-  The `flux-lint` workflow job does not run this scan.
-{%- endif %}
 - `scrape-wiring` fails when no NetworkPolicy admits the `observability`
   namespace on the port `servicemonitor.yaml` scrapes. A drifted pair pages
   `TargetDown` in the platform's Alertmanager, not here. These edge cases hold:

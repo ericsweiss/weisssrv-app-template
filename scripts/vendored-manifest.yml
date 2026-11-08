@@ -72,8 +72,12 @@ vendored:
   # ansible-lint discovers and lets override its own yaml rule. Callers pass `-c`.
   - lib: lint/yamllint-relaxed.yml
     consumer: lint/yamllint-relaxed.yml
+  - lib: lint/yamllint-relaxed.yml
+    consumer: template/lint/yamllint-relaxed.yml
   - lib: lint/ruff.toml
     consumer: ruff.toml
+  - lib: lint/ruff.toml
+    consumer: template/ruff.toml
   # No directory walk reaches these two: the walks cover scripts/ trees only.
   - lib: lint/gitattributes
     consumer: .gitattributes
@@ -121,12 +125,6 @@ forked:
       comment-length check, so a tenant with no pipeline still runs them. The
       header also drops the library's copy instruction.
     reconciled_sha256: f7e2dff0acee6c4787e1d89311fa72e5d089b13681ed9cd94e8b92bdcada519c
-  - lib: lint/ruff.toml
-    consumer: template/ruff.toml
-    reason: >-
-      Header names no site: the library's names the weisssrv family, which the tenant leakage gate forbids.
-    comment_only: true
-    reconciled_sha256: fe3f901ecfdbbd38a246534d7db97f085e3f664eda92652a4ed3efe3bff5c00d
   - lib: lint/gitleaks.toml
     consumer: template/.gitleaks.toml
     reason: Allowlist paths and fixture anchors are per-tenant.
@@ -137,9 +135,3 @@ forked:
       Drops the library-facing "copy this into a consumer repo" header line;
       the sections are the library's.
     reconciled_sha256: 9873966d0ce8a80d7ed84ecce449107b2a20387a146692ffb9aec28dd505fe02
-  - lib: lint/yamllint-relaxed.yml
-    consumer: template/lint/yamllint-relaxed.yml
-    reason: >-
-      Header names no site: the library's names the weisssrv family, which the tenant leakage gate forbids.
-    comment_only: true
-    reconciled_sha256: ce1a488fc573c413fe6d89eaddee246900d7cd99f8b22a100e87ddd62fdcf378

@@ -1990,6 +1990,7 @@ GITHUB_WORKFLOW_PATH_PATTERNS = (
     # flux-lint renders and the manifest gates walk this root unless the variable is set.
     r"MANIFEST_ROOT: \$\{\{ vars\.MANIFEST_ROOT \|\| '([\w/.-]+)' \}\}",
     r"python3 (scripts/[\w.-]+\.py)",
+    r"bash (scripts/flux-lint\.sh) --mode simple",
     r"yamllint -c ([\w./-]+)",
     r"gitleaks dir \. --config ([\w./-]+)",
 )
@@ -2009,8 +2010,8 @@ def test_github_workflow_names_only_paths_that_exist(rendered_b):
                 assert (rendered_b / target).exists(), f"ci.yml names missing {target}"
                 checked.append(target)
     assert len(checked) >= len(GITHUB_WORKFLOW_PATH_PATTERNS)
-    builds = re.findall(r"^\s*kustomize build (.+?) >", workflow, re.MULTILINE)
-    assert builds and set(builds) == {'"$MANIFEST_ROOT"'}, f"kustomize build targets: {builds}"
+    roots = re.findall(r"--kustomize-path (\S+)", workflow)
+    assert roots == ['"$MANIFEST_ROOT"'], f"flux-lint.sh kustomize paths: {roots}"
 
 
 def test_the_tenant_gitleaks_config_extends_the_default_rules(repo):
