@@ -436,6 +436,12 @@ CROSS_RENDER_EXEMPT = {
         "shape is the targeted gate, and docs/CI-SHAPES.md records the limitation"
     ),
     "secret_item": "'App Secrets' is ordinary prose in the docs the render ships",
+    "privileged_runner_tag": (
+        "'infrastructure' is also the platform's Flux tree and Kustomization name — "
+        "test_the_pipeline_carries_no_fixture_a_values, "
+        "test_the_build_runner_step_ships_with_the_tagged_build and "
+        "test_the_skill_names_the_answered_build_runner_tag are the targeted gates"
+    ),
     "db_roles_item": (
         "'Database' is ordinary prose, the O6b heading among it — "
         "test_the_role_secrets_read_the_answered_item is the targeted gate"
@@ -1116,14 +1122,13 @@ def _onboarding_step(root: Path, heading: str) -> str:
     return re.split(r"\n##+ ", _onboarding(root).split(f"\n### {heading}", 1)[1])[0]
 
 
-def _onboarding_wiring(root: Path) -> list[dict]:
-    """The documents of the operator wiring file, out of its Markdown fence.
+def _onboarding_wiring_text(root: Path) -> str:
+    """The operator wiring file, out of its Markdown fence."""
+    return _onboarding(root).split("```yaml")[1].split("```")[0]
 
-    Nothing else parses them, so the file the operator applies by hand is
-    validated only here.
-    """
-    fenced = _onboarding(root).split("```yaml")[1].split("```")[0]
-    return [d for d in yaml.safe_load_all(fenced) if isinstance(d, dict)]
+
+def _onboarding_wiring(root: Path) -> list[dict]:
+    return [d for d in yaml.safe_load_all(_onboarding_wiring_text(root)) if isinstance(d, dict)]
 
 
 def _onboarding_store(root: Path) -> dict:
@@ -1132,28 +1137,95 @@ def _onboarding_store(root: Path) -> dict:
     return stores[0]
 
 
-def test_wiring_store_scopes_itself_to_the_tenant(repo):
-    if repo.answers["secrets_backend"] == "none":
-        # Assert on the DOCUMENTS, never on the prose: the `none` branch of step
-        # O1 tells the operator to skip "the `ClusterSecretStore` in O3", so a
-        # substring check fails on the very render it was written for.
-        kinds = [d["kind"] for d in _onboarding_wiring(repo.path)]
-        assert "ClusterSecretStore" not in kinds, (
-            "a store the tenant has nothing to read from, and one more "
-            "cluster-scoped object for the operator to keep scoped"
+# The cluster repo's tenant gates, run on the wiring file alone. Every render
+# caps `tenant-local` claims, so the storage-class arm is on.
+TENANT_GATES = (
+    ("check-tenant-wiring.py", "--tenant-storage-class"),
+    ("check-tenant-traefik-isolation.py",),
+)
+
+
+def _tenant_gate_results(wiring: str, scratch: Path, slug: str) -> dict[str, tuple[int, str]]:
+    """Each tenant gate's exit code and output over `wiring` saved as one file."""
+    path = scratch / f"{slug}.yaml"
+    path.write_text(wiring, encoding="utf-8")
+    results = {}
+    for gate, *flags in TENANT_GATES:
+        done = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "scripts" / gate), *flags,
+             "--repo-root", str(scratch), str(path)],
+            capture_output=True, text=True, check=False,
         )
-        assert "externalsecret.yaml" not in _kustomization(repo.path)["resources"]
-        return
-    store = _onboarding_store(repo.path)
-    assert store["spec"]["conditions"] == [{"namespaces": [repo.answers["app_namespace"]]}], (
-        "a ClusterSecretStore without `conditions` is readable by every "
-        "namespace in the cluster"
+        results[gate] = (done.returncode, done.stdout + done.stderr)
+    return results
+
+
+def test_the_onboarding_wiring_passes_the_cluster_tenant_gates(repo, tmp_path):
+    """The cluster repo's pipeline refuses a wiring file these gates fail: PSS
+    labels, caps, prune guards, store scope and vault, the Kustomizations, the
+    hostname grant and its Deny bindings."""
+    results = _tenant_gate_results(
+        _onboarding_wiring_text(repo.path), tmp_path, repo.answers["app_slug"]
     )
+    for gate, (code, output) in results.items():
+        assert code == 0, f"{gate} exited {code}:\n{output}"
+
+
+def _unscope_store(wiring: list[dict], namespace: str) -> None:
+    (store,) = [d for d in wiring if d.get("kind") == "ClusterSecretStore"]
+    del store["spec"]["conditions"]
+
+
+def _drop_certificate_binding(wiring: list[dict], namespace: str) -> None:
+    name = f"tenant-certificates-{namespace}"
+    kept = [d for d in wiring if d.get("metadata", {}).get("name") != name]
+    assert len(kept) == len(wiring) - 1, f"the wiring carries no {name}"
+    wiring[:] = kept
+
+
+def _uncap_tenant_local(wiring: list[dict], namespace: str) -> None:
+    (quota,) = [d for d in wiring if d.get("kind") == "ResourceQuota"]
+    del quota["spec"]["hard"]["tenant-local.storageclass.storage.k8s.io/requests.storage"]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "gate", "message"),
+    [
+        (_unscope_store, "check-tenant-wiring.py", "has no spec.conditions"),
+        (_drop_certificate_binding, "check-tenant-traefik-isolation.py",
+         "has no binding of tenant-certificates"),
+        (_uncap_tenant_local, "check-tenant-wiring.py",
+         "does not cap persistent volume claims"),
+    ],
+    ids=["unscoped-store", "no-certificate-binding", "uncapped-tenant-local"],
+)
+def test_the_tenant_gates_fail_a_broken_wiring(rendered, answers, tmp_path, mutate, gate, message):
+    """Negative controls: each parametrized breach reds the same extraction and
+    invocation the positive case runs, so a dropped gate or flag fails here."""
+    wiring = _onboarding_wiring(rendered)
+    mutate(wiring, answers["app_namespace"])
+    results = _tenant_gate_results(
+        yaml.safe_dump_all(wiring, sort_keys=False), tmp_path, answers["app_slug"]
+    )
+    code, output = results[gate]
+    assert code == 1, f"{gate} exited {code}:\n{output}"
+    assert message in output, output
+
+
+def test_a_render_with_no_backend_wires_no_store(rendered_no_secrets):
+    # Assert on the documents, not the prose: the `none` branch of step O1
+    # tells the operator to skip "the `ClusterSecretStore` in O3".
+    kinds = [d["kind"] for d in _onboarding_wiring(rendered_no_secrets)]
+    assert "ClusterSecretStore" not in kinds, (
+        "a store the tenant has nothing to read from, and one more "
+        "cluster-scoped object for the operator to keep scoped"
+    )
+    assert "externalsecret.yaml" not in _kustomization(rendered_no_secrets)["resources"]
 
 
 def test_the_wiring_kustomization_points_at_this_repo(repo):
-    """The wiring Kustomization is the whole link between cluster and repo, and
-    kubeconform validates its schema, not its path or target namespace."""
+    """The wiring Kustomization is the whole link between cluster and repo. The
+    tenant gates hold its shape; this holds it to this repo's trees and answers."""
     slug = repo.answers["app_slug"]
     docs = {
         d["metadata"]["name"]: d["spec"]
@@ -1169,18 +1241,12 @@ def test_the_wiring_kustomization_points_at_this_repo(repo):
         assert (repo.path / tree / "kustomization.yaml").is_file()
         assert spec["targetNamespace"] == repo.answers["app_namespace"]
         assert spec["sourceRef"]["name"] == slug
-        assert spec["serviceAccountName"] == f"{slug}-flux"
-        assert spec["prune"] is True
-        # The cluster-template tenant-wiring gate requires cluster-config as a
-        # substitute source on every tenant Kustomization.
-        assert spec["postBuild"]["substituteFrom"] == [
-            {"kind": "ConfigMap", "name": "cluster-config", "optional": False}
-        ], f"{name} carries no cluster-config substitute source"
-        # Deleting the db wiring must orphan the whole tree: the default policy
-        # prunes the unguarded half and leaves the prune-guarded Cluster running
-        # with no NetworkPolicies, role Secrets, backups or monitoring.
-        wanted = "Orphan" if tree == DB else None
-        assert spec.get("deletionPolicy") == wanted, f"{name} deletionPolicy"
+        # The gates also allow cluster-versions; this template reads cluster-config alone.
+        sources = [entry["name"] for entry in spec["postBuild"]["substituteFrom"]]
+        assert sources == ["cluster-config"], f"{name} substitutes from {sources}"
+        # The tenant gates require Orphan on the db tree; the app tree goes on removal.
+        if tree != DB:
+            assert "deletionPolicy" not in spec, f"{name} orphans the app on removal"
     onboarding = _onboarding(repo.path)
     assert "No `postBuild` block" not in onboarding, "the prose contradicts the wiring"
 
@@ -1666,6 +1732,38 @@ def test_build_job_carries_the_privileged_tag(rendered, answers):
     assert build[0]["inputs"]["cpu_selector"] == answers["ci_cpu_selector"]
 
 
+@pytest.mark.parametrize(
+    "render_fixture", ["rendered", "rendered_gitlab_unlike", "rendered_gitlab_no_build"]
+)
+def test_only_the_image_build_names_a_runner_tag(request, render_fixture):
+    """Every library include a tenant renders defaults `tags` to the shared
+    tag-less runner, and of those docker-build alone requires one; a tag
+    anywhere else moves that job off the shared runner."""
+    ci = render_app.load_ci(request.getfixturevalue(render_fixture) / ".gitlab-ci.yml")
+    tagged, jobs = render_app.runner_tagged(ci)
+    expected = ["/ci/build/docker-build.yml"] if _includes(ci, "docker-build.yml") else []
+    assert tagged == expected, tagged
+    assert not jobs, f"local jobs set runner tags: {jobs}"
+
+
+@pytest.mark.parametrize("render_fixture", ["rendered", "rendered_b"])
+def test_the_doc_links_job_runs_the_task_s_path_pass(request, render_fixture):
+    """The pipeline's doc-link job runs the backticked-path pass `task doc-links`
+    runs, or CI passes a doc naming a file that no longer exists."""
+    root = request.getfixturevalue(render_fixture)
+    task = yaml.safe_load((root / "Taskfile.yml").read_text())["tasks"]["doc-links"]
+    assert str(task["env"]["CHECK_DOC_LINKS_PATHS"]) == "1", task["env"]
+    if (root / ".gitlab-ci.yml").is_file():
+        ci = render_app.load_ci(root / ".gitlab-ci.yml")
+        links = _includes(ci, "docs-link-check.yml")
+        assert len(links) == 1 and links[0]["inputs"].get("check_paths") is True, links
+        return
+    workflow = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())
+    steps = workflow["jobs"]["lint-docs-links"]["steps"]
+    runs = [step for step in steps if "check-doc-links.py" in str(step.get("run", ""))]
+    assert runs and str(runs[0].get("env", {}).get("CHECK_DOC_LINKS_PATHS")) == "1", runs
+
+
 @pytest.mark.parametrize("render_fixture", ["rendered", "rendered_gitlab_unlike"])
 def test_the_image_build_runs_after_the_secret_scan(request, render_fixture):
     """The library's docker-build job sets no `needs:`, so stage order is the
@@ -1889,7 +1987,8 @@ def test_pipeline_lints_only_paths_that_exist(rendered):
 # it is checked against a real render. Guarded arguments do not belong here.
 GITHUB_WORKFLOW_PATH_PATTERNS = (
     r"ruff check[^\n]*--output-format concise ([\w/ .-]+)",
-    r"kustomize build ([\w/.-]+)",
+    # flux-lint renders and the manifest gates walk this root unless the variable is set.
+    r"MANIFEST_ROOT: \$\{\{ vars\.MANIFEST_ROOT \|\| '([\w/.-]+)' \}\}",
     r"python3 (scripts/[\w.-]+\.py)",
     r"yamllint -c ([\w./-]+)",
     r"gitleaks dir \. --config ([\w./-]+)",
@@ -1910,6 +2009,8 @@ def test_github_workflow_names_only_paths_that_exist(rendered_b):
                 assert (rendered_b / target).exists(), f"ci.yml names missing {target}"
                 checked.append(target)
     assert len(checked) >= len(GITHUB_WORKFLOW_PATH_PATTERNS)
+    builds = re.findall(r"^\s*kustomize build (.+?) >", workflow, re.MULTILINE)
+    assert builds and set(builds) == {'"$MANIFEST_ROOT"'}, f"kustomize build targets: {builds}"
 
 
 def test_the_tenant_gitleaks_config_extends_the_default_rules(repo):
@@ -2684,8 +2785,18 @@ def _stubbed_path(
         ("kind: Service\n", NO_SKIPPED_SUMMARY, 0, {}, 1, "against no schema"),
         # The success path, the Skipped parse and the budget compare, needs its own run.
         ("kind: Service\n", CLEAN_SUMMARY, 0, {}, 0, "Skipped: 0"),
+        # The tenant Kustomization substitutes strictly from cluster-config alone.
+        ("kind: Service\nmetadata:\n  name: ${app_name}\n", CLEAN_SUMMARY, 0, {}, 1,
+         "outside cluster-config's cluster_* set"),
+        # A cluster_* key and a `$${...}` escape are what that substitution accepts.
+        ("kind: Service\nmetadata:\n  name: ${cluster_domain}-$${app}\n", CLEAN_SUMMARY,
+         0, {}, 0, "Skipped: 0"),
+        # Flux's envsubst eats a positional `${1}` silently in-cluster.
+        ("kind: Service\nmetadata:\n  name: ${1}\n", CLEAN_SUMMARY, 0, {}, 1,
+         "envsubst mishandles"),
     ],
-    ids=["empty", "skipped", "invalid", "bad-budget", "no-skip-count", "clean"],
+    ids=["empty", "skipped", "invalid", "bad-budget", "no-skip-count", "clean",
+         "foreign-key", "cluster-key-and-escape", "malformed-ref"],
 )
 def test_the_manifest_gate(
     repo, tmp_path, render, summary, kubeconform_rc, overrides, expected_rc, message
@@ -2700,6 +2811,39 @@ def test_the_manifest_gate(
     output = result.stdout if expected_rc == 0 else result.stdout + result.stderr
     assert (result.returncode != 0) == bool(expected_rc), result.stdout + result.stderr
     assert message in output, result.stdout + result.stderr
+
+
+def test_the_docs_say_where_the_substitution_key_scan_runs(repo):
+    """flux-lint.sh refuses a `${...}` key outside cluster_*, and the rendered
+    docs say so; on the GitHub shape they also say the workflow job skips it,
+    which holds only while the vendored ci.yml runs neither flux-lint.sh nor the scan."""
+    doc = " ".join((repo.path / "docs" / "ARCHITECTURE.md").read_text().split())
+    assert "`task flux-lint` also fails on a malformed `${`" in doc, "key-scan sentence names no subject"
+    assert "outside cluster-config's `cluster_*` set" in doc, "flux-lint bullet omits the key scan"
+    assert "The flux-lint gate fails any `${...}`" in doc, "platform contract omits the key scan"
+    skip_note = "The `flux-lint` workflow job does not run this scan."
+    if repo.answers["ci_shape"] != "github":
+        assert skip_note not in doc
+        return
+    workflow = yaml.safe_load((repo.path / ".github" / "workflows" / "ci.yml").read_text())
+    runs = [str(step.get("run", "")) for step in workflow["jobs"]["flux-lint"]["steps"]]
+    runs_scan = any("flux-lint.sh" in run or "'^cluster_'" in run for run in runs)
+    assert (skip_note in doc) != runs_scan, (
+        "the GitHub shape's docs disagree with whether ci.yml runs scripts/flux-lint.sh"
+    )
+
+
+def test_the_flux_trees_substitute_only_cluster_keys(repo, tmp_path):
+    """The tenant Kustomization substitutes strictly from cluster-config, so any
+    other `${...}` key, or a malformed `${`, stops the whole tenant reconcile.
+    The rendered flux-lint task runs that scan over every tree's real build."""
+    require_tool("kustomize", "substitution-key scan", _TOOLCHAIN_HINT, ci_optional=True)
+    env = _offline_kubeconform(tmp_path / "offline" / "bin")
+    result = subprocess.run(
+        ["sh", "-c", _flux_lint_script(repo)],
+        cwd=repo.path, capture_output=True, text=True, env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def _gate_scripts(repo: Repo, task: str, job: str) -> list[str]:
@@ -3353,13 +3497,9 @@ def test_the_wiring_quota_counts_the_database_claim(repo):
         assert hard["persistentvolumeclaims"] == "4"
         assert hard[storage_key] == f"{size * 2}Gi"
     else:
-        # The cluster's tenant-wiring gate requires both keys on every tenant;
-        # a tenant that ships no claim caps them at zero.
+        # A tenant that ships no claim caps both keys at zero.
         assert hard["persistentvolumeclaims"] == "0"
         assert hard[storage_key] == "0"
-
-
-PRUNE_DISABLED = {"kustomize.toolkit.fluxcd.io/prune": "disabled"}
 
 
 def _wiring_named(wiring: list[dict], kind: str, name: str) -> dict:
@@ -3368,52 +3508,19 @@ def _wiring_named(wiring: list[dict], kind: str, name: str) -> dict:
     return found[0]
 
 
-def test_the_wiring_guards_what_outlives_it(repo):
-    """A pruned Namespace cascades to every object and PVC in it, and the caps,
-    the hostname grant and its bindings must outlive the wiring with it."""
-    namespace = repo.answers["app_namespace"]
-    slug = repo.answers["app_slug"]
-    wiring = _onboarding_wiring(repo.path)
-    guarded = [
-        ("Namespace", namespace),
-        ("ResourceQuota", f"{slug}-quota"),
-        ("LimitRange", f"{slug}-limits"),
-        ("ConfigMap", f"tenant-routing-{namespace}"),
-        ("ValidatingAdmissionPolicyBinding", f"tenant-traefik-hostnames-{namespace}"),
-        ("ValidatingAdmissionPolicyBinding", f"tenant-certificates-{namespace}"),
-    ]
-    for kind, name in guarded:
-        annotations = _wiring_named(wiring, kind, name)["metadata"].get("annotations") or {}
-        assert PRUNE_DISABLED.items() <= annotations.items(), f"{kind} {name} is prunable"
+def test_removal_keeps_the_namespace_it_guards(repo):
+    """The tenant gates hold the prune guards; Removal must not promise what a
+    pruned Namespace would undo."""
     removal = _onboarding_step(repo.path, "Removal")
     assert "PVCs survive" not in removal, "Removal promises what the cascade would undo"
     assert "does not prune the Namespace" in " ".join(removal.split())
 
 
-def test_the_wiring_caps_ephemeral_storage(repo):
-    """emptyDir and writable layers draw on the node's disk; the quota and the
-    LimitRange bound what the namespace writes there, and the cluster gate
-    requires every key."""
-    wiring = _onboarding_wiring(repo.path)
-    slug = repo.answers["app_slug"]
-    hard = _wiring_named(wiring, "ResourceQuota", f"{slug}-quota")["spec"]["hard"]
-    for key in ("requests.ephemeral-storage", "limits.ephemeral-storage"):
-        assert key in hard, f"the quota does not cap {key}"
-    limit_range = _wiring_named(wiring, "LimitRange", f"{slug}-limits")
-    (container,) = [e for e in limit_range["spec"]["limits"] if e["type"] == "Container"]
-    for section in ("default", "defaultRequest", "max"):
-        assert "ephemeral-storage" in container[section], f"no ephemeral-storage {section}"
-    for section in ("default", "max"):
-        assert "cpu" not in container[section], f"a cpu {section} throttles every container"
-
-
 def test_the_wiring_grants_exactly_the_routed_hostnames(repo):
     """Both admission policies read the grant: a route or certificate naming a
-    host outside it is refused, and with no grant every one is."""
+    host outside it is refused. The tenant gates hold the bindings' shape."""
     namespace = repo.answers["app_namespace"]
-    wiring = _onboarding_wiring(repo.path)
-    grant = _wiring_named(wiring, "ConfigMap", f"tenant-routing-{namespace}")
-    assert grant["metadata"]["namespace"] == "flux-system", "the tenant could edit its grant"
+    grant = _wiring_named(_onboarding_wiring(repo.path), "ConfigMap", f"tenant-routing-{namespace}")
     granted = {h.strip() for h in grant["data"]["hosts"].splitlines() if h.strip()}
     docs = _docs(repo.path)
     routed = {
@@ -3426,20 +3533,6 @@ def test_the_wiring_grants_exactly_the_routed_hostnames(repo):
     assert routed, "the render routes no hostname, so this check proves nothing"
     assert granted == routed, f"granted {sorted(granted)}, routed {sorted(routed)}"
     assert not any("*" in h for h in granted), "a wildcard grant refuses every write"
-    for policy in ("tenant-traefik-hostnames", "tenant-certificates"):
-        binding = _wiring_named(
-            wiring, "ValidatingAdmissionPolicyBinding", f"{policy}-{namespace}"
-        )["spec"]
-        assert binding["policyName"] == policy
-        assert binding["validationActions"] == ["Deny"]
-        assert binding["paramRef"] == {
-            "name": f"tenant-routing-{namespace}",
-            "namespace": "flux-system",
-            "parameterNotFoundAction": "Deny",
-        }
-        assert binding["matchResources"] == {
-            "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": namespace}}
-        }
 
 
 def test_the_wiring_reader_is_read_only(repo):
@@ -3500,6 +3593,27 @@ def test_the_build_runner_step_ships_with_the_tagged_build(repo):
     if built:
         step = _onboarding_step(repo.path, "O2e")
         assert f"`{repo.answers['privileged_runner_tag']}`" in step, step
+        # The runner is enabled on this project alone, never group- or instance-wide.
+        prose = " ".join(step.split())
+        lowered = prose.lower()
+        assert "on this project alone, never on the" in lowered, step
+        assert f"never on the `{repo.answers['git_namespace']}` group or the instance" in prose, step
+        # runner_type alone cannot show which projects share the runner.
+        assert "`runner_type`" in step and "`project_type`" in step and "`projects`" in step, step
+        # An unlocked project runner lets any maintainer here enable it elsewhere.
+        assert "`locked` must be `true`" in lowered, step
+        # The shared runner's capacity also serves this project.
+        assert "`concurrent`" in step and "resourcequota" in lowered, step
+
+
+def test_the_skill_names_the_answered_build_runner_tag(repo):
+    """The project skill tells an agent which runner the build job needs; the
+    gitlab-unlike render answers a tag fixture A never uses."""
+    skill = (repo.path / ".claude" / "skills" / "project-development" / "SKILL.md").read_text()
+    prose = " ".join(skill.split())
+    tagged = f"job is tagged `{repo.answers['privileged_runner_tag']}`"
+    built = repo.answers["ci_shape"] == "gitlab_selfhosted" and repo.answers["enable_image_build"]
+    assert (tagged in prose) == built, f"{repo.label}: tagged line present={tagged in prose}"
 
 
 def test_the_library_job_token_step_follows_the_gitlab_shape(repo):

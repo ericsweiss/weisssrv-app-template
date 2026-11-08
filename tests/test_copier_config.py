@@ -750,6 +750,15 @@ def test_validate_rendered_app_clones_the_library_at_the_pipeline_pin():
     )
 
 
+def test_no_include_or_job_names_a_runner_tag():
+    """Every library include this pipeline uses defaults `tags` to `[]`, so this
+    repo's own jobs run on the shared tag-less runner and a tag here only moves
+    one off it."""
+    includes, jobs = render_app.runner_tagged(render_app.load_ci(REPO_ROOT / ".gitlab-ci.yml"))
+    assert not includes, f"library includes pass runner tags: {includes}"
+    assert not jobs, f"jobs set runner tags: {jobs}"
+
+
 def test_unimplemented_choices_cannot_be_answered():
     """`choices` is advisory in `--data` mode, so anything the render cannot
     actually produce must be absent from the list rather than merely

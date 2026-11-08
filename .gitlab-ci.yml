@@ -4,7 +4,7 @@ spec:
     lib_ref:
       # Single source for every weisssrv-lib pin below. An input interpolates
       # before `include:` resolves; a variable does not exist yet there.
-      default: v0.23.0
+      default: v0.24.1
 ---
 # CI for the template itself. The generic jobs come from the shared library, so
 # the template is linted by the same tooling it hands to a generated repo.
@@ -16,8 +16,8 @@ stages:
   - ai-review
   - release
 
-# Settings every job inherits unless it says otherwise. No image or tags here —
-# each job and every library include already names its own.
+# Settings every job inherits unless it says otherwise. No image here: each job
+# and every library include names its own, and no job sets runner tags.
 default:
   # Cancel a superseded pipeline's jobs on a new commit; see the workflow policy
   # below. The library's `release` job overrides this to false itself.
@@ -60,7 +60,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/yaml-lint.yml
     inputs:
-      tags: []
       image: python:3.14-slim
       config: "-c lint/yamllint-relaxed.yml"
       targets: >-
@@ -78,7 +77,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/python-lint.yml
     inputs:
-      tags: []
       image: python:3.14-slim
       # `scripts` is this repository's own vendored tooling. Under
       # template/scripts ruff sees the plain-named files; the ones with a Jinja
@@ -97,7 +95,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/comment-length.yml
     inputs:
-      tags: []
       pyyaml_version: ""
 
   # copier.yml schema checks + the render invariants. Everything in the
@@ -106,7 +103,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/test/python-tests.yml
     inputs:
-      tags: []
       image: python:3.14
       apt_packages: ""
       test_dir: "tests"
@@ -124,7 +120,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/docs-link-check.yml
     inputs:
-      tags: []
       changes:
         - "docs/**/*"
         - "README.md"
@@ -137,7 +132,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/security/secret-detection.yml
     inputs:
-      tags: []
       # gitleaks needs POPCNT/SSE4.2 and SIGILLs on older CPUs, so the job pins
       # a modern-CPU node. The label domain is site data, passed explicitly
       # rather than inherited.
@@ -147,7 +141,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/review/pr-agent.yml
     inputs:
-      tags: []
       gitlab_url: "https://git.ericsweiss.com"
       # Do NOT override openai_key/gitlab_token: the library already defaults
       # them to $OPENAI__KEY / $GITLAB__PERSONAL_ACCESS_TOKEN, and a renamed
@@ -167,13 +160,10 @@ include:
   - project: eric/weisssrv-lib
     ref: $[[ inputs.lib_ref ]]
     file: /ci/release/semantic-release.yml
-    inputs:
-      tags: []
 
 validate-rendered-app:
   stage: test
   image: python:3.14
-  tags: []
   needs: []
   # The largest limits in the pipeline, so on the quota-capped shared runner
   # this job is the first refused at pod creation. That arrives as a system

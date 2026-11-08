@@ -1,9 +1,9 @@
-# Forked from weisssrv-lib lint/ruff.toml: header comments only, the rule
-# selection is the library's. Dropped at the repo root so every ruff run, local
-# or CI, resolves one profile by discovery.
+# The weisssrv family's ruff profile. A repo keeps it at the root, where ruff
+# discovers it, or passes its path with `--config`. py39 is the lowest Python
+# any family repo supports.
 target-version = "py39"
 
 [lint]
-# Pyflakes, bugbear, W and the error-level pycodestyle subsets. The family
-# runs no formatter, so the E1-E3/E5 layout rules stay out.
+# Correctness rules only: the family runs no formatter, so the E1-E3/E5 layout
+# rules stay out.
 select = ["E4", "E7", "E9", "F", "W", "B"]

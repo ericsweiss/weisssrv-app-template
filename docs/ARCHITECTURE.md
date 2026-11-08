@@ -70,6 +70,10 @@ The render tests assert each of these:
 - **Nothing site-specific is hardcoded.** Every render built on the unlike
   fixture must contain no value from the reference one, the all-components-on
   render included, so no optional manifest escapes the scan.
+- **The operator's wiring passes the cluster's tenant gates.** Every render's
+  `docs/ONBOARDING.md` wiring block runs through the library's
+  `check-tenant-wiring.py` and `check-tenant-traefik-isolation.py`, vendored
+  under `scripts/`. A file they fail is one the cluster repo's pipeline refuses.
 - **A cited path exists in the render.** A doc, a comment or the Taskfile that
   names `docs/X.md`, `scripts/X.py` or `.github/workflows/X.yml` reads to the
   recipient as a file in their own repo, so that file must render. A path that

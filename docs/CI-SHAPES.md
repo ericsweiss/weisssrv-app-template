@@ -34,10 +34,10 @@ including the deploy-notes prompt about new secrets and cluster-side wiring.
 | Gate | `gitlab_selfhosted` | `github` | `none` |
 |---|---|---|---|
 | yamllint | `yaml-lint` (library template) | `yaml-lint` job | `task yaml-lint` |
-| `kustomize build` + kubeconform | `flux-lint` (library template), running the repo's own `scripts/flux-lint.sh` | `flux-lint` job, the same checks inline | `task flux-lint`, the same `scripts/flux-lint.sh` |
+| `kustomize build` + kubeconform | `flux-lint` (library template), running the repo's own `scripts/flux-lint.sh` | `flux-lint` job: the same build and kubeconform checks inline, without the `${...}` key scan | `task flux-lint`, the same `scripts/flux-lint.sh` |
 | ruff | `python-lint` (library template) | `python-lint` job | `task python-lint` |
 | shellcheck | n/a — no GitLab counterpart; a tenant with shell scripts adds the library's `shellcheck` template | `shellcheck` job, skipped when the repo has no `.sh` files | n/a |
-| Markdown link check | `lint-docs-links` (library template) | `lint-docs-links` job | `task doc-links` and the pre-commit hook |
+| Markdown link check, with the backticked repo-path pass | `lint-docs-links` (library template, `check_paths: true`) | `lint-docs-links` job, `CHECK_DOC_LINKS_PATHS=1` | `task doc-links` and the pre-commit hook |
 | Comment convention (`check-comment-length.py`) | `comment-length` (library template), plus `task comment-length` locally | `comment-length` job, plus `task comment-length` locally | `task comment-length` |
 | Secret scanning | GitLab Secret Detection (gitleaks under the hood), findings block | gitleaks directly, same `.gitleaks.toml`, findings block | pre-commit gitleaks hook |
 | Library pin gate | `lib-pin-check`, plus `task lib-pins` locally — every include and the variable against the declared `lib_ref` | n/a — no includes to pin | n/a |
@@ -64,6 +64,12 @@ The empty-build guard, the skipped-schema guard and the integer check on the
 skip budget live in the vendored `scripts/flux-lint.sh`, which `task flux-lint`
 and the GitLab `flux-lint` job both run. The GitHub shape's vendored `ci.yml`
 repeats them inline, and the library's own tests exercise both copies.
+
+`scripts/flux-lint.sh` also fails a build that carries a `${...}` key outside
+cluster-config's `cluster_*` set, because the tenant Kustomization substitutes
+strictly and one unknown key fails the whole reconcile. Write a literal as
+`$${var}`. The GitHub `ci.yml` does not run this scan, so on that shape
+`task flux-lint` is where it runs.
 
 Both pipelined shapes drive the **same** vendored `scripts/semantic-release.py`
 with `--platform {gitlab,github}`, so there is one implementation to audit
@@ -141,12 +147,13 @@ rather than in a banner each tenant carries.
 **`manifest-gates`.** The vendored `ci.yml`'s job drives the same three scripts
 the GitLab shape runs as `netpol-check`, `scrape-wiring-check` and
 `kustomization-check`, over `$MANIFEST_ROOT`, which defaults to the rendered
-tenant's `kubernetes/flux`. It derives the scrape gate's namespace with
+tenant's `kubernetes/flux`. The job derives the scrape gate's namespace with
 `--namespace-from-tree` because a byte-identical copy cannot carry a tenant's
 answer, and the rendered tree ships no `Namespace` manifest — the platform
 operator owns the namespace — so a monitor scoped with `matchNames` reds that
 job while the three template-owned callers pass it. The generated
 `docs/ARCHITECTURE.md` tells the tenant to scope with `any: false` instead.
+The `flux-lint` job builds the same root.
 
 **The `kustomization.yaml` resource list.** An emptied list renders nothing,
 kustomize and kubeconform both exit 0 on it, and the cluster-side Kustomization

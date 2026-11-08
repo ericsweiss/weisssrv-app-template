@@ -103,7 +103,7 @@ def test_a_citation_is_held_to_the_render(tmp_path, name, text, cited):
 def test_the_vendored_exemption_covers_copies_only(vendored):
     """A fork's prose is this repo's to keep right."""
     assert "scripts/check-doc-links.py" in vendored
-    assert "ruff.toml" not in vendored
+    assert ".gitleaks.toml" not in vendored
 
 
 def test_a_jinja_copy_is_exempt_under_its_rendered_name(tmp_path):

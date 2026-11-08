@@ -76,8 +76,8 @@ tasks:
     # The pipeline's flux-lint job runs this same file, so local lint and CI
     # share one implementation rather than two copies of it.
 {%- elif ci_shape == 'github' %}
-    # The vendored ci.yml's flux-lint job runs the same checks inline, against
-    # the same catalog commit and the same skip budget.
+    # The vendored ci.yml's flux-lint job runs the build and kubeconform floors
+    # inline but not the `${...}` key scan, so this task is where that scan runs.
 {%- else %}
     # No pipeline here, so this task is the whole manifest gate.
 {%- endif %}

@@ -41,8 +41,8 @@ env:
   # Empty unless the repository variable is set; flux-lint announces the
   # fallback rather than validating against the wrong minor in silence.
   K8S_VERSION_OVERRIDE: ${{ vars.K8S_VERSION }}
-  # Directory the manifest gates walk. Repository variable MANIFEST_ROOT
-  # overrides it; the fallback is the gates' own default.
+  # Directory flux-lint renders and the manifest gates walk. Repository
+  # variable MANIFEST_ROOT overrides it; the fallback is the gates' own default.
   MANIFEST_ROOT: ${{ vars.MANIFEST_ROOT || 'kubernetes/flux' }}
   # Rendered resources kubeconform may validate against NO schema. Repository
   # variable ALLOWED_SKIPS raises it per kind the catalog does not carry; the
@@ -68,8 +68,7 @@ jobs:
           persist-credentials: false
       - name: Install yamllint
         # pipx ships in the GitHub-hosted runner image and puts the console
-        # script on PATH. (Ubuntu's system Python is externally managed, so a
-        # plain `pip install --user` would refuse.)
+        # script on PATH; Ubuntu's system Python is externally managed.
         run: pipx install "yamllint==${YAMLLINT_VERSION}"
       - name: Lint
         run: yamllint -c lint/yamllint-relaxed.yml .
@@ -111,12 +110,12 @@ jobs:
           if [ -z "$K8S_VERSION_OVERRIDE" ]; then
             echo "::warning title=K8S_VERSION not set::Validating against Kubernetes $K8S_VERSION, the library fallback. Set repository variable K8S_VERSION to this cluster's minor."
           fi
-          kustomize build kubernetes/flux > "$RUNNER_TEMP/rendered.yaml"
+          kustomize build "$MANIFEST_ROOT" > "$RUNNER_TEMP/rendered.yaml"
           # CRITICAL: an emptied `resources:` list renders nothing and both
           # tools exit 0 on it, while a cluster-side Kustomization with
           # `prune: true` then deletes every object this repo applied.
           if ! grep -q '^kind:' "$RUNNER_TEMP/rendered.yaml"; then
-            echo "ERROR: kustomize build kubernetes/flux rendered no document — check for an emptied or mistyped resources: list"
+            echo "ERROR: kustomize build $MANIFEST_ROOT rendered no document — check for an emptied or mistyped resources: list"
             exit 1
           fi
           # 2>&1: per-resource failures go to stderr, which the capture would
@@ -281,7 +280,10 @@ jobs:
           # (scripts/check-doc-links.py), and nothing here pushes.
           persist-credentials: false
       - name: Check relative doc links
-        # The vendored, stdlib-only checker — no network, no dependencies.
+        # The vendored, stdlib-only checker: no network, no dependencies.
+        # CHECK_DOC_LINKS_PATHS turns on its backticked repo-path pass.
+        env:
+          CHECK_DOC_LINKS_PATHS: "1"
         run: python3 scripts/check-doc-links.py
 
   # --- secret-detection: gitleaks, tuned by .gitleaks.toml ------------------

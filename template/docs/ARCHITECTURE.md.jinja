@@ -274,6 +274,11 @@ ingress:
   The pipeline reads its own budget from repository variable `ALLOWED_SKIPS`, so
   raise that too, or the `flux-lint` job still fails at zero.
 {%- endif %}
+  `task flux-lint` also fails on a malformed `${` and on a `${...}` key outside
+  cluster-config's `cluster_*` set. Write a literal as `$${var}`.
+{%- if ci_shape == 'github' %}
+  The `flux-lint` workflow job does not run this scan.
+{%- endif %}
 - `scrape-wiring` fails when no NetworkPolicy admits the `observability`
   namespace on the port `servicemonitor.yaml` scrapes. A drifted pair pages
   `TargetDown` in the platform's Alertmanager, not here. These edge cases hold:
@@ -393,11 +398,12 @@ The rendered manifests bind to objects the cluster must already provide:
   `Kustomization` retrying forever with nothing applied.
 - A `cluster-config` ConfigMap in `flux-system`, which every Kustomization in
   the ONBOARDING step O3 wiring names under `postBuild.substituteFrom`. Nothing
-  here spells `${var}`, so it substitutes nothing. kustomize-controller
-  usually runs with `StrictPostBuildSubstitutions` on, and then an undefined
-  `${var}` anywhere under the applied path fails the whole tenant reconcile. A
-  literal dollar-brace in a container arg, a config blob or dashboard JSON must
-  be written `$${var}`.
+  here spells `${var}`, so it substitutes nothing. kustomize-controller runs
+  with `StrictPostBuildSubstitutions` on, so an undefined `${var}` anywhere
+  under the applied path fails the whole tenant reconcile. A literal
+  dollar-brace in a container arg, a config blob or dashboard JSON must be
+  written `$${var}`. The flux-lint gate fails any `${...}` outside
+  cluster-config's `cluster_*` keys.
 {%- if database == 'postgres' and secrets_backend == 'onepassword' %}
 - For the database under `kubernetes/db`:
   - The CloudNativePG operator and its Barman Cloud plugin, with the

@@ -346,14 +346,16 @@ developer also needs read access to `{{ lib_project }}`.
 ### O2e — Image build runner
 
 The image build job carries the tag `{{ privileged_runner_tag }}` and runs as
-root with Docker-in-Docker. Register a privileged runner with that tag to the
-`{{ git_namespace }}` group, or to this project when that namespace is a user
-rather than a group. Give the runner its own namespace, quota and egress policy.
-Never give the tag to the cluster's own platform runner: every developer in this
-repo would then run root on it. The cluster repo's `gitlab-runner-privileged`
-README describes this second runner and the `runner_type` check that confirms
-its registration scope. Without the runner, the build job stays Pending and
-names no cause.
+root with Docker-in-Docker. Enable the cluster's privileged runner, the one
+carrying that tag, on this project alone, never on the `{{ git_namespace }}`
+group or the instance. Every developer who can push here runs root on that
+runner, so enable it only on a project you trust as much as the cluster repo.
+`GET /api/v4/runners/<id>` must then show `runner_type` as `project_type`,
+with only such projects under `projects`. `locked` must be `true`, so only an
+administrator can enable it on another project. This project's builds share
+the runner's `concurrent` slots and namespace ResourceQuota with the cluster
+repo, so size both for the added project. Without the runner, the build job
+stays Pending and names no cause.
 {%- endif %}
 
 ### O3 — Add the wiring file
@@ -767,10 +769,10 @@ spec:
 Every Kustomization here carries `postBuild.substituteFrom` naming the
 cluster's `cluster-config` ConfigMap, because the cluster-template tenant-wiring
 gate requires it. Nothing substitutes unless a `${var}` appears under the path
-it applies. Write a literal dollar-brace as `$${var}`: with strict substitution,
-which kustomize-controller usually runs, one unresolvable `${var}` fails the
-whole tenant reconcile. See `ARCHITECTURE.md`
-§ Platform contract.
+it applies. Write a literal dollar-brace as `$${var}`: kustomize-controller
+runs with strict substitution, so one unresolvable `${var}` fails the whole
+tenant reconcile. `task flux-lint` fails any `${...}` outside cluster-config's
+`cluster_*` keys. See `ARCHITECTURE.md` § Platform contract.
 
 ### O4 — Register it
 

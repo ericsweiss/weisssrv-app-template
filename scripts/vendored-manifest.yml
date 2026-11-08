@@ -10,6 +10,13 @@ vendored:
   - scripts/check-comment-length.py
   - scripts/check-doc-links.py
   - scripts/check-lib-pins.py
+  # The cluster's tenant gates, run by tests/test_render.py over every rendered
+  # ONBOARDING wiring file; both import tenant_common.py and gate_common.py from
+  # their own directory, so the four ship together.
+  - scripts/check-tenant-traefik-isolation.py
+  - scripts/check-tenant-wiring.py
+  - scripts/gate_common.py
+  - scripts/tenant_common.py
   # The jobs that run it do so before any library checkout exists, so the tool
   # fetcher has to be in this repo rather than read from the library.
   - scripts/ci-fetch-tools.py
@@ -61,6 +68,12 @@ vendored:
   - lib: examples/netpol-except.example.yaml
     consumer: template/examples/netpol-except.example.yaml
   - tests/copier_render.py
+  # The family spells the profile at this path, not the root `.yamllint` that
+  # ansible-lint discovers and lets override its own yaml rule. Callers pass `-c`.
+  - lib: lint/yamllint-relaxed.yml
+    consumer: lint/yamllint-relaxed.yml
+  - lib: lint/ruff.toml
+    consumer: ruff.toml
   # No directory walk reaches these two: the walks cover scripts/ trees only.
   - lib: lint/gitattributes
     consumer: .gitattributes
@@ -76,11 +89,6 @@ vendored:
     consumer: "template/{% if ci_shape == 'github' %}.github{% endif %}/workflows/{% if enable_image_build %}build-image.yml{% endif %}"
 
 forked:
-  - lib: lint/ruff.toml
-    consumer: ruff.toml
-    reason: Header comments only; the rule selection is the library's.
-    comment_only: true
-    reconciled_sha256: 17ffa1185a44dbc93e14f20bca60af1610702b1b03681691b6f602bd21ce9098
   - lib: lint/gitleaks.toml
     consumer: .gitleaks.toml
     reason: Allowlist paths and fixture anchors are per-repo.
@@ -93,13 +101,6 @@ forked:
     consumer: "template/{% if forge == 'gitlab' %}.gitlab{% endif %}/{% if ci_shape == 'gitlab_selfhosted' %}secret-detection-ruleset.toml{% endif %}"
     reason: The ruleset description string; the passthrough is the library's.
     reconciled_sha256: 778c939138d015867a1d0e42846994bd03a127c1ded1616eee7136b7e2ecfc75
-  # The family spells the profile at this path, not the root `.yamllint` that
-  # ansible-lint discovers and lets override its own yaml rule. Callers pass `-c`.
-  - lib: lint/yamllint-relaxed.yml
-    consumer: lint/yamllint-relaxed.yml
-    reason: Header comments only; the rules are the library's.
-    comment_only: true
-    reconciled_sha256: 27bcd61c2e64c949a4e3da41633beecc8c8ee3933d4c6c0ab175c2f0828585d7
   - lib: lint/editorconfig
     consumer: .editorconfig
     reason: >-
@@ -122,9 +123,10 @@ forked:
     reconciled_sha256: f7e2dff0acee6c4787e1d89311fa72e5d089b13681ed9cd94e8b92bdcada519c
   - lib: lint/ruff.toml
     consumer: template/ruff.toml
-    reason: Header comments only; the rule selection is the library's.
+    reason: >-
+      Header names no site: the library's names the weisssrv family, which the tenant leakage gate forbids.
     comment_only: true
-    reconciled_sha256: 17ffa1185a44dbc93e14f20bca60af1610702b1b03681691b6f602bd21ce9098
+    reconciled_sha256: fe3f901ecfdbbd38a246534d7db97f085e3f664eda92652a4ed3efe3bff5c00d
   - lib: lint/gitleaks.toml
     consumer: template/.gitleaks.toml
     reason: Allowlist paths and fixture anchors are per-tenant.
@@ -137,6 +139,7 @@ forked:
     reconciled_sha256: 9873966d0ce8a80d7ed84ecce449107b2a20387a146692ffb9aec28dd505fe02
   - lib: lint/yamllint-relaxed.yml
     consumer: template/lint/yamllint-relaxed.yml
-    reason: Header comments only; the rules are the library's.
+    reason: >-
+      Header names no site: the library's names the weisssrv family, which the tenant leakage gate forbids.
     comment_only: true
-    reconciled_sha256: 27bcd61c2e64c949a4e3da41633beecc8c8ee3933d4c6c0ab175c2f0828585d7
+    reconciled_sha256: ce1a488fc573c413fe6d89eaddee246900d7cd99f8b22a100e87ddd62fdcf378

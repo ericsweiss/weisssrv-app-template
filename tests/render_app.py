@@ -46,6 +46,20 @@ CILoader = ci_yaml.CILoader
 load_ci = ci_yaml.load_ci
 
 
+def runner_tagged(ci: dict) -> tuple[list[str], list[str]]:
+    """The include files that pass a `tags` input, and the local jobs that set `tags`.
+    Asserts every include's `inputs`, when present, is a mapping."""
+    bare = [str(include["file"]) for include in ci["include"] if isinstance(include, dict)
+            and "inputs" in include and not isinstance(include["inputs"], dict)]
+    assert not bare, f"includes whose `inputs` is not a mapping: {bare}"
+    includes = [
+        str(include["file"]) for include in ci["include"]
+        if isinstance(include, dict) and "tags" in (include.get("inputs") or {})
+    ]
+    jobs = [name for name, body in ci.items() if isinstance(body, dict) and "tags" in body]
+    return includes, jobs
+
+
 def rendered_name(consumer: str) -> str:
     """The path a template file renders to: jinja tags, empty segments and the
     `.jinja` suffix dropped. A conditional name's tags wrap the whole name."""
