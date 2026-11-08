@@ -34,7 +34,7 @@ including the deploy-notes prompt about new secrets and cluster-side wiring.
 | Gate | `gitlab_selfhosted` | `github` | `none` |
 |---|---|---|---|
 | yamllint | `yaml-lint` (library template) | `yaml-lint` job | `task yaml-lint` |
-| `kustomize build` + kubeconform | `flux-lint` (library template), running the repo's own `scripts/flux-lint.sh` | `flux-lint` job: the same build and kubeconform checks inline, without the `${...}` key scan | `task flux-lint`, the same `scripts/flux-lint.sh` |
+| `kustomize build` + kubeconform | `flux-lint` (library template), running the repo's own `scripts/flux-lint.sh` | `flux-lint` job: the same `scripts/flux-lint.sh --mode simple` | `task flux-lint`, the same `scripts/flux-lint.sh` |
 | ruff | `python-lint` (library template) | `python-lint` job | `task python-lint` |
 | shellcheck | n/a — no GitLab counterpart; a tenant with shell scripts adds the library's `shellcheck` template | `shellcheck` job, skipped when the repo has no `.sh` files | n/a |
 | Markdown link check, with the backticked repo-path pass | `lint-docs-links` (library template, `check_paths: true`) | `lint-docs-links` job, `CHECK_DOC_LINKS_PATHS=1` | `task doc-links` and the pre-commit hook |
