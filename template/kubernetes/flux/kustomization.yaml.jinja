@@ -13,8 +13,10 @@ resources:
 {%- if secrets_backend != 'none' and enable_registry_pull_secret %}
   - externalsecret-registry.yaml
 {%- endif %}
+{%- if enable_public_ingress %}
   - certificate.yaml
   - ingressroute.yaml
+{%- endif %}
 {%- if enable_internal_ingress %}
   - certificate-internal.yaml
   - ingressroute-internal.yaml

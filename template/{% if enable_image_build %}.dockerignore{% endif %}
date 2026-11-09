@@ -32,7 +32,6 @@ docs/
 *.md
 .claude/
 .cursor/
-.cursorrules
 LICENSE
 CODEOWNERS
 

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code (and other agents) working in **weisssrv-app-template**,
+Guidance for Claude Code and other agents working in **weisssrv-app-template**,
 the copier template that generates tenant repositories for a weisssrv-shaped k3s
 cluster.
 
@@ -16,7 +16,9 @@ file under `template/`, the four seams, and what the render suite holds.
 
 ## Hard rules
 
-- **Never push to `main`.** Branch + merge request, even for one-liners.
+- **Never push to `main`.** Branch + merge request, even for one-liners. Keep
+  the branch local until the merge request is ready.
+- **No AI attribution** in commits, merge requests, code or docs.
 - **Never commit secrets.** The rendered repos hold `ExternalSecret` references
   only, and so does every fixture and doc here.
 - **Never hardcode site identity in `template/`.** Domains, registry hosts, node
@@ -26,12 +28,10 @@ file under `template/`, the four seams, and what the render suite holds.
   conditional path, its line in `kustomization.yaml`, and whatever else it
   implies (a paired Certificate, a NetworkPolicy, an `imagePullSecrets:` entry).
   Add the render assertion in the same change.
-- **Never edit a vendored copy.** `scripts/*.py`, `template/scripts/*.py` and
-  the `ci.yml`, `release.yml` and `build-image.yml` workflows under
-  `template/.github/workflows/` are byte-identical to weisssrv-lib, and
-  `scripts/vendored-manifest.yml` here records every copy and every declared
-  fork. Fix upstream and re-vendor; a local edit is reverted by the next
-  re-vendor and fails the gate.
+- **Never edit a vendored copy.** `scripts/vendored-manifest.yml` is the
+  inventory: every byte-identical weisssrv-lib copy in this repo and in
+  `template/`, and every declared fork. Fix upstream and re-vendor; a local
+  edit is reverted by the next re-vendor and fails the gate.
 - **`copier.yml` is API.** Renaming or removing a question breaks every
   generated repo's `copier update` — that is a MAJOR
   ([`docs/VERSIONING.md`](docs/VERSIONING.md)).
@@ -46,17 +46,9 @@ file under `template/`, the four seams, and what the render suite holds.
   `validator`). Copier fills the answer map in question order, so a forward
   reference is undefined interactively and defined in `--data` mode — a check
   that reads as enforcement and enforces nothing. A test holds this.
-- A conditional path (`{% if enable_x %}file.yaml{% endif %}.jinja`) naming an
-  undeclared answer fails the render: `_envops.undefined: jinja2.StrictUndefined`
-  raises and copier prints the offending path. Declare the answer in `copier.yml`
-  first; `test_conditional_paths_name_declared_questions` names the path without
-  needing a render.
 - Both answer fixtures must answer **every** question, including ones their own
   answers make copier skip: `--defaults` otherwise falls back silently.
-- Site identity — the app's names AND the cluster's — carries a `placeholder:`
-  and no `default:`. A default there is accepted by pressing enter, and the
-  resulting repo is green everywhere and wrong at runtime. Derived defaults are
-  fine: they compose from an answer already given and name no site of their own.
+- Site identity takes no default: [`docs/CONSUMING.md` § The answers](docs/CONSUMING.md#the-answers).
 - A Markdown file under `template/` that links to a **rendered** sibling
   (`CLAUDE.md`, not `CLAUDE.md.jinja`) needs the `.jinja` suffix itself, or this
   repo's own `lint-docs-links` resolves the link here, where the target does not

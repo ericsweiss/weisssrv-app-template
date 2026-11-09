@@ -46,10 +46,6 @@ output rather than being hardcoded:
 Which answers make up each seam is in
 [CONSUMING.md](CONSUMING.md#the-answers), the single list.
 
-The first is why this template can target a cluster generated from
-`weisssrv-cluster-template` and not only the reference cluster. The second is
-the one that changes the file SET rather than file contents.
-
 ## Invariants the render tests hold
 
 The render tests assert each of these:
@@ -74,6 +70,10 @@ The render tests assert each of these:
 - **Nothing site-specific is hardcoded.** Every render built on the unlike
   fixture must contain no value from the reference one, the all-components-on
   render included, so no optional manifest escapes the scan.
+- **The operator's wiring passes the cluster's tenant gates.** Every render's
+  `docs/ONBOARDING.md` wiring block runs through the library's
+  `check-tenant-wiring.py` and `check-tenant-traefik-isolation.py`, vendored
+  under `scripts/`. A file they fail is one the cluster repo's pipeline refuses.
 - **A cited path exists in the render.** A doc, a comment or the Taskfile that
   names `docs/X.md`, `scripts/X.py` or `.github/workflows/X.yml` reads to the
   recipient as a file in their own repo, so that file must render. A path that
@@ -102,17 +102,22 @@ list.
 
 The pytest suite asserts structure with no external binaries, so it runs
 anywhere. `tests/validate_render.py` runs what a generated repo's own pipeline
-runs — yamllint, `kustomize build`, kubeconform, a second kubeconform pass over
-`docs/ONBOARDING.md`'s wiring block, ruff, the doc-link checker, the
-egress-fence, scrape-wiring and kustomization gates, the library-pin gate and,
-with `--lib-path`, the vendored-copy gate — against a render. A render carrying
-`kubernetes/db` also gets that tree built, schema-checked and run through the
-egress-fence, kustomization, CNPG-safeguard and storage-class gates (the last
-also holding a statically bound claim to its prune guard), and the
-dump CronJob's `timeZone` in that built output checked against the IANA
-database (the system tzdata or the `tzdata` wheel; with neither, the gate fails
-rather than skips). That is the only way to learn that a repo this template
-produces would fail its own gates.
+runs against a render. This is the only way to learn that a repo this template
+produces would fail its own gates. It runs these gates:
+
+- yamllint, `kustomize build` and kubeconform.
+- A second kubeconform pass over `docs/ONBOARDING.md`'s wiring block.
+- ruff and the doc-link checker.
+- The egress-fence, scrape-wiring and kustomization gates.
+- The library-pin gate.
+- With `--lib-path`, the vendored-copy gate.
+
+A render carrying `kubernetes/db` also gets that tree built and schema-checked.
+It runs through the egress-fence, kustomization, CNPG-safeguard and
+storage-class gates. The storage-class gate also holds a
+statically bound claim to its prune guard. The dump CronJob's `timeZone` in the
+built output is checked against the IANA database. That is the system tzdata or
+the `tzdata` wheel. With neither, the gate fails rather than skips.
 
 ```
 python3 tests/validate_render.py                               # fixture A
@@ -128,36 +133,25 @@ python3 tests/validate_render.py --lib-path ../weisssrv-lib --allow-ref-mismatch
 The vendored-copy gate compares against the library's blobs AT the pinned tag,
 so the checkout `--lib-path` names may sit anywhere. The include-contract gates
 read library templates out of that working tree instead, so they need it at the
-pinned ref; `--allow-ref-mismatch` turns that failure into a printed warning,
+pinned ref. `--allow-ref-mismatch` turns that failure into a printed warning,
 for validating against an unreleased library. CI never passes it.
 
 The render is `git init`-ed before the gates run. The doc-link checker reads
 `git ls-files`, and an untracked tree would silently narrow it to `docs/` and
 two root files.
 
-One render per invocation. Exit 0 when every gate passes, 1 on a failure, and 2
-when a required tool is missing, because a validator that quietly skips itself
-is not one.
+One render per invocation. Exit 0 when every gate passes and 1 on a failure.
+Exit 2 when the run cannot start: a required tool is missing, a `--data` pair is
+malformed, or the rendered Taskfile pins no `CRD_CATALOG_REF`. A missing tool
+is exit 2, never a skip.
 
 ## The one gate no render can carry
 
-The vendored copies live in this repository, not in a generated one: the helpers
-at the root are what this repo lints and, where it has the tree for them, runs
-on itself; the same helpers under `template/scripts/` and the GitHub workflows
-are what it hands to a tenant. Every gate script is a byte-identical library copy, as are the `ci.yml`,
-`release.yml` and `build-image.yml` workflows, which is every workflow the
-GitHub shape ships. That relationship is
-recorded HERE, in `scripts/vendored-manifest.yml`, and checked by the library's
-`check-vendored-copies.py`, which `tests/validate_render.py --lib-path` runs
-against a checkout at `copier.yml`'s `lib_ref` default.
-
-Listing the fork alongside the copy is what makes the gate hold in both
-directions: a deliberate fork that quietly converges fails, and a fork whose
-library side moved fails on its `reconciled_sha256` until the change is
-absorbed. The library's half is the engine plus its offer list
-(`scripts/vendorable-paths.yml`) — a manifest entry naming a path the library
-does not offer fails, so this repository cannot grow a dependency on a library
-internal no release contract covers.
+The vendored copies live in this repository, not in a render.
+`tests/validate_render.py --lib-path` runs the library's
+`check-vendored-copies.py` over them, and
+[VERSIONING.md § Vendored copies](VERSIONING.md#vendored-copies) holds the
+contract.
 
 The **include contract** gate rides with `--lib-path` too: it reads the
 generated pipeline against the library templates it pins, so every `inputs:` key
@@ -172,20 +166,11 @@ The rendered manifests name platform objects directly, so a target cluster must
 provide them. The list is in
 [CONSUMING.md § What your cluster must provide](CONSUMING.md#what-your-cluster-must-provide),
 and the tenant-side copy is rendered from
-`template/docs/ARCHITECTURE.md.jinja` — keep the two in agreement. A render test
-asserts that the objects the manifests bind to are named in the tenant copy. A cluster
-generated by
+`template/docs/ARCHITECTURE.md.jinja`. Keep the two in agreement. A render
+test asserts that the objects the manifests bind to are named in the tenant
+copy. A cluster generated by
 [`weisssrv-cluster-template`](https://git.ericsweiss.com/eric/weisssrv-cluster-template)
 is the reference implementation.
-
-Three gates run over every render here AND ship into the generated repo: the
-egress fence (`scripts/check-netpol-except-parity.py`, run there by `task netpol`
-and the GitLab shape's `netpol-check` job), the scrape-wiring gate
-(`task scrape-wiring` / `scrape-wiring-check`) and the kustomization gate
-(`task kustomization` / `kustomization-check`). The GitHub shape runs all three
-in the vendored `ci.yml`'s `manifest-gates` job, the one `release.yml` waits on —
-docs/CI-SHAPES.md § Why the GitHub workflows are shaped as they are has the
-detail. The generated `docs/ARCHITECTURE.md` says so where the tenant reads it.
 
 ## What this template does not do
 
@@ -194,8 +179,9 @@ detail. The generated `docs/ARCHITECTURE.md` says so where the tenant reads it.
 - **It does not ship storage**, except the optional database component
   (`database: postgres`), whose storage and backups ONBOARDING O6b describes.
   Otherwise the generated app is stateless. Adding a volume is an operator step
-  and storage-class-agnostic; ONBOARDING step O6 works the reference cluster's
-  zvol flow as the example.
+  that ONBOARDING O6 describes. The claim names the `tenant-local` StorageClass,
+  or a platform-written static PV named `<namespace>-<purpose>` that is
+  pre-bound to it.
 - **It does not create the cluster.** That is
   [`weisssrv-cluster-template`](https://git.ericsweiss.com/eric/weisssrv-cluster-template),
   which this template's cluster-identity answers are designed to match.

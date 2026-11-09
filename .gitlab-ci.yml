@@ -4,7 +4,7 @@ spec:
     lib_ref:
       # Single source for every weisssrv-lib pin below. An input interpolates
       # before `include:` resolves; a variable does not exist yet there.
-      default: v0.23.0
+      default: v0.25.2
 ---
 # CI for the template itself. The generic jobs come from the shared library, so
 # the template is linted by the same tooling it hands to a generated repo.
@@ -16,8 +16,8 @@ stages:
   - ai-review
   - release
 
-# Settings every job inherits unless it says otherwise. No image or tags here —
-# each job and every library include already names its own.
+# Settings every job inherits unless it says otherwise. No image here: each job
+# and every library include names its own, and no job sets runner tags.
 default:
   # Cancel a superseded pipeline's jobs on a new commit; see the workflow policy
   # below. The library's `release` job overrides this to false itself.
@@ -40,9 +40,8 @@ variables:
   # Full clone: the semantic-release job scans the commit range since the newest
   # tag, and a shallow fetch creates no tag refs.
   GIT_DEPTH: "0"
-  # The pin job scripts interpolate at run time, read from the header input so
-  # it cannot drift from the `include:` entries. Move the tag with
-  # `scripts/check-lib-pins.py --bump vX.Y.Z`.
+  # The library clones read the header input, so they cannot drift from the
+  # `include:` entries. Move the tag with `scripts/check-lib-pins.py --bump vX.Y.Z`.
   WEISSSRV_LIB_REF: $[[ inputs.lib_ref ]]
   # Library checkout the python-tests job clones into, read by
   # tests/test_validate_render.py's include-contract gate, which fails rather
@@ -61,7 +60,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/yaml-lint.yml
     inputs:
-      tags: []
       image: python:3.14-slim
       config: "-c lint/yamllint-relaxed.yml"
       targets: >-
@@ -79,11 +77,10 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/python-lint.yml
     inputs:
-      tags: []
       image: python:3.14-slim
       # `scripts` is this repository's own vendored tooling. Under
-      # template/scripts ruff sees the four plain-named files; the two with a
-      # Jinja path for a filename are linted in each render that ships them.
+      # template/scripts ruff sees the plain-named files; the ones with a Jinja
+      # path for a filename are linted in each render that ships them.
       targets: "scripts tests template/scripts"
       changes:
         - "scripts/**/*.py"
@@ -98,7 +95,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/comment-length.yml
     inputs:
-      tags: []
       pyyaml_version: ""
 
   # copier.yml schema checks + the render invariants. Everything in the
@@ -107,7 +103,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/test/python-tests.yml
     inputs:
-      tags: []
       image: python:3.14
       apt_packages: ""
       test_dir: "tests"
@@ -125,7 +120,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/docs-link-check.yml
     inputs:
-      tags: []
       changes:
         - "docs/**/*"
         - "README.md"
@@ -138,7 +132,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/security/secret-detection.yml
     inputs:
-      tags: []
       # gitleaks needs POPCNT/SSE4.2 and SIGILLs on older CPUs, so the job pins
       # a modern-CPU node. The label domain is site data, passed explicitly
       # rather than inherited.
@@ -148,7 +141,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/review/pr-agent.yml
     inputs:
-      tags: []
       gitlab_url: "https://git.ericsweiss.com"
       # Do NOT override openai_key/gitlab_token: the library already defaults
       # them to $OPENAI__KEY / $GITLAB__PERSONAL_ACCESS_TOKEN, and a renamed
@@ -168,32 +160,10 @@ include:
   - project: eric/weisssrv-lib
     ref: $[[ inputs.lib_ref ]]
     file: /ci/release/semantic-release.yml
-    inputs:
-      tags: []
-
-# The library-pin gate, kept as a job of its own so it runs whatever happens to
-# tests/. It reads the header's lib_ref default, requires a release tag, and
-# requires every include above and the variable to read that input.
-lib-pin-check:
-  stage: lint
-  image: python:3.14-slim
-  tags: []
-  needs: []
-  script:
-    # `--user`: the shared non-root runner cannot write system site-packages.
-    - pip install --user --quiet --no-cache-dir "pyyaml==$PYYAML_VERSION"
-    - python3 scripts/check-lib-pins.py --project "$LIB_PROJECT"
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - ".gitlab-ci.yml"
-        - "scripts/check-lib-pins.py"
-    - if: '$CI_COMMIT_BRANCH == "main"'
 
 validate-rendered-app:
   stage: test
   image: python:3.14
-  tags: []
   needs: []
   # The largest limits in the pipeline, so on the quota-capped shared runner
   # this job is the first refused at pod creation. That arrives as a system
@@ -218,10 +188,9 @@ validate-rendered-app:
     - python3 scripts/ci-fetch-tools.py kubeconform kustomize
     - |
       set -eo pipefail
-      # Clone the library at copier.yml's lib_ref default; the fixtures are held
-      # to the same tag by tests/test_copier_config.py.
-      LIB_REF=$(python -c "import yaml; print(yaml.safe_load(open('copier.yml'))['lib_ref']['default'])")
-      git clone --depth 1 --branch "$LIB_REF" \
+      # The library at the pipeline's own pin, which tests/test_copier_config.py
+      # holds equal to the lib_ref answer default.
+      git clone --depth 1 --branch "$WEISSSRV_LIB_REF" \
         "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${LIB_PROJECT}.git" \
         "$LIB_CHECKOUT"
   script:
@@ -239,8 +208,8 @@ validate-rendered-app:
       python3 tests/validate_render.py --answers tests/answers-unlike.yml
       --data enable_image_build=true
     # The contrast fixture with every component on: the bare-key remoteRef arm,
-    # the forward-auth middleware, and the seven manifests no other
-    # unlike-answers render produces.
+    # the forward-auth middleware, and the manifests no other unlike-answers
+    # render produces.
     - >-
       python3 tests/validate_render.py --answers tests/answers-unlike.yml
       --data enable_servicemonitor=true --data enable_internal_ingress=true
@@ -287,6 +256,11 @@ validate-rendered-app:
     - >-
       python3 tests/validate_render.py --lib-path "$LIB_CHECKOUT"
       --data secrets_backend=none --data enable_registry_pull_secret=false
+    # The public route off: the internal route is the only one, and SSO goes
+    # with the public route it gates.
+    - >-
+      python3 tests/validate_render.py --lib-path "$LIB_CHECKOUT"
+      --data enable_public_ingress=false --data enable_sso=false
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never

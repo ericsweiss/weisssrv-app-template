@@ -47,7 +47,7 @@ test suite.
 | Level | Meaning here |
 |---|---|
 | **MAJOR** | A generated repo cannot take the change by running `copier update` and reviewing the diff. A question renamed or removed; a rendered file moved or renamed; a validator tightened to refuse an answer a repo already recorded, which copier raises on before it renders anything; a raised `_min_copier_version`, which copier refuses on before rendering; a default that alters live behaviour on unchanged answers — a changed namespace, a NetworkPolicy that starts denying traffic it allowed, a Deployment field that forces a restart. |
-| **MINOR** | New capability an existing repo can adopt or ignore. A new question with a default that reproduces today's render; a new optional component (default off); a new Taskfile task; a library `ref:` bump inside the library's own back-compatible range. |
+| **MINOR** | New capability an existing repo can adopt or ignore. A new question with a default that reproduces the existing render; a new optional component (default off); a new Taskfile task; a library `ref:` bump inside the library's own back-compatible range. |
 | **PATCH** | A fix that changes no path, no resource name and no resolved behaviour: a corrected probe path, a typo, docs, comments. |
 
 While this repository is **0.x** a breaking change bumps MINOR rather than
@@ -93,11 +93,6 @@ files that drift separately.
 
 A `forked` entry's `reason:` must name a difference the file actually contains,
 so the next re-vendor reconciles against the real divergence.
-
-Every gate under `template/scripts/` is a registered library copy. The
-library's `scripts/check-scrape-netpol.py` checks the scrape invariant at
-namespace level over a cluster corpus; `check-scrape-wiring.py`, the copy a
-tenant gets, resolves it per port.
 
 ## Which library release a template release is validated against
 

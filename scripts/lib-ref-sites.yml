@@ -8,6 +8,3 @@ sites:
   # The answer fixtures the render tests drive.
   - path: tests/answers-*.yml
     pattern: '\nlib_ref: (v\d+\.\d+\.\d+)\n'
-  # The answer table in the consuming guide.
-  - path: docs/CONSUMING.md
-    pattern: '\| `lib_ref` \| `(v\d+\.\d+\.\d+)` \|'

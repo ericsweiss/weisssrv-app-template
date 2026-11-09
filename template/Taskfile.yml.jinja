@@ -76,8 +76,8 @@ tasks:
     # The pipeline's flux-lint job runs this same file, so local lint and CI
     # share one implementation rather than two copies of it.
 {%- elif ci_shape == 'github' %}
-    # The vendored ci.yml's flux-lint job runs the same checks inline, against
-    # the same catalog commit and the same skip budget.
+    # The vendored ci.yml's flux-lint job runs the build and kubeconform floors
+    # inline but not the `${...}` key scan, so this task is where that scan runs.
 {%- else %}
     # No pipeline here, so this task is the whole manifest gate.
 {%- endif %}
@@ -197,7 +197,7 @@ tasks:
     preconditions:
       - *needs_pyyaml
       - sh: test -d "$WEISSSRV_LIB_PATH"
-        msg: "set WEISSSRV_LIB_PATH to a {{ lib_project }} checkout at {{ lib_ref }}"
+        msg: "set WEISSSRV_LIB_PATH to a {{ lib_project }} checkout at the tag `python3 scripts/check-lib-pins.py --print` prints"
     cmds:
       - >-
         python3 scripts/check-ci-include-job-names.py --require-optional-needs
@@ -223,7 +223,7 @@ tasks:
       - flux get kustomization {% raw %}{{.KUSTOMIZATION}}{% endraw %}
 
   flux:reconcile:
-    desc: Force an immediate reconcile of the Kustomization (needs KUBECONFIG).
+    desc: Force an immediate reconcile. Needs an operator kubeconfig, not the read-only tenant one.
     cmds:
       - flux reconcile kustomization {% raw %}{{.KUSTOMIZATION}}{% endraw %} --with-source
 {%- if secrets_backend != 'none' %}

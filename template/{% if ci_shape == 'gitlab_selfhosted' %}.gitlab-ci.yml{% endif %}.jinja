@@ -60,7 +60,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/yaml-lint.yml
     inputs:
-      tags: []
       config: "-c lint/yamllint-relaxed.yml"
       targets: "."
       changes:
@@ -68,21 +67,20 @@ include:
         - "**/*.yml"
 
   # -- flux-lint: kustomize build + kubeconform (SIMPLE mode) ----------------
-  # substitute: false — a tenant pins literal tags, so nothing needs envsubst.
-  # kustomize_path is the dir this mode builds.
+  # Flux substitutes this tree from cluster-config strictly, so the job fails on
+  # any `${...}` outside the cluster_* keys. Escape a literal as `$${var}`.
   - project: {{ lib_project }}
     ref: $[[ inputs.lib_ref ]]
     file: /ci/validate/flux-lint.yml
     inputs:
-      tags: []
       substitute: false
       kustomize_path: "kubernetes/flux"
       # Inert in simple mode; passed so the include reads the same in substitute mode.
       cluster_dir: "kubernetes/flux"
       k8s_version: "{{ k8s_version }}"
       # The same catalog commit Taskfile.yml's CRD_CATALOG_REF pins, so this job
-      # and `task flux-lint` accept the same CR schemas. tests/test_render.py
-      # holds the two equal.
+      # and `task flux-lint` accept the same CR schemas. tests/test_render.py in
+      # the app template holds the two equal.
       crd_catalog_ref: "ad3b08c5045129d7bb1eeffd8e61719b2c8dd1e2"
       changes:
         - "kubernetes/**/*"
@@ -97,7 +95,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/python-lint.yml
     inputs:
-      tags: []
       targets: "scripts"
       changes:
         - "scripts/**/*.py"
@@ -110,7 +107,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/comment-length.yml
     inputs:
-      tags: []
       pyyaml_version: ""
       # Every file: the convention applies to every file, and a narrowed list
       # lets an over-long comment land in a path it does not name.
@@ -122,7 +118,8 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/lint/docs-link-check.yml
     inputs:
-      tags: []
+      # The backticked repo-path pass, as `task doc-links` and the hook run it.
+      check_paths: true
       changes:
         - "**/*.md"
         - "scripts/check-doc-links.py"
@@ -135,7 +132,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/security/secret-detection.yml
     inputs:
-      tags: []
       # The label domain is site data, so the input is always passed explicitly.
       cpu_selector: "{{ ci_cpu_selector }}"
 {%- if enable_image_build %}
@@ -159,8 +155,6 @@ include:
   - project: {{ lib_project }}
     ref: $[[ inputs.lib_ref ]]
     file: /ci/release/semantic-release.yml
-    inputs:
-      tags: []
 
   # -- pr-agent AI review: optional, never blocks, BYO keys -------------------
   # CREATED only when both masked CI/CD variables are set. Do not override
@@ -169,7 +163,6 @@ include:
     ref: $[[ inputs.lib_ref ]]
     file: /ci/review/pr-agent.yml
     inputs:
-      tags: []
       gitlab_url: "https://{{ git_host }}"
       gate: "$OPENAI__KEY && $GITLAB__PERSONAL_ACCESS_TOKEN"
       # Lint + secret detection only: the review must not wait on anything else.
@@ -187,7 +180,6 @@ include:
 .pyyaml-gate:
   stage: lint
   image: python:3.14-slim
-  tags: []
   needs: []
   variables:
     PYYAML_VERSION: "6.0.3"
@@ -211,8 +203,7 @@ include:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
 # The library-pin gate: the header's lib_ref default must be a release tag, and
-# every include above plus the variable must read that input. It also holds the
-# refs scripts/lib-ref-sites.yml names equal to it.
+# every include above plus the variable must read that input.
 lib-pin-check:
   extends: .pyyaml-gate
   script:
@@ -222,9 +213,6 @@ lib-pin-check:
       changes:
         - ".gitlab-ci.yml"
         - "scripts/check-lib-pins.py"
-        - "scripts/lib-ref-sites.yml"
-        - "Taskfile.yml"
-        - "docs/ARCHITECTURE.md"
     - if: '$CI_COMMIT_BRANCH == "main"'
 
 # Every optional `needs:` must name a job some include creates: GitLab ignores

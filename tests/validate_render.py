@@ -33,9 +33,17 @@ REQUIRED_TOOLS = ("yamllint", "kustomize", "kubeconform", "ruff", "git")
 # This repository's vendored-copy manifest, read by the library's engine.
 VENDORED_MANIFEST = "scripts/vendored-manifest.yml"
 
-# Width of the gate-name column every verdict line is printed in, the
-# vendored helper's own, so its row lines up with the rest.
+# Width of the gate-name column in every verdict line. The vendored
+# copier_render helper prints its own rows at this width too.
 LABEL_WIDTH = 22
+
+
+def _verdict(name: str, problems: list[str]) -> list[str]:
+    """Print one gate's verdict line and its problems; -> [name] when it failed."""
+    print(f"  {name:<{LABEL_WIDTH}} {'FAILED' if problems else 'ok'}")
+    for problem in problems:
+        print(f"    {problem}")
+    return [name] if problems else []
 
 
 class Runner:
@@ -70,20 +78,14 @@ def _kubeconform_skips(summary: str, label: str = "kubeconform skips") -> list[s
     """
     match = _SKIPPED.search(summary)
     if not match:
-        print(f"  {label:<{LABEL_WIDTH}} FAILED")
-        print("    kubeconform printed no summary, so the skip count is unknown")
-        return [label]
+        return _verdict(label, ["kubeconform printed no summary, so the skip count is unknown"])
     found = _FOUND.search(summary)
     if found and not int(found.group(1)):
-        print(f"  {label:<{LABEL_WIDTH}} FAILED")
-        print("    kubeconform validated nothing: the input carried no resources")
-        return [label]
+        return _verdict(label, ["kubeconform validated nothing: the input carried no resources"])
     skipped = int(match.group(1))
-    print(f"  {label:<{LABEL_WIDTH}} {'ok' if not skipped else 'FAILED'}")
-    if skipped:
-        print(f"    {skipped} resource(s) had no schema and were not validated")
-        return [label]
-    return []
+    return _verdict(
+        label, [f"{skipped} resource(s) had no schema and were not validated"] if skipped else []
+    )
 
 
 def _kubeconform(
@@ -126,11 +128,16 @@ def _make_git_tree(root: Path) -> None:
 
 def _catalog(root: Path) -> str:
     """The CRD-catalog URL the rendered Taskfile pins, so this gate and the
-    tenant's own `task flux-lint` resolve the same schemas."""
+    tenant's own `task flux-lint` resolve the same schemas. An unpinned one is
+    an operator error, exit 2, not a gate failure."""
     taskfile = yaml.safe_load((root / "Taskfile.yml").read_text()) or {}
     ref = (taskfile.get("vars") or {}).get("CRD_CATALOG_REF")
     if not ref:
-        raise SystemExit("Taskfile.yml sets no CRD_CATALOG_REF: the schema source is unpinned")
+        print(
+            "error: Taskfile.yml sets no CRD_CATALOG_REF: the schema source is unpinned",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     return CATALOG_TEMPLATE.format(ref=ref)
 
 
@@ -156,11 +163,7 @@ def _dump_timezone_problem(built: str) -> str | None:
 
 def _check_dump_timezone(runner: Runner, built: str) -> None:
     problem = _dump_timezone_problem(built)
-    label = "dump timezone"
-    print(f"  {label:<{LABEL_WIDTH}} {'ok' if problem is None else 'FAILED'}")
-    if problem is not None:
-        print(f"    {problem}")
-        runner.failures.append(label)
+    runner.failures += _verdict("dump timezone", [problem] if problem is not None else [])
 
 
 def _validate_db(runner: Runner, root: Path, catalog: str, k8s_version) -> None:
@@ -206,9 +209,9 @@ def validate(root: Path, answers: dict) -> list[str]:
             wiring,
         )
     else:
-        print(f"  {'onboarding wiring':<{LABEL_WIDTH}} FAILED")
-        print("    docs/ONBOARDING.md carries no YAML wiring block")
-        runner.failures.append("onboarding wiring")
+        runner.failures += _verdict(
+            "onboarding wiring", ["docs/ONBOARDING.md carries no YAML wiring block"]
+        )
 
     runner.gate("ruff", "ruff", "check", "--no-cache", "--output-format", "concise", "scripts")
     runner.gate("doc links", sys.executable, "scripts/check-doc-links.py")
@@ -250,9 +253,9 @@ def check_registered_copies(
     claim about the pinned tag whatever the checkout is at.
     """
     if not expected_ref:
-        print(f"  {label:<{LABEL_WIDTH}} FAILED")
-        print("    this repository pins no library ref, so byte-identity has no subject")
-        return [label]
+        return _verdict(
+            label, ["this repository pins no library ref, so byte-identity has no subject"]
+        )
     return copier_render.check_registered_copies(
         lib_path, render_app.REPO_ROOT, VENDORED_MANIFEST, label, ref=expected_ref
     )
@@ -263,14 +266,12 @@ _INPUT_REF = re.compile(r"^\$\[\[\s*inputs\.([A-Za-z0-9_-]+)\s*\]\]$")
 # Keys a CI template's job document may hold that are not jobs.
 _NOT_A_JOB = {
     "include", "variables", "stages", "workflow", "default", "image", "spec",
-    # Legal global-level keywords; without them a mapping here reads as a
-    # stage-less job and lands in the implicit-test arm.
-    "cache", "services", "before_script", "after_script", "pages",
+    # Other global keywords. `pages` is a job name, so it stays in the stage check.
+    "cache", "services", "before_script", "after_script",
 }
 
-# GitLab's own default for a job that declares no `stage:`. Resolving one to
-# nothing instead would hide it from the stage arm, and `test` is the stage a
-# pipeline with custom `stages:` is most likely not to declare.
+# GitLab's own default for a job that declares no `stage:`. A pipeline with
+# custom `stages:` often leaves `test` out, so the stage arm checks it.
 _IMPLICIT_STAGE = "test"
 
 
@@ -290,7 +291,7 @@ class GitUnavailable(Exception):
 
 
 def _checkout_ref(lib_path: Path) -> list[str]:
-    """-> the tags the library checkout's HEAD is at, in no particular order.
+    """-> the tags at the library checkout's HEAD, sorted by refname.
     A release commit may carry more than one."""
     try:
         result = subprocess.run(
@@ -344,15 +345,13 @@ def _report_checkout(
                 f"changes to {', '.join(dirty)} — library files would be read unreleased"
             )
     except GitUnavailable as error:
-        print(f"  {label:<{LABEL_WIDTH}} FAILED")
-        print(f"    cannot read {lib_path}'s git state, so the pinned ref is unverified: {error}")
-        return False, [label]
+        return False, _verdict(
+            label, [f"cannot read {lib_path}'s git state, so the pinned ref is unverified: {error}"]
+        )
     if not reason:
         return True, []
     if not allow_ref_mismatch:
-        print(f"  {label:<{LABEL_WIDTH}} FAILED")
-        print(f"    {reason}")
-        return False, [label]
+        return False, _verdict(label, [reason])
     print(f"  warning: {reason}")
     return False, []
 
@@ -364,11 +363,12 @@ def check_include_contract(
     allow_ref_mismatch: bool = False,
     label: str = "include contract",
     checkout: tuple[bool, list[str]] | None = None,
+    lib_project: str | None = None,
 ) -> list[str]:
     """Cross-check the generated pipeline against the library templates it pins.
 
     Catches an undeclared `inputs:` key and a resolved stage missing from
-    `stages:`. The checkout must be at `expected_ref`, the tag the pipeline pins.
+    `stages:`, read at `expected_ref`. With `lib_project`, other projects are skipped.
     """
     pipeline = root / ".gitlab-ci.yml"
     if not pipeline.is_file():
@@ -392,18 +392,25 @@ def check_include_contract(
     # GitLab accepts `include:` as a single mapping as well as a list.
     if isinstance(includes, dict):
         includes = [includes]
+    targets = []
     for include in includes:
         if not isinstance(include, dict) or "project" not in include:
             continue
-        rel = str(include["file"]).lstrip("/")
+        # GitLab project paths are case-insensitive.
+        if lib_project and str(include["project"]).lower() != lib_project.lower():
+            continue
+        files = include.get("file")
+        # GitLab accepts `file:` as one path or a list of them.
+        targets += [(include, f) for f in (files if isinstance(files, list) else [files])]
+    for include, file in targets:
+        rel = str(file).lstrip("/")
         source = lib_path / rel
         if not source.is_file():
             problems.append(f"{rel} is not in the library checkout")
             continue
         docs = [d for d in yaml.load_all(source.read_text(), Loader=render_app.CILoader) if d]
         # The `spec:` header is optional: a template with no inputs is legal
-        # and its first document already holds jobs. Reading docs[0] as a header
-        # unconditionally would drop every job in such a template.
+        # and its first document already holds jobs.
         header = docs[0] if docs and isinstance(docs[0], dict) and "spec" in docs[0] else None
         inputs = ((header or {}).get("spec") or {}).get("inputs") or {}
         job_docs = docs[1:] if header is not None else docs
@@ -435,11 +442,9 @@ def check_include_contract(
                         f"{rel}: job {job!r} resolves to stage {stage!r}, "
                         f"which the pipeline does not declare"
                     )
-    status = "ok" if not problems else "FAILED"
-    print(f"  {label:<{LABEL_WIDTH}} {status}")
-    for problem in problems:
-        print(f"    {problem}")
-    return [label] if problems else []
+    if not targets:
+        problems.append("no library include was inspected, so this gate examined nothing")
+    return _verdict(label, problems)
 
 
 def _own_lib_ref() -> str | None:
@@ -467,11 +472,18 @@ def check_own_include_contract(
         return []
     ref = _own_lib_ref()
     if not ref:
-        print(f"  {label:<{LABEL_WIDTH}} FAILED")
-        print("    spec.inputs.lib_ref.default is unset, so the pinned ref is unverified")
-        return [label]
+        return _verdict(
+            label, ["spec.inputs.lib_ref.default is unset, so the pinned ref is unverified"]
+        )
+    project = (render_app.load_ci(own).get("variables") or {}).get("LIB_PROJECT")
     return check_include_contract(
-        render_app.REPO_ROOT, lib_path, ref, allow_ref_mismatch, label=label, checkout=checkout
+        render_app.REPO_ROOT,
+        lib_path,
+        ref,
+        allow_ref_mismatch,
+        label=label,
+        checkout=checkout,
+        lib_project=str(project) if project else None,
     )
 
 
@@ -515,8 +527,8 @@ def main() -> int:
     answers = yaml.safe_load(args.answers.read_text())
     overrides = {}
     for pair in args.data:
-        key, _, value = pair.partition("=")
-        if not _:
+        key, separator, value = pair.partition("=")
+        if not separator:
             print(f"error: --data takes KEY=VALUE, got {pair!r}", file=sys.stderr)
             return 2
         overrides[key] = value
@@ -543,9 +555,10 @@ def main() -> int:
             }
             failures += check_registered_copies(args.lib_path, own_ref)
             if (root / ".gitlab-ci.yml").is_file() and not render_ref:
-                print(f"  {'include contract':<{LABEL_WIDTH}} FAILED")
-                print("    lib_ref is unset in the answers, so the pinned ref is unverified")
-                failures.append("include contract")
+                failures += _verdict(
+                    "include contract",
+                    ["lib_ref is unset in the answers, so the pinned ref is unverified"],
+                )
             else:
                 failures += check_include_contract(
                     root,
@@ -553,6 +566,7 @@ def main() -> int:
                     render_ref,
                     args.allow_ref_mismatch,
                     checkout=verdicts.get(render_ref),
+                    lib_project=answers.get("lib_project"),
                 )
             failures += check_own_include_contract(
                 args.lib_path, args.allow_ref_mismatch, checkout=verdicts.get(own_ref)

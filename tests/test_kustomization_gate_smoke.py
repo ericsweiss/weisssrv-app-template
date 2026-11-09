@@ -246,7 +246,7 @@ def test_a_strategic_merge_patch_path_that_does_not_exist_fails(tmp_path):
 
 def test_a_listed_manifest_that_carries_no_object_fails(tmp_path):
     """kustomize and kubeconform both exit 0 on an emptied body, and the
-    cluster-side Kustomization then prunes what it used to apply."""
+    cluster-side Kustomization then prunes the objects that body held."""
     files = {"deployment.yaml": EMPTIED_MANIFEST}
     result = _run(_tree(tmp_path, {"resources": ["deployment.yaml"]}, files))
     assert result.returncode == 1, result.stdout + result.stderr

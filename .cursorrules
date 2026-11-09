@@ -1,6 +1,0 @@
-# Cursor rules
-
-This is the **weisssrv-app-template** copier template — it generates tenant
-repositories, it does not deploy anything. Read [CLAUDE.md](CLAUDE.md) before
-making any change; it is the canonical agent doc (also enforced by
-`.cursor/rules/template-development.mdc`, `alwaysApply: true`).

@@ -9,8 +9,7 @@ name: release
 # code with contents:write. To re-run, use GitHub's "Re-run jobs" on the
 # previous run, which replays the original workflow_run payload.
 
-# `on` is quoted because unquoted it is a YAML 1.1 boolean; GitHub reads both
-# the same.
+# Quoted: unquoted `on` is a YAML 1.1 boolean.
 "on":
   workflow_run:
     workflows: [ci]
@@ -40,9 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
-          # The commit ci.yml actually tested. No `|| github.sha` fallback:
-          # that would release the default-branch tip instead of the commit the
-          # gates passed on.
+          # The commit ci.yml tested, never the default-branch tip.
           ref: ${{ github.event.workflow_run.head_sha }}
           # Full history AND tags: the plan is computed from `<last tag>..HEAD`,
           # and the crash-recovery probe needs to see the previous tag at all.
@@ -58,9 +55,8 @@ jobs:
           # The branch ci.yml actually ran on. NOT $GITHUB_REF_NAME, which on a
           # workflow_run event is the default branch at trigger time.
           RELEASE_BRANCH: ${{ github.event.workflow_run.head_branch }}
-        # The SHA reaches the command through the environment rather than `${{ }}`
-        # interpolation — the standing rule for any expression value that lands
-        # on a shell line. python3 and git ship in the runner image.
+        # Expression values reach the shell through env, never `${{ }}`
+        # interpolation.
         run: |
           set -euo pipefail
 
@@ -87,8 +83,7 @@ jobs:
             --output release.json
 
       - name: Publish the outcome
-        # `when: always` — a failed run's release.json carries the reason, and
-        # that is exactly the run whose artifact someone needs.
+        # `if: always()`: a failed run's release.json carries the reason.
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:

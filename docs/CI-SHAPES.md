@@ -5,7 +5,7 @@ outside `kubernetes/`. Three values:
 
 | `ci_shape` | Pipeline | Ships |
 |---|---|---|
-| `gitlab_selfhosted` (default) | self-hosted GitLab, jobs included from `eric/weisssrv-lib` at a pinned tag | `.gitlab-ci.yml`, `.gitlab/secret-detection-ruleset.toml`, `scripts/check-lib-pins.py` with `scripts/lib-ref-sites.yml`, `scripts/check-ci-include-job-names.py`, `scripts/semantic-release.py` |
+| `gitlab_selfhosted` (default) | self-hosted GitLab, jobs included from `eric/weisssrv-lib` at a pinned tag | `.gitlab-ci.yml`, `.gitlab/secret-detection-ruleset.toml`, `scripts/check-lib-pins.py`, `scripts/check-ci-include-job-names.py`, `scripts/semantic-release.py` |
 | `github` | GitHub Actions, workflows vendored from the same library | `.github/workflows/{ci,release}.yml` — plus `build-image.yml` when `enable_image_build` is on — and `scripts/semantic-release.py` |
 | `none` | none | neither pipeline; `scripts/check-comment-length.py`, `scripts/check-doc-links.py`, `scripts/check-kustomization.py`, `scripts/check-netpol-except-parity.py`, `scripts/check-scrape-wiring.py` and `scripts/flux-lint.sh` still ship, and `task lint` plus the pre-commit hooks are the whole gate |
 
@@ -34,13 +34,13 @@ including the deploy-notes prompt about new secrets and cluster-side wiring.
 | Gate | `gitlab_selfhosted` | `github` | `none` |
 |---|---|---|---|
 | yamllint | `yaml-lint` (library template) | `yaml-lint` job | `task yaml-lint` |
-| `kustomize build` + kubeconform | `flux-lint` (library template), running the repo's own `scripts/flux-lint.sh` | `flux-lint` job, the same checks inline | `task flux-lint`, the same `scripts/flux-lint.sh` |
+| `kustomize build` + kubeconform | `flux-lint` (library template), running the repo's own `scripts/flux-lint.sh` | `flux-lint` job: the same `scripts/flux-lint.sh --mode simple` | `task flux-lint`, the same `scripts/flux-lint.sh` |
 | ruff | `python-lint` (library template) | `python-lint` job | `task python-lint` |
 | shellcheck | n/a — no GitLab counterpart; a tenant with shell scripts adds the library's `shellcheck` template | `shellcheck` job, skipped when the repo has no `.sh` files | n/a |
-| Markdown link check | `lint-docs-links` (library template) | `lint-docs-links` job | `task doc-links` |
+| Markdown link check, with the backticked repo-path pass | `lint-docs-links` (library template, `check_paths: true`) | `lint-docs-links` job, `CHECK_DOC_LINKS_PATHS=1` | `task doc-links` and the pre-commit hook |
 | Comment convention (`check-comment-length.py`) | `comment-length` (library template), plus `task comment-length` locally | `comment-length` job, plus `task comment-length` locally | `task comment-length` |
 | Secret scanning | GitLab Secret Detection (gitleaks under the hood), findings block | gitleaks directly, same `.gitleaks.toml`, findings block | pre-commit gitleaks hook |
-| Library pin gate | `lib-pin-check`, plus `task lib-pins` locally — the pins and `scripts/lib-ref-sites.yml`'s sites against the declared `lib_ref` | n/a — no includes to pin | n/a |
+| Library pin gate | `lib-pin-check`, plus `task lib-pins` locally — every include and the variable against the declared `lib_ref` | n/a — no includes to pin | n/a |
 | Optional-need gate (`check-ci-include-job-names.py`) | `ci-job-names-check`, plus `task ci-job-names` locally | n/a — a workflow `needs:` names a job in the same file | n/a |
 | Egress fence (`check-netpol-except-parity.py`) | `netpol-check`, plus `task netpol` locally | `ci.yml`'s `manifest-gates` job, plus `task netpol` locally | `task netpol` |
 | Scrape wiring (`check-scrape-wiring.py`) | `scrape-wiring-check`, plus `task scrape-wiring` locally | `ci.yml`'s `manifest-gates` job — `--namespace-from-tree`, not `--namespace`, so a monitor scoped with `matchNames` reds it — plus `task scrape-wiring` locally | `task scrape-wiring` |
@@ -61,9 +61,13 @@ to the include's `crd_catalog_ref` and to `db-manifest-check`, so all three read
 one schema set.
 
 The empty-build guard, the skipped-schema guard and the integer check on the
-skip budget exist twice: in the library's `flux-lint` simple arm, and in the
-rendered `Taskfile.yml`'s shell because a CI template cannot serve a local task.
-`tests/test_render.py` is the only thing holding the two in step.
+skip budget live in the vendored `scripts/flux-lint.sh`, which `task flux-lint`,
+the GitLab `flux-lint` job and the GitHub shape's vendored `ci.yml` all run.
+
+`scripts/flux-lint.sh` also fails a build that carries a `${...}` key outside
+cluster-config's `cluster_*` set, because the tenant Kustomization substitutes
+strictly and one unknown key fails the whole reconcile. Write a literal as
+`$${var}`.
 
 Both pipelined shapes drive the **same** vendored `scripts/semantic-release.py`
 with `--platform {gitlab,github}`, so there is one implementation to audit
@@ -87,11 +91,6 @@ announces its skip when there is none.
   copies with literal versions and sha256s — a library bump is a manual
   re-vendor of `ci.yml`, `release.yml`, `build-image.yml` and the vendored
   `scripts/` helpers.
-- **The manifest gates gate the tag on both pipeline shapes.** On the GitLab
-  shape `netpol-check`, `scrape-wiring-check` and `kustomization-check` sit in
-  `stage: lint`, ahead of `stage: release`. On GitHub the three run as the
-  vendored `ci.yml`'s `manifest-gates` job, and `release.yml` triggers on `ci`
-  completing, so a red gate stops the tag there too.
 - **`k8s_version`.** The vendored `ci.yml` cannot take a copier answer, so it
   reads repository variable `K8S_VERSION` and falls back to the library's own
   literal. A cluster on a different Kubernetes minor sets that variable;
@@ -102,8 +101,8 @@ announces its skip when there is none.
 - **`registry_host`.** The vendored build workflow publishes to
   `ghcr.io/<owner>/<repo>` from its own literals, so a GitHub tenant answering
   another registry gets an image reference nothing pushed to. Answer `ghcr.io`,
-  or swap the workflow's login step and its `REGISTRY`/`IMAGE_NAME`, which makes
-  the copy no longer byte-identical — record that as a deliberate fork.
+  or swap the workflow's login step and its `REGISTRY`/`IMAGE_NAME`. That breaks
+  byte-identity, so record the copy as a deliberate fork.
 - **A privileged runner is not needed.** GitHub-hosted runners ship Docker,
   which is why only the GitLab shape asks for `privileged_runner_tag`.
 
@@ -146,12 +145,13 @@ rather than in a banner each tenant carries.
 **`manifest-gates`.** The vendored `ci.yml`'s job drives the same three scripts
 the GitLab shape runs as `netpol-check`, `scrape-wiring-check` and
 `kustomization-check`, over `$MANIFEST_ROOT`, which defaults to the rendered
-tenant's `kubernetes/flux`. It derives the scrape gate's namespace with
+tenant's `kubernetes/flux`. The job derives the scrape gate's namespace with
 `--namespace-from-tree` because a byte-identical copy cannot carry a tenant's
 answer, and the rendered tree ships no `Namespace` manifest — the platform
 operator owns the namespace — so a monitor scoped with `matchNames` reds that
 job while the three template-owned callers pass it. The generated
 `docs/ARCHITECTURE.md` tells the tenant to scope with `any: false` instead.
+The `flux-lint` job builds the same root.
 
 **The `kustomization.yaml` resource list.** An emptied list renders nothing,
 kustomize and kubeconform both exit 0 on it, and the cluster-side Kustomization

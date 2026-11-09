@@ -2,10 +2,6 @@
 # Every expression pins `namespace`: tenant rules evaluate cluster-wide, so
 # without it AppDown fires on another namespace's like-named Deployment and
 # absent() silently disarms AppAbsent. See docs/ARCHITECTURE.md.
-
-# A `severity: info` rule must carry a `namespace` label, set explicitly when the
-# expr aggregates it away: the platform mutes any info alert sharing a
-# `namespace` with a firing `InfoInhibitor`, and a label-less one always does.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -22,7 +18,7 @@ spec:
           labels:
             severity: critical
           annotations:
-            runbook_url: '{{ runbook_url }}'
+            runbook_url: '{{ runbooks_page ~ "#appdown" if runbooks_page else runbook_url }}'
             summary: '{{ app_slug }} has no available replicas'
             description: >-
               Deployment {{ app_slug }} has had zero available replicas for 10m
@@ -32,12 +28,11 @@ spec:
           for: 15m
           labels:
             severity: warning
-            # Redundant for this selector — absent() carries the
-            # equality-matcher labels — and kept so a rewritten expr still
-            # reports a namespace.
+            # Keeps the alert routed to this namespace when an edited expr
+            # drops the label that absent() copies from its selector.
             namespace: {{ app_namespace }}
           annotations:
-            runbook_url: '{{ runbook_url }}'
+            runbook_url: '{{ runbooks_page ~ "#appabsent" if runbooks_page else runbook_url }}'
             summary: '{{ app_slug }} deployment metric is absent'
             description: >-
               No kube-state metric for Deployment {{ app_slug }} for 15m — it

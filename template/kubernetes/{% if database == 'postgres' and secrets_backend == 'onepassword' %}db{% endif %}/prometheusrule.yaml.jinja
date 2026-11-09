@@ -15,7 +15,7 @@ spec:
           labels:
             severity: critical
           annotations:
-            runbook_url: '{{ db_runbook_url }}'
+            runbook_url: '{{ runbooks_page ~ "#databaseabsent" if runbooks_page else db_runbook_url }}'
             summary: '{{ app_slug }} database metrics have been absent for 15 minutes'
             description: >-
               No instance of {{ app_slug }}-db has had its exporter scraped for 15m:

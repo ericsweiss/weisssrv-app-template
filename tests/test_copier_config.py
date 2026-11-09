@@ -14,6 +14,7 @@ import tomllib
 import jinja2
 import pytest
 import yaml
+from jinja2.sandbox import SandboxedEnvironment
 
 import render_app
 
@@ -39,6 +40,8 @@ CLUSTER_NO_DEFAULT = (
     "db_backup_bucket",
     "db_apiserver_cidrs",
     "db_runbook_url",
+    # The build runner is the one the operator enabled on this project: a site fact.
+    "privileged_runner_tag",
 )
 
 # The rest of the cluster block, which composes from the answers above rather
@@ -129,17 +132,9 @@ def test_enums_are_enumerated(name):
         assert default in values
 
 
-def test_every_question_is_documented():
-    """A question nobody can look up is a prompt the operator has to guess at."""
-    docs = "\n".join(
-        p.read_text() for p in [REPO_ROOT / "README.md", *(REPO_ROOT / "docs").glob("*.md")]
-    )
-    missing = [name for name in QUESTIONS if name not in docs]
-    assert not missing, "questions named in no operator doc: " + ", ".join(sorted(missing))
-
-
 def test_the_answer_reference_names_every_question():
-    """Every question appears in docs/CONSUMING.md, The answers."""
+    """Every question has a row in docs/CONSUMING.md § The answers: a question
+    nobody can look up is a prompt the operator has to guess at."""
     text = (REPO_ROOT / "docs" / "CONSUMING.md").read_text(encoding="utf-8")
     section = text.split("## The answers", 1)[-1].split("\n## ", 1)[0]
     named = {cell.strip().strip("`") for line in section.splitlines() for cell in line.split("|")}
@@ -190,7 +185,7 @@ def test_answer_fixtures_pin_the_default_library_tag():
 
 def test_library_pin_is_the_same_in_the_pipeline_and_the_answer_default():
     """The ref this repo's own pipeline declares and what a fresh render pins
-    move together: validate-rendered-app clones at the answer default, so a partial
+    move together: validate-rendered-app clones at the pipeline pin, so a partial
     bump lints the template with one library and hands tenants another."""
     pinned = render_app.declared_lib_ref(REPO_ROOT / ".gitlab-ci.yml")
     want = CONFIG["lib_ref"]["default"]
@@ -215,9 +210,9 @@ def test_no_question_reads_an_answer_asked_later():
     for index, name in enumerate(order):
         later = set(order[index + 1:])
         question = QUESTIONS[name]
-        for field in ("default", "validator", "when", "help"):
+        for field in ("default", "validator", "when"):
             value = question.get(field)
-            if not isinstance(value, str) or field == "help":
+            if not isinstance(value, str):
                 continue
             for referenced in _referenced_questions(value) & later:
                 offenders.append(f"{name}.{field} reads {referenced}, asked later")
@@ -227,71 +222,17 @@ def test_no_question_reads_an_answer_asked_later():
 def _validator_message(name: str, **context) -> str:
     """Render a validator the way copier does: non-empty result means rejected.
 
-    `regex_search` comes from copier's extra filter set and is supplied here.
+    The environment is copier's: this file's `_envops`, its `_jinja_extensions`,
+    and the Ansible filter set copier loads by default for `regex_search`.
     """
-    env = jinja2.Environment()  # noqa: S701 - rendering our own config, no user input
-    env.filters["regex_search"] = lambda value, pattern: re.search(pattern, str(value))
-    return env.from_string(QUESTIONS[name]["validator"]).render(**context).strip()
-
-
-@pytest.mark.parametrize(
-    "internal,external,rejected",
-    [
-        ("esweiss.com", "ericsweiss.com", False),
-        # Identical zones: both IngressRoutes claim one Host().
-        ("example.com", "example.com", True),
-        # Different zones, same first label: `<slug>-esweiss-tls` twice, so two
-        # Certificates contend for one Secret and burn the duplicate-cert limit.
-        ("esweiss.io", "esweiss.com", True),
-    ],
-)
-def test_internal_domain_rejects_a_colliding_pair(internal, external, rejected):
-    message = _validator_message(
-        "internal_domain", internal_domain=internal, external_domain=external
+    envops = dict(CONFIG["_envops"])
+    assert envops.pop("undefined") == "jinja2.StrictUndefined"
+    extensions = ["jinja2_ansible_filters.AnsibleCoreFiltersExtension"]
+    extensions += list(CONFIG.get("_jinja_extensions") or [])
+    env = SandboxedEnvironment(  # noqa: S701 - our own config
+        extensions=extensions, undefined=jinja2.StrictUndefined, **envops
     )
-    assert bool(message) is rejected, message or "accepted, but should not be"
-
-
-@pytest.mark.parametrize(
-    "slug,rejected",
-    [
-        ("recipe-box", False),
-        ("Recipe_Box", True),
-        ("9lives", True),
-        ("trailing-", True),
-    ],
-)
-def test_app_slug_must_be_a_dns_label(slug, rejected):
-    assert bool(_validator_message("app_slug", app_slug=slug)) is rejected
-
-
-@pytest.mark.parametrize("port,rejected", [(8080, False), (80, True), (70000, True)])
-def test_app_port_rejects_ports_the_pod_cannot_bind(port, rejected):
-    """The pod runs as UID 65532 with allowPrivilegeEscalation disabled, so a
-    port under 1024 renders a Deployment that can never come up."""
-    assert bool(_validator_message("app_port", app_port=port)) is rejected
-
-
-# The ports the CloudNativePG instance pods listen on: PostgreSQL, the instance
-# manager's status endpoint, and the metrics exporter.
-DB_POD_PORTS = (5432, 8000, 9187)
-
-
-@pytest.mark.parametrize(
-    "database,port,rejected",
-    [
-        ("postgres", 8080, False),
-        *[("postgres", port, True) for port in DB_POD_PORTS],
-        *[("none", port, False) for port in DB_POD_PORTS],
-    ],
-)
-def test_database_rejects_an_app_port_the_db_pods_listen_on(database, port, rejected):
-    """The app's allows keep off the db pods, which share its name label, by one
-    component term; a distinct app_port keeps a db port out of them regardless."""
-    message = _validator_message("database", database=database, app_port=port)
-    assert bool(message) is rejected, message or "accepted, but should not be"
-    if rejected:
-        assert "app_port" in message and str(port) in message, message
+    return env.from_string(QUESTIONS[name]["validator"]).render(**context).strip()
 
 
 def test_copier_rejects_a_db_port_as_app_port(tmp_path):
@@ -315,25 +256,14 @@ def test_copier_rejects_a_db_port_as_app_port(tmp_path):
     assert not (tmp_path / "out" / "kubernetes").exists(), "a rejected render wrote manifests"
 
 
-@pytest.mark.parametrize(
-    "vault,rejected",
-    [
-        ("Homelab", False),
-        ("Cluster Ops", False),
-        ("", True),
-        # The name is a YAML key in the store's `vaults:` map and a path segment
-        # in op:// references, so neither character can be carried through.
-        ("Homelab/Apps", True),
-        ("Homelab: Apps", True),
-        # A YAML 1.1 boolean spelling. The store quotes the key, so the name is
-        # carried rather than turning into `false`.
-        ("No", False),
-        ("Yes", False),
-    ],
-)
-def test_onepassword_vault_rejects_names_the_store_cannot_carry(vault, rejected):
-    message = _validator_message("onepassword_vault", onepassword_vault=vault)
-    assert bool(message) is rejected, message or "accepted, but should not be"
+def test_no_prompt_describes_a_shared_vault():
+    """Each tenant reads its own vault. A store reading a shared vault lets each
+    tenant namespace read every item in it, so no prompt may offer one."""
+    helps = {name: str(q.get("help", "")) for name, q in QUESTIONS.items() if isinstance(q, dict)}
+    shared = sorted(name for name, text in helps.items() if "shared vault" in text)
+    assert not shared, f"help text describes a shared vault: {shared}"
+    choices = QUESTIONS["secrets_backend"]["choices"]
+    assert not [label for label in choices if "shared vault" in label], choices
 
 
 def test_git_host_defaults_from_the_forge():
@@ -377,22 +307,61 @@ def test_the_answer_reference_row_matches_the_computed_words():
     assert not missing, "the change_request row names no word for: " + ", ".join(missing)
 
 
-@pytest.mark.parametrize("ref,rejected", [("v0.7.4", False), ("main", True), ("0.6.2", True)])
-def test_lib_ref_takes_release_tags_only(ref, rejected):
-    assert bool(_validator_message("lib_ref", lib_ref=ref)) is rejected
+# The ports the CloudNativePG instance pods listen on: PostgreSQL, the instance
+# manager's status endpoint, and the metrics exporter.
+DB_POD_PORTS = (5432, 8000, 9187)
 
-
-@pytest.mark.parametrize("version,rejected", [("1.36.0", False), ("1.36", True), ("", True)])
-def test_k8s_version_must_be_full(version, rejected):
-    """kubeconform's -kubernetes-version takes X.Y.Z; a bare minor is rejected
-    at run time, several minutes into the first pipeline."""
-    assert bool(_validator_message("k8s_version", k8s_version=version)) is rejected
-
-
-# One accept and one reject per validator no test above exercises. These
-# questions all carry a default, so no other test reaches them. `context`
-# supplies only the answers the validator itself reads.
+# At least one accept and one reject per validator. `context` supplies only the
+# answers the validator itself reads; a fifth element is a substring the
+# rejection message must contain.
 VALIDATOR_CASES = [
+    ("app_slug", "recipe-box", None, {}),
+    ("app_slug", "Recipe_Box", "not a DNS label", {}),
+    ("app_slug", "9lives", "a DNS label starts with a letter", {}),
+    ("app_slug", "trailing-", "a DNS label ends with a letter or digit", {}),
+    ("app_port", 8080, None, {}),
+    ("app_port", 80, "UID 65532 with every capability dropped cannot bind it", {}),
+    ("app_port", 70000, "no TCP port", {}),
+    ("database", "postgres", None, {"app_port": 8080}),
+    *[
+        ("database", "postgres", "the app's allows would reach a db port", {"app_port": port},
+         f"app_port {port}")
+        for port in DB_POD_PORTS
+    ],
+    *[("database", "none", None, {"app_port": port}) for port in DB_POD_PORTS],
+    ("internal_domain", "esweiss.com", None, {"external_domain": "ericsweiss.com"}),
+    (
+        "internal_domain",
+        "example.com",
+        "both IngressRoutes claim one Host()",
+        {"external_domain": "example.com"},
+    ),
+    (
+        "internal_domain",
+        "esweiss.io",
+        "a shared first label puts two Certificates on one TLS Secret",
+        {"external_domain": "esweiss.com"},
+    ),
+    ("onepassword_vault", "recipes-ns", None, {"app_namespace": "recipes-ns"}),
+    (
+        "onepassword_vault",
+        "recipe-box",
+        "the tenant-wiring gate accepts only the namespace's vault",
+        {"app_namespace": "recipes-ns"},
+    ),
+    (
+        "onepassword_vault",
+        "Homelab",
+        "the tenant-wiring gate accepts only the namespace's vault",
+        {"app_namespace": "recipes-ns"},
+    ),
+    ("onepassword_vault", "", "an empty vault names no store", {"app_namespace": "recipes-ns"}),
+    ("lib_ref", "v0.7.4", None, {}),
+    ("lib_ref", "main", "a branch is never a valid pin", {}),
+    ("lib_ref", "0.6.2", "a release tag carries the v", {}),
+    ("k8s_version", "1.36.0", None, {}),
+    ("k8s_version", "1.36", "kubeconform's -kubernetes-version takes X.Y.Z", {}),
+    ("k8s_version", "", "kubeconform's -kubernetes-version takes X.Y.Z", {}),
     ("app_namespace", "recipe-box", None, {}),
     ("app_namespace", "Recipe_Box", "not a DNS label", {}),
     (
@@ -417,8 +386,24 @@ VALIDATOR_CASES = [
         {},
     ),
     ("git_host", "git.example.com", None, {}),
+    ("enable_internal_ingress", False, None, {"enable_public_ingress": True}),
+    ("enable_sso", True, None, {"enable_public_ingress": True}),
+    ("enable_sso", False, None, {"enable_public_ingress": False}),
+    (
+        "enable_sso",
+        True,
+        "forward-auth on a route that does not exist",
+        {"enable_public_ingress": False},
+    ),
+    ("enable_internal_ingress", True, None, {"enable_public_ingress": False}),
+    (
+        "enable_internal_ingress",
+        False,
+        "an app with neither ingress has no route at all",
+        {"enable_public_ingress": False},
+    ),
     ("git_host", "https://git.example.com", "a scheme is not a hostname", {}),
-    ("privileged_runner_tag", "infrastructure", None, {}),
+    ("privileged_runner_tag", "tenant-build", None, {}),
     (
         "privileged_runner_tag",
         "   ",
@@ -531,11 +516,11 @@ VALIDATOR_CASES = [
         None,
         {},
     ),
-    ("runbook_url", "git.example.com/docs", "no scheme, so the alert annotation is not a link", {}),
+    ("runbook_url", "git.example.com/docs", "no scheme, so the runbooks page cannot link it", {}),
     (
         "runbook_url",
         "https://git.example.com/it's",
-        "a single quote closes the quoted YAML scalar it renders into on every alert",
+        "a single quote closes the quoted YAML scalar it renders into on forge other",
         {},
     ),
     ("db_name", "nai", None, {}),
@@ -569,21 +554,21 @@ VALIDATOR_CASES = [
     ("db_backup_endpoint", "https://10.0.10.5", "db-allow-egress opens 443 to public addresses only", {}, "public object store"),
     ("db_backup_endpoint", "https://203.0.113.7:443", "db-allow-egress opens 443 to public addresses only", {}, "public object store"),
     ("db_backup_endpoint", "https://s3.eu-central-003.backblazeb2.com", None, {}),
-    ("db_apiserver_cidrs", "10.0.10.222/32,10.0.10.223/32", None, {}),
-    ("db_apiserver_cidrs", "10.0.10.222", "a bare address is not a CIDR the ipBlock accepts", {}),
+    ("db_apiserver_cidrs", "192.168.1.222/32,192.168.1.223/32", None, {}),
+    ("db_apiserver_cidrs", "192.168.1.222", "a bare address is not a CIDR the ipBlock accepts", {}),
     (
         "db_apiserver_cidrs",
-        "10.0.10.222/32,999.999.999.999/32",
+        "192.168.1.222/32,999.999.999.999/32",
         "an octet over 255 fails NetworkPolicy admission",
         {},
     ),
     (
         "db_apiserver_cidrs",
-        "10.0.10.222/32,10.0.0.0/8",
+        "192.168.1.222/32,10.0.0.0/8",
         "a /8 opens 6443 egress to a whole network, not the API server nodes",
         {},
     ),
-    ("db_apiserver_cidrs", "10.0.10.222/99", "a prefix over 32 is no IPv4 CIDR", {}),
+    ("db_apiserver_cidrs", "192.168.1.222/99", "a prefix over 32 is no IPv4 CIDR", {}),
     ("db_backup_item", "CNPG Backup", None, {}),
     ("db_backup_item", 'Backup "Prod"', "a double quote closes the quoted remoteRef key", {}),
     ("db_backup_item", "Backup\\Prod", "a backslash starts an escape in the quoted key", {}),
@@ -604,7 +589,7 @@ VALIDATOR_CASES = [
         None,
         {},
     ),
-    ("db_runbook_url", "git.example.com/docs", "no scheme, so the alert annotation is not a link", {}),
+    ("db_runbook_url", "git.example.com/docs", "no scheme, so the runbooks page cannot link it", {}),
     (
         "db_runbook_url",
         "https://git.example.com/it's",
@@ -620,8 +605,6 @@ VALIDATOR_CASES = [
     ids=[f"{case[0]}-{case[1]}" for case in VALIDATOR_CASES],
 )
 def test_validator_accepts_and_rejects(case):
-    """A case may carry a fifth element: a substring the message must contain,
-    which is how a validator with several arms proves it took the right one."""
     name, answer, why, context = case[:4]
     expected = case[4] if len(case) > 4 else None
     message = _validator_message(name, **{name: answer}, **context)
@@ -635,20 +618,6 @@ def test_validator_accepts_and_rejects(case):
             )
 
 
-# Validators with a test of their own above, which the table deliberately does
-# not duplicate — the value is in the reasoning those tests carry, not in a
-# second accept/reject pair.
-DEDICATED_VALIDATOR_TESTS = {
-    "app_slug": "test_app_slug_must_be_a_dns_label",
-    "app_port": "test_app_port_rejects_ports_the_pod_cannot_bind",
-    "database": "test_database_rejects_an_app_port_the_db_pods_listen_on",
-    "internal_domain": "test_internal_domain_rejects_a_colliding_pair",
-    "onepassword_vault": "test_onepassword_vault_rejects_names_the_store_cannot_carry",
-    "lib_ref": "test_lib_ref_takes_release_tags_only",
-    "k8s_version": "test_k8s_version_must_be_full",
-}
-
-
 def test_every_validator_is_exercised():
     """Every validator declared in copier.yml has a test case."""
     declared = {
@@ -656,7 +625,7 @@ def test_every_validator_is_exercised():
         for name, question in QUESTIONS.items()
         if isinstance(question, dict) and "validator" in question
     }
-    covered = {case[0] for case in VALIDATOR_CASES} | set(DEDICATED_VALIDATOR_TESTS)
+    covered = {case[0] for case in VALIDATOR_CASES}
     assert not declared - covered, (
         "copier.yml validators no test exercises: " + ", ".join(sorted(declared - covered))
     )
@@ -768,6 +737,28 @@ def test_python_tests_clones_the_library_the_contract_gate_reads():
     )
 
 
+def test_validate_rendered_app_clones_the_library_at_the_pipeline_pin():
+    """The rendered-app gates read the release the includes pin, not a second
+    derivation of it."""
+    ci = render_app.load_ci(REPO_ROOT / ".gitlab-ci.yml")
+    install = "\n".join(ci["validate-rendered-app"]["before_script"])
+    assert '--branch "$WEISSSRV_LIB_REF"' in install, (
+        "validate-rendered-app does not clone the library at variables.WEISSSRV_LIB_REF"
+    )
+    assert "copier.yml" not in install, (
+        "validate-rendered-app re-derives the library ref from copier.yml"
+    )
+
+
+def test_no_include_or_job_names_a_runner_tag():
+    """Every library include this pipeline uses defaults `tags` to `[]`, so this
+    repo's own jobs run on the shared tag-less runner and a tag here only moves
+    one off it."""
+    includes, jobs = render_app.runner_tagged(render_app.load_ci(REPO_ROOT / ".gitlab-ci.yml"))
+    assert not includes, f"library includes pass runner tags: {includes}"
+    assert not jobs, f"jobs set runner tags: {jobs}"
+
+
 def test_unimplemented_choices_cannot_be_answered():
     """`choices` is advisory in `--data` mode, so anything the render cannot
     actually produce must be absent from the list rather than merely
@@ -785,22 +776,50 @@ def test_unimplemented_choices_cannot_be_answered():
     assert set(QUESTIONS["forge"]["choices"].values()) == {"gitlab", "github", "other"}
 
 
-def test_copier_rejects_an_invalid_answer(tmp_path):
+@pytest.mark.parametrize(
+    "dropped,data,expected",
+    [
+        (None, ["--data", "app_slug=Not A Label"], None),
+        # The build never falls through to a runner the tenant did not name.
+        ("privileged_runner_tag", [], 'Question "privileged_runner_tag" is required'),
+    ],
+    ids=["bad-app-slug", "no-build-runner-tag"],
+)
+def test_copier_rejects_an_invalid_answer(tmp_path, dropped, data, expected):
     """End-to-end proof that a validator is wired, not just well-written: a
     copier run with a bad answer must exit non-zero and write nothing."""
     src = render_app.copy_source(tmp_path)
+    answers = render_app.answers_without(tmp_path, dropped) if dropped else render_app.ANSWERS
     result = subprocess.run(
         [
             sys.executable, "-m", "copier", "copy", "--defaults", "--trust",
-            "--data-file", str(render_app.ANSWERS),
-            "--data", "app_slug=Not A Label",
+            "--data-file", str(answers), *data,
             str(src), str(tmp_path / "out"),
         ],
         capture_output=True,
         text=True,
     )
-    assert result.returncode != 0, "an invalid app_slug was accepted"
+    assert result.returncode != 0, "an invalid answer was accepted"
+    output = result.stdout + result.stderr
+    assert expected is None or expected in output, "rejected for another reason:\n" + output
     assert not (tmp_path / "out" / "kubernetes").exists(), "a rejected render wrote manifests"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"ci_shape": "github", "forge": "github"},
+        {"enable_image_build": "false"},
+    ],
+    ids=["github-shape", "gitlab-no-build"],
+)
+def test_a_render_that_never_asks_the_runner_tag_needs_no_answer(tmp_path, data):
+    """Every file naming privileged_runner_tag sits behind the question's own
+    `when:`, so a render that skips the question renders without an answer."""
+    dest = render_app.render(
+        tmp_path, answers=render_app.answers_without(tmp_path, "privileged_runner_tag"), data=data
+    )
+    assert (dest / "kubernetes").is_dir()
 
 
 def test_copier_rejects_an_undeclared_answer_name(tmp_path):
@@ -848,28 +867,16 @@ def test_conditional_paths_name_declared_questions():
 _TAG_LITERAL = re.compile(r"\bv\d+\.\d+\.\d+\b")
 
 
-def test_docs_quote_only_the_current_library_tag():
-    """Every library tag quoted in the docs equals the `lib_ref` default.
-
-    Nothing else ties the docs to that default.
-    """
-    want = CONFIG["lib_ref"]["default"]
-    stale = []
-    found = 0
-    for path in [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").glob("*.md"))]:
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            for tag in _TAG_LITERAL.findall(line):
-                found += 1
-                if tag != want:
-                    stale.append(f"{path.relative_to(REPO_ROOT)}:{lineno} {tag}")
-    # Non-vacuity: the docs are expected to advertise the default at least
-    # once (docs/CONSUMING.md's answer table); zero literals means the scan
-    # lost its subject, not that nothing drifted.
-    assert found, "no library tag literal found in the docs — the guard has no subject"
-    assert not stale, (
-        f"docs quote a library tag other than copier.yml's lib_ref default ({want}):\n  "
-        + "\n  ".join(stale)
-    )
+def test_docs_quote_no_library_tag():
+    """The library tag has one owner, copier.yml, which the pin gate holds to
+    the pipeline header. A tag quoted in a doc is a copy nothing keeps current."""
+    quoted = [
+        f"{path.relative_to(REPO_ROOT)}:{lineno} {tag}"
+        for path in [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").glob("*.md"))]
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        for tag in _TAG_LITERAL.findall(line)
+    ]
+    assert not quoted, "docs quote a library tag; name copier.yml's default instead:\n  " + "\n  ".join(quoted)
 
 
 # --------------------------------------------------------------------------
@@ -879,24 +886,16 @@ def test_docs_quote_only_the_current_library_tag():
 MANIFEST = REPO_ROOT / "scripts" / "vendored-manifest.yml"
 
 
-def _consumer_paths(document: dict) -> list[str]:
-    """Every consumer path the manifest names, in either entry form."""
-    paths = []
-    for section in ("vendored", "forked"):
-        for entry in document.get(section) or []:
-            paths.append(entry if isinstance(entry, str) else entry["consumer"])
-    return paths
-
-
 def _missing_consumers(document: dict, root) -> list[str]:
-    return [path for path in _consumer_paths(document) if not (root / path).exists()]
+    paths = render_app.consumer_paths(document=document)
+    return [path for path in paths if not (root / path).exists()]
 
 
 def test_every_vendored_consumer_path_exists():
     """A conditional path renamed in template/ leaves the manifest naming a file
     that is gone, and the copy it registered is then gated by nothing."""
     document = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
-    paths = _consumer_paths(document)
+    paths = render_app.consumer_paths(document=document)
     assert len(paths) >= 20, f"the manifest registers only {len(paths)} copies"
     assert not _missing_consumers(document, REPO_ROOT), (
         "vendored-manifest.yml names paths that do not exist: "
@@ -959,7 +958,7 @@ def _script_paths(root) -> set[str]:
 
 
 def _unclassified(document: dict, found: set[str]) -> list[str]:
-    return sorted(found - set(_consumer_paths(document)) - TEMPLATE_OWNED)
+    return sorted(found - set(render_app.consumer_paths(document=document)) - TEMPLATE_OWNED)
 
 
 def test_every_script_is_classified():
@@ -1009,3 +1008,53 @@ def test_gitleaks_extends_the_default_rules(path):
 def test_a_gitleaks_config_without_extend_is_reported():
     """The negative case: the helper must reject the disarmed file."""
     assert not _extends_default_rules('title = "x"\n[[allowlists]]\ndescription = "y"\n')
+
+
+# The platform namespaces of a weisssrv-shaped cluster, which the app_namespace
+# validator refuses.
+PLATFORM_NAMESPACES = (
+    "default",
+    "kube-system",
+    "kube-public",
+    "kube-node-lease",
+    "flux-system",
+    "traefik",
+    "observability",
+    "authentik",
+    "external-secrets",
+    "cert-manager",
+    "metallb-system",
+    "external-dns",
+    "cnpg-system",
+    "local-path-storage",
+    "tailscale",
+    "vpa-system",
+    "reloader",
+    "nvidia-device-plugin",
+    "prometheus-operator-crds",
+    "cloudflare-ddns",
+    "gitlab-runner",
+    "gitlab-runner-privileged",
+    "gitlab-runner-reaper",
+    "registry-cache",
+    "vm-ingress",
+    "tailnet-dns",
+)
+
+
+@pytest.mark.parametrize("namespace", PLATFORM_NAMESPACES)
+def test_app_namespace_refuses_every_platform_namespace(namespace):
+    """The wiring relabels its namespace and binds the tenant ServiceAccount to
+    admin there, so a platform namespace answered here hands a tenant the
+    platform's own workloads."""
+    assert "platform namespace" in _validator_message("app_namespace", app_namespace=namespace)
+
+
+@pytest.mark.parametrize(
+    "namespace",
+    ["reloader-notes", "my-traefik", "tailscale-dash", "my-kube-tools", "docs-gitlab-runner"],
+)
+def test_app_namespace_matches_platform_names_exactly(namespace):
+    """Only the exact names and the two prefixes are refused, so a tenant name
+    that merely contains a platform word stays available."""
+    assert not _validator_message("app_namespace", app_namespace=namespace)

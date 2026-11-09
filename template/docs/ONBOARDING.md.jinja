@@ -2,10 +2,10 @@
 
 Two roles are involved: the **tenant** (you, building the app) and the
 **operator** (whoever runs the cluster). The tenant fills in workloads; the
-operator adds one wiring file to the cluster repo. The cluster repo's own
-multi-repo onboarding page is authoritative for anything below; this page is the
-tenant-shaped copy, so that what the operator is handed already names the right
-objects.
+operator adds one wiring file to the cluster repo. The cluster repo's
+`kubernetes/clusters/<cluster>/tenants/README.md`, rendered from
+weisssrv-cluster-template, is canonical for the shape of that file and for why
+each object is there. This page renders this tenant's values into that shape.
 
 Everything below is already rendered with this repo's answers: the slug is
 `{{ app_slug }}`, the namespace is `{{ app_namespace }}` and the secret backend
@@ -22,6 +22,10 @@ is `{{ secrets_backend }}`.
 {%- if enable_image_build and ci_shape != 'none' %}
    CI builds the repo-root `Dockerfile` and pushes `:<short-sha>`, so that tag
    is the usual first edit.
+{%- if ci_shape == 'gitlab_selfhosted' %}
+   The build job runs only on a runner tagged `{{ privileged_runner_tag }}`,
+   which the operator provides in O2e. Until it exists, the job stays Pending.
+{%- endif %}
 {%- if ci_shape == 'github' and registry_host != 'ghcr.io' %}
    The vendored build workflow publishes to `ghcr.io/<owner>/<repo>` from its
    own literals, so it does NOT push to `{{ registry_host }}`. Point `image:`
@@ -59,8 +63,12 @@ is `{{ secrets_backend }}`.
    The upstream registry is private, so the namespace still needs a pull
    credential — step O2b below.
 {%- endif %}
-2. **Check the hostnames.** Public `{{ app_slug }}.{{ external_domain }}` is
+2. **Check the hostnames.**
+{%- if enable_public_ingress %} Public `{{ app_slug }}.{{ external_domain }}` is
    ready in `ingressroute.yaml` and needs no operator action.
+{%- else %} This app publishes no public hostname. `enable_public_ingress: true`
+   renders the public route and its certificate together.
+{%- endif %}
 {%- if enable_internal_ingress %}
    The internal `{{ app_slug }}.{{ internal_domain }}` route ships too, and it
    DOES need one: step O5.
@@ -119,12 +127,12 @@ is `{{ secrets_backend }}`.
 6. **Request wiring** from the operator: hand them this page. They need the slug
    (`{{ app_slug }}`), the namespace (`{{ app_namespace }}`), the secret backend
    (`{{ secrets_backend }}`), this repo's URL, whether an internal hostname is
-   needed{% if secrets_backend != 'none' and enable_registry_pull_secret %}, the registry pull credential (O2b){% endif %}{% if enable_sso %} and the SSO objects (O8){% endif %}.
+   needed, whether the repo is private (O2c){% if secrets_backend != 'none' and enable_registry_pull_secret %}, the registry pull credential (O2b){% endif %}{% if ci_shape == 'gitlab_selfhosted' %}, library job-token access (O2d){% endif %}{% if ci_shape == 'gitlab_selfhosted' and enable_image_build %}, the `{{ privileged_runner_tag }}` build runner (O2e){% endif %}{% if enable_sso %} and the SSO objects (O8){% endif %}.
    Replace the `:REPLACE-ME` image tag first: the placeholder leaves the
    Deployment at zero available replicas and pages the operator.
 7. After the operator merges the wiring, merge your `main`. Verify with
-   `task flux:status` and `kubectl get pods -n {{ app_namespace }}` (kubeconfig
-   from the operator).
+   `task flux:status` and `kubectl get pods -n {{ app_namespace }}`, using the
+   read-only kubeconfig the operator hands you in O10.
 
 ---
 
@@ -149,17 +157,59 @@ wiring once the item carries that field.
 
 ### O1 — Prepare the secret backend
 {% if secrets_backend == 'onepassword' %}
-Create the items this tenant reads in the `{{ onepassword_vault }}` vault,
-titled `"{{ app_slug }}: <Item>"`, and a scoped Connect token for them (find the
-server ID with `op connect server list`, then `op connect token create
-{{ app_slug }}-eso --server <ID> --vaults "{{ onepassword_vault }}"`).
+This tenant gets its own vault, `{{ onepassword_vault }}`, and a Connect token
+scoped to that vault alone. Never put its items in the cluster's own vault. A
+store's `conditions` limit which namespace may use it, not which items it reads.
+A tenant token covering the cluster vault lets this namespace read every
+platform credential.
+
+Look the vault up first:
+
+```bash
+op vault get "{{ onepassword_vault }}"
+```
+
+Create it only when that reports the vault does not exist. Stop on any other
+error and fix it first. 1Password allows two vaults with one name, so a failed
+lookup followed by a create leaves the grant and the items in different vaults.
+
+Then grant the vault to the cluster's shared Connect server and mint the
+tenant's token. `op connect server list` prints the server ID. `<CLUSTER>` is
+the cluster's name, which keeps token names unique on a Connect server that
+several clusters share. The grant adds the vault to the running server, so
+nothing restarts.
+
+```bash
+op vault create "{{ onepassword_vault }}"   # only when the lookup found none
+op connect vault grant --server <SERVER_ID> --vault "{{ onepassword_vault }}"
+op connect token create <CLUSTER>-{{ app_slug }}-eso --server <SERVER_ID> --vaults "{{ onepassword_vault }}"
+```
+
+Never hand this tenant the platform token. Create these items in the tenant
+vault with `op item create --vault "{{ onepassword_vault }}"`:
+
+- `"{{ app_slug }}: {{ secret_item }}"` with field `api-key`.
+{%- if enable_registry_pull_secret %}
+- `"{{ app_slug }}: Registry Pull"` with fields `username` and `token` (O2b).
+{%- endif %}
+{%- if database == 'postgres' %}
+- `"{{ app_slug }}: {{ db_roles_item }}"` with fields `migrate-password`,
+  `app-password` and `ro-password` (O6b).
+- `"{{ app_slug }}: {{ db_backup_item }}"` with fields `access-key-id` and
+  `secret-access-key` (O6b).
+{%- endif %}
 {%- elif secrets_backend == 'gitlab' %}
 Have the tenant create a project access token with the **Maintainer** role and
-the `api` scope, on the GitLab project that holds these variables:
-`{{ gitlab_api_url }}`. That project's numeric ID is the `projectID` in the store
-below. Reading project CI/CD variables is a Maintainer-level operation, and the
-ESO GitLab provider requires `api`, not `read_api`. Then set the masked CI/CD
-variables this repo's ExternalSecret reads on that same project.
+the `api` scope. It belongs on the project that holds this repo's CI/CD
+variables, on the GitLab instance at `{{ gitlab_api_url }}`. That project's
+numeric ID is the `projectID` in the store below. Reading project CI/CD
+variables is a Maintainer-level operation, and the ESO GitLab provider requires
+`api`, not `read_api`.
+
+That token can also rewrite the project's code, variables and settings, and it
+sits in the cluster as a Secret. Keep the variables in a dedicated project that
+holds nothing else, so the token reaches nothing else. Then set the masked
+CI/CD variables this repo's ExternalSecret reads on that project.
 {%- else %}
 Nothing to prepare — this tenant declares no secret backend. Skip O1, O2 and the
 `ClusterSecretStore` in O3.
@@ -187,6 +237,14 @@ rotation also needs
 A `rollout restart` is not a substitute: it writes a pod-template annotation the
 cluster's kustomize-controller reverts on its next reconcile. The
 `ExternalSecret` reports Ready either way.
+
+The Secret has no controller owner, so the cluster's unmanaged-secrets gate
+flags it. In the same change as the wiring file, add this entry to the
+`ALLOWLIST` in the cluster repo's `check-unmanaged-secrets.py`:
+
+```python
+    "{{ app_namespace }}/{{ 'onepassword-connect-token' if secrets_backend == 'onepassword' else 'gitlab-api-token' }}": "tenant ESO bootstrap",
+```
 {%- endif %}
 {%- if secrets_backend != 'none' and enable_registry_pull_secret %}
 
@@ -229,13 +287,75 @@ credential.
    what `docker login` takes, so it must be stored, not assumed.
 {%- endif %}
 
+{% if registry_pull_host != registry_host -%}
 The image reference names `{{ registry_host }}`, and `{{ registry_pull_host }}`
 is keyed into the same credential so the pull still authenticates on a cluster
 whose nodes resolve that name to an internal registry. The kubelet matches a
+{%- else -%}
+The image reference and the credential both name `{{ registry_host }}`.
+The kubelet matches a
+{%- endif %}
 pull secret against the literal host in the image reference, so if your nodes
 must pull a different hostname, edit `image:` in
 `kubernetes/flux/deployment.yaml` — nothing rewrites it. Making the {% if registry_pull_host == 'ghcr.io' or registry_host == 'ghcr.io' %}package{% else %}registry{% endif %}
 repository public avoids this step entirely.
+{%- endif %}
+
+### O2c — Git credential
+
+A public repository needs no credential: delete the `secretRef` from the
+`GitRepository` in O3 and skip the rest of this step.
+
+Flux clones `https://{{ git_host }}/{{ git_namespace }}/{{ app_slug }}` with the
+Secret the wiring's `GitRepository` names in `secretRef`. Create it in
+`flux-system`, beside the `GitRepository`, from a read-only credential.
+{%- if forge == 'gitlab' %}
+On GitLab that is a deploy token or project access token scoped to
+`read_repository`.
+{%- elif forge == 'github' %}
+On GitHub that is a fine-grained token with read-only Contents access.
+{%- endif %}
+Rerun the same command to rotate it.
+
+```bash
+flux create secret git {{ app_slug }}-git-auth \
+  --namespace=flux-system \
+  --url=https://{{ git_host }}/{{ git_namespace }}/{{ app_slug }} \
+  --username=<TOKEN_USERNAME> \
+  --password=<TOKEN>
+```
+
+The Secret is bootstrap state with no controller owner, so add
+`"flux-system/{{ app_slug }}-git-auth": "tenant git credential"` to the same
+unmanaged-secrets `ALLOWLIST` in the wiring change. The cluster repo's tenants
+README covers the deploy-key form under "Private tenant repositories".
+{%- if ci_shape == 'gitlab_selfhosted' %}
+
+### O2d — CI library access
+
+The tenant pipeline's `ci-job-names-check` job clones `{{ lib_project }}` with
+its `CI_JOB_TOKEN`. Unless that project is public, a maintainer of
+`{{ lib_project }}` adds `{{ git_namespace }}/{{ app_slug }}` to its job-token
+allowlist under Settings > CI/CD > Job token permissions. Without it, that job
+fails on the clone and names the allowlist in its log. The pipeline's
+`include:`s resolve with the permissions of whoever runs it, so each tenant
+developer also needs read access to `{{ lib_project }}`.
+{%- endif %}
+{%- if ci_shape == 'gitlab_selfhosted' and enable_image_build %}
+
+### O2e — Image build runner
+
+The image build job carries the tag `{{ privileged_runner_tag }}` and runs as
+root with Docker-in-Docker. Enable the cluster's privileged runner, the one
+carrying that tag, on this project alone, never on the `{{ git_namespace }}`
+group or the instance. Every developer who can push here runs root on that
+runner, so enable it only on a project you trust as much as the cluster repo.
+`GET /api/v4/runners/<id>` must then show `runner_type` as `project_type`,
+with only such projects under `projects`. `locked` must be `true`, so only an
+administrator can enable it on another project. This project's builds share
+the runner's `concurrent` slots and namespace ResourceQuota with the cluster
+repo, so size both for the added project. Without the runner, the build job
+stays Pending and names no cause.
 {%- endif %}
 
 ### O3 — Add the wiring file
@@ -251,6 +371,14 @@ weisssrv-cluster-template ships it at
 cluster, create a ClusterRole granting edit on the API groups listed in
 `ARCHITECTURE.md` § Platform contract.
 
+The `tenant-routing-{{ app_namespace }}` ConfigMap grants the hostnames this
+repo's routes and certificates name. The two bindings beside it hold the
+namespace to that grant, and with no grant they refuse every route and
+certificate. The Namespace, both caps, the grant and both bindings carry
+`kustomize.toolkit.fluxcd.io/prune: disabled`. The cluster's
+`check-tenant-wiring` and `check-tenant-traefik-isolation` gates fail when any
+one of them is missing.
+
 `kubernetes/clusters/<cluster>/tenants/{{ app_slug }}.yaml`:
 
 ```yaml
@@ -259,6 +387,10 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ app_namespace }}
+  annotations:
+    # Never pruned: a pruned Namespace takes every tenant object and PVC with
+    # it. Teardown is deliberate; the tenants README's opening section covers it.
+    kustomize.toolkit.fluxcd.io/prune: disabled
   labels:
     app.kubernetes.io/managed-by: flux
     fluxcd.io/tenant: {{ app_slug }}
@@ -278,17 +410,30 @@ kind: ResourceQuota
 metadata:
   name: {{ app_slug }}-quota
   namespace: {{ app_namespace }}
+  annotations:
+    # Kept with the Namespace, so an orphaned namespace stays capped.
+    kustomize.toolkit.fluxcd.io/prune: disabled
 spec:
   hard:
     pods: "{{ [replica_count | int + 2, 10] | max }}"
     requests.cpu: "5"
     requests.memory: 4Gi
     limits.memory: 12Gi
+    # emptyDir and container writable layers draw on the node's disk, so this
+    # bounds what the namespace may write there. check-tenant-wiring requires
+    # both keys.
+    requests.ephemeral-storage: 4Gi
+    limits.ephemeral-storage: 8Gi
 {%- if database == 'postgres' and secrets_backend == 'onepassword' %}
     # tenant-local does not enforce sizes on its shared volume, so the quota
     # caps what this namespace may request: the instance claim plus headroom.
     persistentvolumeclaims: "4"
     tenant-local.storageclass.storage.k8s.io/requests.storage: {{ (db_storage_size | replace('Gi', '') | int) * 2 }}Gi
+{%- else %}
+    # No claims: this tenant ships none. Raise both when the operator
+    # provisions a volume.
+    persistentvolumeclaims: "0"
+    tenant-local.storageclass.storage.k8s.io/requests.storage: "0"
 {%- endif %}
 ---
 # Defaults and per-container ceilings, so a pod with no resources block cannot
@@ -299,16 +444,22 @@ kind: LimitRange
 metadata:
   name: {{ app_slug }}-limits
   namespace: {{ app_namespace }}
+  annotations:
+    # Kept with the Namespace, so an orphaned namespace stays capped.
+    kustomize.toolkit.fluxcd.io/prune: disabled
 spec:
   limits:
     - type: Container
       default:
         memory: 512Mi
+        ephemeral-storage: 512Mi
       defaultRequest:
         cpu: 50m
         memory: 128Mi
+        ephemeral-storage: 128Mi
       max:
         memory: 2Gi
+        ephemeral-storage: 2Gi
 {%- if secrets_backend == 'onepassword' %}
 ---
 apiVersion: external-secrets.io/v1
@@ -325,7 +476,10 @@ spec:
   provider:
     onepassword:
       # The cluster's 1Password Connect Service; change it if yours differs.
+      # Plain HTTP: the token and every value cross the pod network as sent,
+      # so use https here when Connect serves TLS.
       connectHost: http://onepassword-connect.external-secrets.svc.cluster.local:8080
+      # This tenant's own vault and no other: the token is scoped to it alone.
       vaults:
         "{{ onepassword_vault }}": 1
       auth:
@@ -374,11 +528,74 @@ metadata:
   namespace: flux-system
 spec:
   interval: 1m
-  # A tenant repo may live anywhere Flux can clone from. For a private
-  # repository add a `secretRef:` naming a deploy key or token secret.
   url: https://{{ git_host }}/{{ git_namespace }}/{{ app_slug }}
   ref:
     branch: main
+  # A read-only credential created by hand with `flux create secret git`
+  # ("Private tenant repositories" in the tenants README). Delete this for a
+  # public repository.
+  secretRef:
+    name: {{ app_slug }}-git-auth
+---
+# The hostnames this tenant may route and certify, one per line. It lives in
+# flux-system so the tenant cannot edit its own grant.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-routing-{{ app_namespace }}
+  namespace: flux-system
+  annotations:
+    # The Namespace outlives the wiring, so admission for it must too.
+    kustomize.toolkit.fluxcd.io/prune: disabled
+data:
+  hosts: |
+{%- if enable_public_ingress %}
+    {{ app_slug }}.{{ external_domain }}
+{%- endif %}
+{%- if enable_internal_ingress %}
+    {{ app_slug }}.{{ internal_domain }}
+{%- endif %}
+---
+# Holds this namespace's IngressRoutes and Ingresses to the grant above, and
+# refuses them all if the grant is missing.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tenant-traefik-hostnames-{{ app_namespace }}
+  annotations:
+    # The Namespace outlives the wiring, so admission for it must too.
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  policyName: tenant-traefik-hostnames
+  validationActions: [Deny]
+  paramRef:
+    name: tenant-routing-{{ app_namespace }}
+    namespace: flux-system
+    parameterNotFoundAction: Deny
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ app_namespace }}
+---
+# Holds this namespace's cert-manager Certificates to the same grant.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tenant-certificates-{{ app_namespace }}
+  annotations:
+    # The Namespace outlives the wiring, so admission for it must too.
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  policyName: tenant-certificates
+  validationActions: [Deny]
+  paramRef:
+    name: tenant-routing-{{ app_namespace }}
+    namespace: flux-system
+    parameterNotFoundAction: Deny
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ app_namespace }}
 ---
 # A namespace-scoped ServiceAccount so kustomize-controller does NOT apply
 # tenant manifests with its own cluster-admin. The SA lives in flux-system; the
@@ -420,6 +637,65 @@ subjects:
 roleRef:
   kind: ClusterRole
   name: tenant-crd-editor
+  apiGroup: rbac.authorization.k8s.io
+---
+# The identity behind the tenant's read-only kubeconfig.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ app_slug }}-reader
+  namespace: {{ app_namespace }}
+---
+# `view` reads the namespace's workloads, events and logs, never its Secrets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ app_slug }}-reader-view
+  namespace: {{ app_namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ app_slug }}-reader
+    namespace: {{ app_namespace }}
+roleRef:
+  kind: ClusterRole
+  name: view
+  apiGroup: rbac.authorization.k8s.io
+---
+# Read on this tenant's own Flux objects in flux-system, so
+# `flux get kustomization {{ app_slug }}` reports its state. No patch, so
+# `flux reconcile` is refused.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ app_slug }}-reader
+  namespace: flux-system
+rules:
+  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+    resources: ["kustomizations"]
+    resourceNames:
+      - {{ app_slug }}
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+      - {{ app_slug }}-db
+{%- endif %}
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["gitrepositories"]
+    resourceNames:
+      - {{ app_slug }}
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ app_slug }}-reader
+  namespace: flux-system
+subjects:
+  - kind: ServiceAccount
+    name: {{ app_slug }}-reader
+    namespace: {{ app_namespace }}
+roleRef:
+  kind: Role
+  name: {{ app_slug }}-reader
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
@@ -492,11 +768,11 @@ spec:
 
 Every Kustomization here carries `postBuild.substituteFrom` naming the
 cluster's `cluster-config` ConfigMap, because the cluster-template tenant-wiring
-gate requires it. Nothing substitutes unless a `${var}` placeholder appears
-under the path it applies, so write a literal dollar-brace as `$${var}`.
-kustomize-controller usually runs with strict substitution, so one unresolvable
-`${var}` fails the whole tenant reconcile. See `ARCHITECTURE.md`
-§ Platform contract.
+gate requires it. Nothing substitutes unless a `${var}` appears under the path
+it applies. Write a literal dollar-brace as `$${var}`: kustomize-controller
+runs with strict substitution, so one unresolvable `${var}` fails the whole
+tenant reconcile. `task flux-lint` fails any `${...}` outside cluster-config's
+`cluster_*` keys. See `ARCHITECTURE.md` § Platform contract.
 
 ### O4 — Register it
 
@@ -514,8 +790,10 @@ resources:
 `{{ app_slug }}.{{ internal_domain }}` is not auto-provisioned — external-dns
 manages the external zone only. Add the internal rewrite
 (`{{ app_slug }}.{{ internal_domain }}` -> `{{ internal_vip }}`) to the cluster's
-DNS inventory and run the DNS role. Public
+DNS inventory and run the DNS role.
+{%- if enable_public_ingress %} Public
 `{{ app_slug }}.{{ external_domain }}` needs nothing here.
+{%- endif %}
 {%- else %}
 ### O5 — Internal DNS
 
@@ -525,16 +803,21 @@ provisions on its own.
 
 ### O6 — Persistent storage (only if the tenant needs a volume)
 
-This template ships no PVC for the app by design{% if database == 'postgres' and secrets_backend == 'onepassword' %} (the database tree under `kubernetes/db` brings its own claims, covered in O6b){% endif %}. Supply the StorageClass the cluster
-offers, or provision the volume and a matching PV yourself, and hand the tenant
-the PVC name. The tenant then adds the volume and its mount to
+This template ships no PVC for the app by design.{% if database == 'postgres' and secrets_backend == 'onepassword' %} The database tree under `kubernetes/db` brings its own claims, covered in O6b.{% endif %} A tenant claim names
+one of two things. One is the StorageClass `tenant-local`. The other is a
+platform-written static PV named `{{ app_namespace }}-<purpose>`, pre-bound by
+`claimRef` to a claim with `storageClassName: ""`. A cluster generated by
+weisssrv-cluster-template refuses any other class or volume name at admission.
+Hand the tenant the PVC name. The tenant then adds the volume and its mount to
 `deployment.yaml`{% if enable_vpa %} and sets `vpa.yaml` `updateMode: "Off"`{% endif %}.
+Raise the wiring quota's `persistentvolumeclaims` key in the same change, and
+its `tenant-local` storage key for a `tenant-local` claim, or the claim is
+refused.
 
-On a Proxmox/ZFS cluster: add the zvol to the storage node's
-`vm_additional_disks` in the cluster inventory, re-run the k3s play for that
-host, and hand the tenant the PV/PVC plus the node-pin and NAS-toleration
-pattern. NFS-backed volumes mount by hostname there, because the wildcard
-certificate carries no IP SAN.
+The cluster repo's `kubernetes/clusters/<cluster>/tenants/README.md` covers
+both forms under "Persistent storage" and "Claim classes". A volume pinned to
+one node also needs the node affinity and toleration that node carries. Hand
+the tenant both with the PV/PVC.
 
 {% if not (database == 'postgres' and secrets_backend == 'onepassword') -%}
 This app is stateless as generated. A volume provisioned here sits outside
@@ -570,11 +853,12 @@ The database component needs, before the wiring merges:
   `tenant_storage`), which provisions the volume for
   `{{ app_slug }}-db-1` when the cluster first starts. The wiring file's
   ResourceQuota above already counts the claim.
-- An NFS PersistentVolume `{{ app_slug }}-pg-dump` pre-bound to
+- An NFS PersistentVolume `{{ app_namespace }}-pg-dump` pre-bound to
   `{{ app_namespace }}/{{ app_slug }}-pg-dump`, on a landing zone the off-site
   backup walks, exported with `all_squash` to uid 1000 and gid 2000.
-- The dump registered with the cluster's backup-artifact freshness check: the
-  entry `{name: {{ app_slug }}, pattern: "{{ app_slug }}-*.sql.gz"}` in
+- The dump registered with the backup-artifact freshness check of a cluster
+  generated by weisssrv-cluster-template: the entry
+  `{name: {{ app_slug }}, pattern: "{{ app_slug }}-*.sql.gz"}` in
   `nas_storage_backup_artifact_apps`, and the matching
   `or absent(backup_artifact_last_mtime_seconds{app="{{ app_slug }}"})` arm on
   `BackupArtifactStale`. The cluster's `check-backup-artifact-apps` gate
@@ -602,12 +886,17 @@ This repo's `PrometheusRule` covers replica availability only. The platform
 alerts cluster-wide on certificate expiry and on a `Certificate` that never
 goes Ready. To also alert on end-to-end HTTP/TLS reachability, such as a broken
 IngressRoute, certificate or DNS record while replicas stay ready, add
+{% if enable_public_ingress -%}
 `{{ app_slug }}.{{ external_domain }}` to the cluster's static blackbox target
 list ({% if enable_sso %}`module: http_sso` for this SSO-gated route{% else %}`module: http_2xx`{% endif %}).
 {%- if enable_internal_ingress %}
 Add `{{ app_slug }}.{{ internal_domain }}` with `module: http_2xx` too. It
 carries its own IngressRoute, its own certificate and the DNS record from O5,
 and the external probe covers none of them.
+{%- endif %}
+{%- else -%}
+`{{ app_slug }}.{{ internal_domain }}` to the cluster's static blackbox target
+list with `module: http_2xx`.
 {%- endif %}
 
 ### O8 — SSO objects
@@ -640,9 +929,87 @@ reference and brings this step back.
 
 Flux reconciles the new tenant on the next cycle.
 
+### O10 — Read-only kubeconfig
+
+The wiring's `{{ app_slug }}-reader` ServiceAccount reads the namespace and the
+tenant's own Flux objects. It cannot read Secrets or force a reconcile. Build
+the tenant's kubeconfig from the cluster CA and a token for it. The subshell
+stops at the first failure, so an empty CA or token never reaches the file:
+
+```bash
+(
+  set -eu
+  kubectl -n kube-system get configmap kube-root-ca.crt \
+    -o jsonpath='{.data.ca\.crt}' > {{ app_slug }}-ca.crt
+  test -s {{ app_slug }}-ca.crt || { echo 'no cluster CA read' >&2; exit 1; }
+  TOKEN=$(kubectl -n {{ app_namespace }} create token {{ app_slug }}-reader --duration=2160h)
+  test -n "$TOKEN" || { echo 'token creation failed' >&2; exit 1; }
+  KC={{ app_slug }}.kubeconfig
+  kubectl --kubeconfig "$KC" config set-cluster <cluster> \
+    --server=https://<API_SERVER>:6443 \
+    --certificate-authority={{ app_slug }}-ca.crt --embed-certs
+  kubectl --kubeconfig "$KC" config set-credentials {{ app_slug }}-reader --token="$TOKEN"
+  kubectl --kubeconfig "$KC" config set-context {{ app_slug }} \
+    --cluster=<cluster> --user={{ app_slug }}-reader --namespace={{ app_namespace }}
+  kubectl --kubeconfig "$KC" config use-context {{ app_slug }}
+  kubectl --kubeconfig "$KC" auth can-i list pods -n {{ app_namespace }}
+)
+```
+
+Hand the file over only when the last line prints `yes`, and through a channel
+you would trust with a password. The reader sees the namespace's ConfigMaps and
+pod logs, so keep secrets out of both.
+
+The token expires. Rerun the block to issue a new one. The API server may cap
+its lifetime below the duration asked for.
+
+The API server address is reachable only from the cluster's own network. A
+tenant off that network reaches it through the cluster's VPN, such as a
+Tailscale subnet route or a WireGuard peer, so grant that access with the
+kubeconfig. Never publish the API server for a tenant.
+
 ### Removal
 
-`git rm` the wiring file and its `kustomization.yaml` line → Flux prunes the
-Kustomization, GitRepository{% if secrets_backend != 'none' %}, ClusterSecretStore{% endif %} and namespace. Then revoke the
-tenant's token{% if secrets_backend == 'onepassword' %} and delete the prefixed vault items{% endif %}. PVCs survive
-(finalizers) and are cleaned up by hand.
+Teardown is deliberate, and the namespace outlives the wiring. It takes one
+step per change. The app Kustomization prunes as the wiring's
+`{{ app_slug }}-flux` ServiceAccount. Removed in the same change, that
+ServiceAccount and its RoleBindings can go first, and the prune then fails. The
+workload, its routes and its certificates stay, and the grant keeps admitting
+them.
+
+1. Remove only the `{{ app_slug }}` app Kustomization from the wiring file.
+   Wait until `flux get kustomizations -n flux-system` no longer lists it.
+   Pruning the app Kustomization removes everything under `kubernetes/flux`.
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+2. Remove the `{{ app_slug }}-db` Kustomization the same way. It leaves the
+   database running in place, and the `kubernetes/db` objects stay until you
+   delete them by hand.
+3. `git rm` the rest of the file and its `kustomization.yaml` line.
+4. Confirm the last base backup and WAL archive in
+   `{{ db_backup_bucket }}`, then delete the CNPG `Cluster` by hand.
+{%- else %}
+2. `git rm` the rest of the file and its `kustomization.yaml` line.
+{%- endif %}
+
+The `git rm` change prunes the GitRepository{% if secrets_backend != 'none' %}, the
+ClusterSecretStore{% endif %}, the ServiceAccounts, the reader Role and the
+RoleBindings.
+
+Flux does not prune the Namespace, its ResourceQuota and LimitRange, the
+`tenant-routing-{{ app_namespace }}` grant or its two bindings. A pruned
+Namespace would cascade-delete every object and PVC in it, and that loss is
+what the guard prevents.
+{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+`deletionPolicy: Orphan` on the database Kustomization cannot stop that
+cascade.
+{%- endif %}
+
+Delete the Namespace by hand once nothing in it is wanted. While any wiring
+still declares it, Flux recreates it. Then delete the grant ConfigMap, both
+bindings and the `{{ app_slug }}-git-auth` Secret in `flux-system`. The
+unmanaged-secrets gate reads the live cluster, so drop this tenant's
+`ALLOWLIST` entries in a final change, once those Secrets are gone.
+Revoke the git credential{% if secrets_backend == 'onepassword' %} and the tenant's Connect token, revoke
+the `{{ onepassword_vault }}` grant with `op connect vault revoke`, and delete
+that vault once its items are no longer needed{% elif secrets_backend == 'gitlab' %} and the tenant's project access
+token{% endif %}.

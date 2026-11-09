@@ -10,12 +10,8 @@ import re
 from pathlib import Path
 
 import pytest
-import yaml
 
 import render_app
-
-REPO_ROOT = render_app.REPO_ROOT
-MANIFEST = REPO_ROOT / "scripts" / "vendored-manifest.yml"
 
 # Suffixes whose prose is scanned. A rendered manifest names no repo file.
 SCANNED = {".md", ".jinja", ".yml", ".yaml", ".toml", ".cfg", ".py", ".sh", ""}
@@ -23,38 +19,18 @@ SCANNED = {".md", ".jinja", ".yml", ".yaml", ".toml", ".cfg", ".py", ".sh", ""}
 IGNORED_DIRS = {".git", "__pycache__", ".pytest_cache", ".ruff_cache"}
 
 # The three trees whose membership is answer-driven, so a citation of one is a
-# claim about this render. Anything else (kubernetes/clusters/... in the
-# operator's repo) is deliberately out of scope.
+# claim about this render. A path in the operator's repo is out of scope.
 CITATION = re.compile(
     r"(?<![\w/.-])("
-    r"docs/[A-Za-z0-9._-]+\.md"
-    r"|scripts/[A-Za-z0-9._-]+\.(?:py|sh)"
+    r"docs/(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\.md"
+    r"|scripts/(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\.(?:py|sh)"
     r"|\.github/workflows/[A-Za-z0-9._-]+\.ya?ml"
     r")"
 )
 
 # A citation followed by this names the template repo, not the reader's own, so
-# the path is not expected to exist in the render.
-ELSEWHERE = re.compile(r"\A[\s#]*(?:in |\()?(?:the )?app template")
-
-
-def _vendored_paths() -> set[str]:
-    """Rendered paths this repo vendors byte-identically from the library.
-
-    Their prose is the library's and is fixed upstream, so a citation in one is
-    not this template's to rewrite.
-    """
-    manifest = yaml.safe_load(MANIFEST.read_text(encoding="utf-8")) or {}
-    paths: set[str] = set()
-    for section in ("vendored", "forked"):
-        for item in manifest.get(section) or []:
-            consumer = item if isinstance(item, str) else (item.get("consumer") or "")
-            if not consumer.startswith("template/"):
-                continue
-            # The jinja in a conditional consumer path wraps the whole name, so
-            # dropping the tags leaves the path the render produces.
-            paths.add(re.sub(r"\{%.*?%\}", "", consumer[len("template/") :]))
-    return paths
+# the path is not expected to exist in the render. It may wrap onto one more line.
+ELSEWHERE = re.compile(r"[ \t#]*(?:\n[ \t#]*)?(?:in |\()?(?:the )?app template")
 
 
 def citations_missing_targets(root: Path, vendored: set[str] = frozenset()) -> list[str]:
@@ -72,7 +48,7 @@ def citations_missing_targets(root: Path, vendored: set[str] = frozenset()) -> l
             continue
         for match in CITATION.finditer(text):
             cited = match.group(1)
-            if (root / cited).exists() or ELSEWHERE.match(text[match.end() : match.end() + 24]):
+            if (root / cited).exists() or ELSEWHERE.match(text, match.end()):
                 continue
             line = text.count("\n", 0, match.start()) + 1
             problems.append(f"{relative}:{line} cites {cited}, which this render does not ship")
@@ -80,33 +56,68 @@ def citations_missing_targets(root: Path, vendored: set[str] = frozenset()) -> l
 
 
 @pytest.fixture(scope="session")
-def vendored() -> set[str]:
-    return _vendored_paths()
+def vendored() -> frozenset[str]:
+    """Library copies carry the library's prose, fixed upstream, not here."""
+    return render_app.vendored_render_paths()
 
 
-def test_shaped_render_cites_only_its_own_files(rendered_a, vendored):
-    assert citations_missing_targets(rendered_a, vendored) == []
+@pytest.mark.parametrize("render", ["rendered_a", "rendered_unlike"])
+def test_the_render_cites_only_its_own_files(request, render, vendored):
+    assert citations_missing_targets(request.getfixturevalue(render), vendored) == []
 
 
-def test_unlike_render_cites_only_its_own_files(rendered_unlike, vendored):
-    assert citations_missing_targets(rendered_unlike, vendored) == []
-
-
-def test_a_citation_of_an_unrendered_file_is_caught(tmp_path):
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "ONBOARDING.md").write_text(
-        "Read docs/ONBOARDING.md, then scripts/no-such-gate.py.\n", encoding="utf-8"
-    )
+@pytest.mark.parametrize(
+    "name, text, cited",
+    [
+        (
+            "docs/ONBOARDING.md",
+            "Read docs/ONBOARDING.md, then scripts/no-such-gate.py.\n",
+            ["scripts/no-such-gate.py"],
+        ),
+        ("note.md", "See docs/CI-SHAPES.md in the app template.\n", []),
+        ("gate.py", "# Mirrors docs/CI-SHAPES.md\n#      in the app template.\n", []),
+        # One blank comment line more than the wrapped case.
+        (
+            "gate.py",
+            "# Mirrors docs/CI-SHAPES.md\n#\n#      in the app template.\n",
+            ["docs/CI-SHAPES.md"],
+        ),
+        (
+            "note.md",
+            "See docs/runbooks/restore.md and scripts/lib/helper.py.\n",
+            ["docs/runbooks/restore.md", "scripts/lib/helper.py"],
+        ),
+    ],
+    ids=["unrendered", "qualified", "wrapped-qualifier", "qualifier-too-far", "subdirectory"],
+)
+def test_a_citation_is_held_to_the_render(tmp_path, name, text, cited):
+    path = tmp_path / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
     problems = citations_missing_targets(tmp_path)
-    assert len(problems) == 1, problems
-    assert "scripts/no-such-gate.py" in problems[0]
+    assert len(problems) == len(cited), problems
+    for problem, target in zip(problems, cited, strict=True):
+        assert target in problem
 
 
-def test_the_app_template_qualifier_is_accepted(tmp_path):
-    (tmp_path / "note.md").write_text(
-        "See docs/CI-SHAPES.md in the app template.\n", encoding="utf-8"
+def test_the_vendored_exemption_covers_copies_only(vendored):
+    """A fork's prose is this repo's to keep right."""
+    assert "scripts/check-doc-links.py" in vendored
+    assert ".gitleaks.toml" not in vendored
+
+
+def test_a_jinja_copy_is_exempt_under_its_rendered_name(tmp_path):
+    manifest = tmp_path / "vendored-manifest.yml"
+    manifest.write_text(
+        "vendored:\n"
+        "  - consumer: template/docs/x.md.jinja\n"
+        "  - consumer: \"template/{% if a %}y.md{% endif %}.jinja\"\n"
+        "  - consumer: scripts/z.py\n"
+        "forked:\n"
+        "  - consumer: template/w.md\n",
+        encoding="utf-8",
     )
-    assert citations_missing_targets(tmp_path) == []
+    assert render_app.vendored_render_paths(manifest) == {"docs/x.md", "y.md"}
 
 
 @pytest.fixture(scope="session")

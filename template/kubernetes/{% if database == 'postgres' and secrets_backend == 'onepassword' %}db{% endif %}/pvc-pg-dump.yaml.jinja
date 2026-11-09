@@ -15,7 +15,7 @@ spec:
   accessModes:
     - ReadWriteOnce
   storageClassName: ""
-  volumeName: {{ app_slug }}-pg-dump
+  volumeName: {{ app_namespace }}-pg-dump
   resources:
     requests:
       storage: 5Gi

@@ -14,7 +14,9 @@ spec:
   # would otherwise fight the HPA over the field on every reconcile.
 {%- else %}
 {%- if replica_count > 1 %}
-  # {{ replica_count }} replicas, so a rolling update never drops to zero.
+  # {{ replica_count }} replicas on preferably distinct nodes, so losing or
+  # draining one node leaves the app serving; pdb.yaml keeps one up during a
+  # voluntary eviction.
 {%- endif %}
   replicas: {{ replica_count }}
 {%- endif %}
@@ -73,8 +75,8 @@ spec:
               protocol: TCP
 {%- if secrets_backend != 'none' %}
           # CRITICAL: a key the backing secret lacks holds the pod in
-          # CreateContainerConfigError. One key at a time because the keys are
-          # hyphenated and `envFrom: secretRef` silently SKIPS a hyphenated name.
+          # CreateContainerConfigError. Each hyphenated key binds to the env name
+          # the app reads; `envFrom` never maps a hyphenated key to that name.
           env:
             - name: API_KEY
               valueFrom:
@@ -90,19 +92,15 @@ spec:
                 - ALL
           # Adjust to your app's health endpoints. The liveness grace on a slow
           # boot is ~55s; anything slower needs a startupProbe.
-{%- if database == 'postgres' and secrets_backend == 'onepassword' %}
+{%- set db = database == 'postgres' and secrets_backend == 'onepassword' %}
           readinessProbe:
-            httpGet:
-              # Ready only when the database answers and the schema is current;
-              # liveness stays on / so a database outage never restart-loops the pod.
-              path: /readyz
-              port: http
-{%- else %}
-          readinessProbe:
-            httpGet:
-              path: /
-              port: http
+{%- if db %}
+            # Ready only when the database answers and the schema is current;
+            # liveness stays on / so a database outage never restart-loops the pod.
 {%- endif %}
+            httpGet:
+              path: {{ '/readyz' if db else '/' }}
+              port: http
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
