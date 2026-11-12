@@ -651,7 +651,7 @@ lib_ref:
   help: >-
     weisssrv-lib release tag, vX.Y.Z, that the pipeline's includes read. Never a
     branch.
-  default: "v0.28.1"
+  default: "v0.29.0"
   validator: >-
     {% if not (lib_ref | regex_search('^v\\d+\\.\\d+\\.\\d+$')) %}
     lib_ref must be a release TAG of the form vX.Y.Z (e.g. v1.2.3). The
